@@ -1,0 +1,240 @@
+.. _release-v0.1:
+
+
+===========
+Version 0.1
+===========
+
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Field
+     - Value
+   * - Version
+     - 0.1.0
+   * - Codename
+     - Foundation
+   * - Status
+     - Alpha; core workflow complete and tested offline
+   * - First commit
+     - ``182c6ae300ee44f5ca776c03827468d1458af219``
+
+What v0.1 is
+============
+
+A complete vertical slice of a desktop coding agent: a real Windows
+application that connects a real language model to a local project, lets the
+agent inspect files through controlled tools, and shows every step.
+
+.. code-block:: text
+
+    Windows 11 user
+          |
+    QuantsMind-Agent GUI
+          |
+    Workspace -> Agent Core -> Model Gateway -> real LLM
+                      |
+                  Tool Registry + Permissions
+                      |
+              observation -> next iteration
+                      |
+              answer + visible tool activity
+
+Implemented capabilities
+========================
+
+GUI
+---
+
+* Single window: workspace panel, model summary, transcript, tool activity,
+  composer, status bar.
+* Project folder selection with native dialog and ``--workspace``.
+* Provider/model/API key/timeout configuration in a Settings dialog with
+  presets; changes apply without a restart.
+* API key stored in the Windows Credential Manager, masked everywhere, never
+  rendered after saving.
+* Streamed responses with progressive rendering.
+* Tool activity panel with per-call state and permission decisions.
+* Send / Stop, with cancellation honoured even when pressed immediately after
+  Send.
+* Actionable errors in the transcript; never a stack trace.
+* Keyboard shortcuts: ``Ctrl+Enter``, ``Ctrl+O``, ``Ctrl+K``, ``Ctrl+N``.
+
+Agent
+-----
+
+* Real tool-calling loop with a bounded iteration budget.
+* Four read-only workspace tools: ``project_structure``, ``list_directory``,
+  ``read_file``, ``search_content``.
+* Recovery from tool failures, escaping paths, unknown tools and malformed
+  arguments -- all become observations rather than fatal errors.
+* Provider-independent gateway with a pluggable interface.
+* OpenAI-compatible provider: streaming and non-streaming, tool-call fragment
+  accumulation, best-effort model discovery.
+* Provider errors mapped to actionable messages (auth, 404, 429, timeout,
+  network, protocol).
+* Permission broker with ``ALLOW`` / ``DENY`` / ``ASK`` and deny-by-default.
+* Structured event bus for the whole lifecycle.
+* Bounded context engine; a repository is never dumped into a prompt.
+* In-memory sessions with turn records.
+
+Architecture
+
+
+
+| Component                 | Module                                        |
+
+| GUI                      | ``quantsmind_agent.gui``                      |
+
+| Agent Core               | ``agent``                                     |
+
+| Model Gateway            | ``llm``, ``providers``                        |
+
+| Tool System              | ``tools``, ``workspace_tools``                |
+
+| Workspace                | ``workspace``                                 |
+
+| Permissions              | ``permissions``                               |
+
+| Context Engine           | ``context``                                   |
+
+| Session                  | ``session``                                   |
+
+| Configuration/Secrets    | ``config``, ``secrets``, ``paths``            |
+
+| Observability            | ``events``, ``logging_setup``                 |
+
+| Composition root          | ``app``                                       |
+
+
+Design decisions are recorded in :doc:`../architecture/adr/index`.
+
+Testing
+=======
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Layer
+     - Coverage
+   * - Unit
+     - Configuration, secrets, workspace, path validation, tools, permissions,
+       provider, gateway, context, session, events, errors, logging
+   * - Integration
+     - Agent loop with a real workspace and a scripted provider: tool
+       round-trip, observations, error recovery, iteration budget,
+       cancellation, streaming, composition root
+   * - GUI
+     - Widgets and the main window under offscreen Qt: startup, workspace
+       selection, settings, submission, streaming, tool activity, cancellation,
+       error rendering, credential hiding
+   * - Manual
+     - Documented procedures; see
+       :doc:`../testing/manual-acceptance`
+
+Full results, including what was **not** run, are recorded in
+:doc:`../testing/acceptance-v0.1`.
+
+Windows 11 validation procedure
+===============================
+
+.. code-block:: powershell
+
+    python -m venv .venv
+    .venv\Scripts\Activate.ps1
+    pip install -e ".[dev,docs]"
+
+    quantsmind-agent --check-config
+    quantsmind-agent
+
+Then follow the 13-step checklist in :ref:`windows-manual-checklist`. Each step
+is recorded ``PASS`` or ``FAIL``.
+
+Real LLM validation procedure
+=============================
+
+.. code-block:: powershell
+
+    python scripts\make_acceptance_fixture.py --force
+    quantsmind-agent --workspace .acceptance-fixture\widget-factory
+    quantsmind-agent --debug
+
+Ask:
+
+.. code-block:: text
+
+    Explain the structure of this project.
+    Read the README and summarize the project.
+
+Verify a streamed answer, at least one tool call in the activity panel, and no
+credential in the log:
+
+.. code-block:: powershell
+
+    Select-String -Path "$env:LOCALAPPDATA\QuantsMind-Agent\QuantsMind-Agent\logs\quantsmind-agent.log" -Pattern "sk-|Bearer "
+
+Full procedure: :ref:`manual-llm`.
+
+Known limitations
+=================
+
+Not implemented
+---------------
+
+* **No file writes.** The agent cannot create, modify or delete files. Writes
+  are the headline v0.2 capability.
+* **No command execution.** No shell, no subprocess, no ``npm``/``pip``.
+* **No git.** No status, diff, commit or branch operations.
+* **No network tools.** The only outbound request is to the configured LLM
+  endpoint; the agent cannot fetch URLs.
+* **No conversation persistence.** History is lost on restart. No database is
+  used.
+* **No multi-agent orchestration, MCP, VS Code extension or telemetry.**
+* **No packaging beyond PyInstaller.** No installer, no Start-menu entry, no
+  auto-update.
+
+Behavioural limits
+------------------
+
+* Requires a provider with **tool-calling support**. Without it the agent cannot
+  inspect files.
+* **Context is bounded.** Large repositories need narrower questions; the engine
+  trims history rather than growing without limit.
+* **Cancellation is cooperative.** An in-flight HTTP request is not aborted; the
+  late answer is discarded.
+* **No OS-level sandbox.** The agent runs with the user's privileges. The
+  defence is containment plus a read-only tool set.
+* **Prompt injection can mislead answers.** It cannot cause escapes, but it can
+  affect what the model believes. Repository content is treated as data.
+* **Binary files are unreadable** and skipped by search.
+* **Symlinks that leave the project are refused**, even when legitimate.
+* **Packaged builds have no installer**, Start-menu entry or file association.
+* **GUI tests run offscreen**, so visual layout on a real display is unverified
+  by automation.
+
+Future v0.2 scope
+=================
+
+Planned, in priority order:
+
+1. **File writes** -- ``write_file`` and ``edit_file`` behind
+   ``WRITE_WORKSPACE``, with diffs in the interface and mandatory interactive
+   approval.
+2. **Terminal access** -- ``run_command`` behind ``EXECUTE_COMMAND``, with an
+   approval dialog, a working-directory guard and captured output.
+3. **Git awareness** -- read-only status and diff first; commit only with
+   explicit approval.
+4. **Interactive approval UI** -- the approver callback, marshalled to the GUI
+   thread, so ``ASK`` becomes a real prompt.
+5. **Conversation persistence** -- opt-in history with export and deletion.
+6. **Retrieval-based context** -- indexing and ranking behind
+   ``ContextProvider`` so large repositories become practical.
+7. **More providers** -- native Anthropic and Azure implementations behind the
+   gateway.
+8. **MCP client** -- remote tools mapped onto the existing registry.
+9. **Diff viewer and review workflow** for proposed changes.
+
+See :doc:`../roadmap/roadmap`.

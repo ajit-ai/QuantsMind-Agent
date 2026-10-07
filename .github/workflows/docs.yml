@@ -1,0 +1,81 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/**"
+      - "scripts/build_docs.py"
+      - "scripts/normalize_rst.py"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/**"
+      - "scripts/build_docs.py"
+      - "scripts/normalize_rst.py"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The build is offline: no theme downloads, no intersphinx, no API keys.
+  QM_CONFIG_DIR: ${{ github.workspace }}/.ci-config
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  build:
+    name: Build HTML documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[docs]"
+
+      - name: Check RST formatting
+        run: python scripts/normalize_rst.py --check
+
+      # build_docs.py sets warningiserror, so any Sphinx warning fails this
+      # job rather than being buried in the log.
+      - name: Build (warnings are errors)
+        run: python scripts/build_docs.py --clean
+
+      - name: Verify index.html exists
+        run: test -f docs/build/html/index.html
+
+      - name: Secret scan
+        run: python scripts/secret_scan.py
+
+      # This repository is PRIVATE: the documentation is uploaded as a workflow
+      # artifact only. It is never published to GitHub Pages or any public host.
+      - name: Upload HTML documentation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation-html
+          path: docs/build/html
+          retention-days: 30
+
+      - name: Reminder
+        run: |
+          echo "::notice title=Private documentation::"
+          echo "The HTML documentation was built and uploaded as an artifact."
+          echo "It is deliberately not published: this repository is private."

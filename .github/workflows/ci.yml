@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Qt must never try to open a real window in CI.
+  QT_QPA_PLATFORM: offscreen
+  # Fail loudly instead of silently using a developer's real profile.
+  QM_CONFIG_DIR: ${{ github.workspace }}/.ci-config
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint:
+    name: Lint, format and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format
+        run: ruff format --check .
+
+      - name: mypy
+        run: mypy
+
+      - name: Secret scan
+        run: python scripts/secret_scan.py
+
+      - name: Documentation formatting
+        run: python scripts/normalize_rst.py --check
+
+  test:
+    name: Tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install (Linux)
+        if: runner.os != 'Windows'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1
+
+      - name: Install (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Unit tests
+        run: pytest tests/unit -q
+
+      - name: Integration tests
+        run: pytest tests/integration -q
+
+      - name: GUI tests
+        run: pytest tests/gui -q
+
+      - name: Coverage summary
+        if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
+        run: pytest --cov=quantsmind_agent --cov-report=term-missing --cov-report=xml -q
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 14
+
+  build:
+    name: Package build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Verify the wheel installs and imports
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+          /tmp/smoke/bin/python -c "import quantsmind_agent; print(quantsmind_agent.__version__)"
+          /tmp/smoke/bin/quantsmind-agent --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
+
+  # A green CI run does NOT prove the application works on a real Windows 11
+  # desktop or against a real model. See docs/source/testing/acceptance-v0.1.rst.
+  manual-acceptance-required:
+    name: Manual Windows 11 acceptance required
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Reminder
+        run: |
+          echo "::notice title=Manual acceptance pending::"
+          echo "Automated CI passed, but GUI rendering on Windows 11 and"
+          echo "real-LLM behaviour are NOT verified here. Run the procedures in"
+          echo "docs/source/windows.rst and docs/source/testing/manual-acceptance.rst"
+          echo "and record the results in"
+          echo "docs/source/testing/acceptance-v0.1.rst."

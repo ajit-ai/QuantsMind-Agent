@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+.venv/
+venv/
+env/
+.python-version
+
+# Testing / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+
+# Documentation build output
+docs/build/
+
+# Packaging / PyInstaller
+*.manifest
+*.spec.bak
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Local configuration and secrets -- MUST NEVER BE COMMITTED
+qm-config.toml
+qm-secrets.toml
+.env
+.env.*
+*.key
+secrets.toml
+
+# Local artifacts
+/out/
+*.log
+
+# Local acceptance fixture (generated, disposable)
+.acceptance-fixture/
+
+# Smoke-test and manual-run artifacts
+.smoke-*/
