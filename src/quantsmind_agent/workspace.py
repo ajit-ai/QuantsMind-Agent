@@ -12,6 +12,7 @@ Everything the Agent Core does goes through this class; the GUI never touches
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import os
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ __all__ = [
     "DEFAULT_BINARY_SUFFIXES",
     "DEFAULT_IGNORED_DIRECTORIES",
     "FileEntry",
+    "FileFingerprint",
     "Workspace",
     "is_within",
 ]
@@ -132,6 +134,19 @@ def _iso(mtime: float | None) -> str:
     return datetime.fromtimestamp(mtime, tz=UTC).isoformat(timespec="seconds")
 
 
+def _ends_with_newline(path: Path) -> bool:
+    """Whether ``path``'s last byte is a newline (used for line counting)."""
+
+    try:
+        with open(path, "rb") as handle:
+            if handle.seek(0, os.SEEK_END) == 0:
+                return True
+            handle.seek(-1, os.SEEK_END)
+            return handle.read(1) == b"\n"
+    except OSError:  # pragma: no cover - unreadable file
+        return True
+
+
 @dataclass(frozen=True, slots=True)
 class FileEntry:
     """Metadata for one file or directory inside the workspace."""
@@ -156,8 +171,45 @@ class FileEntry:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class FileFingerprint:
+    """Content identity of a file, used to detect concurrent/stale edits.
+
+    ``sha256`` alone is enough to decide whether the file still matches what the
+    model read. ``line_count`` is carried because edit operations address content
+    by line, so a caller can reject a request whose line numbering no longer
+    makes sense without reading the file twice.
+    """
+
+    path: str
+    size: int
+    sha256: str
+    line_count: int
+    exists: bool = True
+
+    def matches(self, expected_sha256: str | None) -> bool:
+        """Whether this fingerprint still equals a previously observed hash."""
+
+        return expected_sha256 is None or expected_sha256 == self.sha256
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "size": self.size,
+            "sha256": self.sha256,
+            "line_count": self.line_count,
+            "exists": self.exists,
+        }
+
+
 class Workspace:
-    """A read-mostly view over a single project directory.
+    """A bounded view over a single project directory.
+
+    Reads (:meth:`read_text`, :meth:`walk`) and v0.2 mutations
+    (:meth:`write_text`, :meth:`delete_file`) share one containment rule: every
+    path goes through :meth:`resolve` first, so absolute paths, drive and UNC
+    references, ``..`` traversal, null bytes and symlink/junction escapes are
+    rejected identically no matter which tool asked.
 
     Parameters
     ----------
@@ -408,8 +460,15 @@ class Workspace:
         *,
         max_bytes: int | None = None,
         encoding: str = "utf-8",
+        preserve_newlines: bool = False,
     ) -> str:
         """Read a text file from inside the workspace.
+
+        By default line endings are translated to ``\\n`` (universal newlines),
+        which is what the read tool shows the model. Pass
+        ``preserve_newlines=True`` to get the bytes exactly as stored -- the
+        edit path needs that, otherwise a CRLF file read on Windows and written
+        back would silently become LF and produce a whole-file diff.
 
         Raises
         ------
@@ -435,7 +494,12 @@ class Workspace:
 
         limit = max_bytes if max_bytes is not None else self._max_read_bytes
         try:
-            with open(target, encoding=encoding, errors="replace") as handle:
+            with open(
+                target,
+                encoding=encoding,
+                errors="replace",
+                newline="" if preserve_newlines else None,
+            ) as handle:
                 return handle.read(limit)
         except OSError as exc:
             raise InvalidPathError(
@@ -447,6 +511,176 @@ class Workspace:
 
     def file_size(self, relative: str | os.PathLike[str]) -> int:
         return self.resolve(relative).stat().st_size
+
+    # -- mutation (v0.2) ---------------------------------------------------
+    def fingerprint(self, relative: str | os.PathLike[str]) -> FileFingerprint:
+        """Content identity of ``relative``, for stale-edit detection.
+
+        A missing file yields ``exists=False`` with empty hashes, which is how
+        the edit tool distinguishes "create this file" from "this file already
+        exists and does not match".
+        """
+
+        target = self.resolve(relative)
+        rel = self._relative_of(target)
+        if not target.is_file():
+            return FileFingerprint(rel, 0, "", 0, exists=False)
+        digest = hashlib.sha256()
+        line_count = 0
+        size = 0
+        try:
+            with open(target, "rb") as handle:
+                while True:
+                    chunk = handle.read(65_536)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    size += len(chunk)
+                    line_count += chunk.count(b"\n")
+            if size and not _ends_with_newline(target):
+                # A final line without a trailing newline still counts.
+                line_count += 1
+        except OSError as exc:
+            raise InvalidPathError(
+                f"Cannot inspect {rel}: {exc}",
+                user_message=f"'{rel}' could not be inspected.",
+                details={"path": rel},
+                cause=exc,
+            ) from exc
+        return FileFingerprint(rel, size, digest.hexdigest(), line_count)
+
+    def ensure_parent(
+        self,
+        relative: str | os.PathLike[str],
+        *,
+        create_parents: bool = False,
+    ) -> Path:
+        """Validate the parent directory of ``relative`` before a write.
+
+        When ``create_parents`` is false and the directory does not exist, the
+        write is refused: creating folders is a separate, visible act rather
+        than a side effect of saving a file. Containment is re-checked after
+        resolution, so a junction in the path cannot redirect the write.
+        """
+
+        target = self.resolve(relative)
+        parent = target.parent
+        if parent.is_dir():
+            self._assert_contained(parent, relative)
+            return parent
+        if not create_parents:
+            rel = self._relative_of(target)
+            raise InvalidPathError(
+                f"Parent directory does not exist for {rel!r}",
+                user_message=(
+                    f"The folder for '{rel}' does not exist. Create it first with "
+                    "create_parents=true if you are sure."
+                ),
+                details={"path": rel, "reason": "missing parent directory"},
+            )
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            rel = self._relative_of(target)
+            raise InvalidPathError(
+                f"Cannot create the parent directory for {rel!r}: {exc}",
+                user_message=f"The folder for '{rel}' could not be created.",
+                details={"path": rel},
+                cause=exc,
+            ) from exc
+        # Re-resolve after creating: on Windows a new component could sit behind
+        # a pre-existing junction, and containment must be proven, not assumed.
+        self._assert_contained(parent.resolve(strict=False), relative)
+        return parent
+
+    def write_text(
+        self,
+        relative: str | os.PathLike[str],
+        content: str,
+        *,
+        create_parents: bool = False,
+        encoding: str = "utf-8",
+    ) -> FileFingerprint:
+        """Create or replace a text file inside the workspace.
+
+        Containment, traversal and symlink rules come from :meth:`resolve`, so
+        there is exactly one implementation of "inside the workspace" in the
+        codebase. Replacing an existing file is allowed -- that is what an
+        explicit write means -- but the *caller* is responsible for having
+        obtained approval and for having checked staleness; see
+        :func:`quantsmind_agent.edit_ops.apply_edit`.
+        """
+
+        target = self.resolve(relative)
+        rel = self._relative_of(target)
+        if target.is_dir():
+            raise InvalidPathError(
+                f"Refusing to write over a directory: {rel}",
+                user_message=f"'{rel}' is a folder. Write a file inside it instead.",
+                details={"path": rel},
+            )
+        self.ensure_parent(relative, create_parents=create_parents)
+        if "\x00" in content:
+            raise InvalidPathError(
+                f"Refusing to write a null byte into {rel}",
+                user_message="The content contains a null byte, which cannot be written.",
+                details={"path": rel, "reason": "null byte in content"},
+            )
+        try:
+            # Write via a sibling temp file and replace, so a failure part-way
+            # through cannot leave the user with a truncated file.
+            temporary = target.with_name(f".{target.name}.qm-tmp")
+            temporary.write_text(content, encoding=encoding, newline="")
+            os.replace(temporary, target)
+        except OSError as exc:
+            raise InvalidPathError(
+                f"Cannot write {rel}: {exc}",
+                user_message=f"'{rel}' could not be written.",
+                details={"path": rel},
+                cause=exc,
+            ) from exc
+        return self.fingerprint(rel)
+
+    def delete_file(self, relative: str | os.PathLike[str]) -> FileFingerprint:
+        """Delete one regular file inside the workspace.
+
+        v0.2 deletes files only. Directory trees are never removed recursively:
+        a recursive delete is irreversible at a scale the user cannot review in
+        an approval dialog, so it is out of scope until the UI can show exactly
+        what would be removed.
+        """
+
+        target = self.resolve(relative)
+        rel = self._relative_of(target)
+        if target.is_dir() and not target.is_symlink():
+            raise InvalidPathError(
+                f"Refusing to delete a directory: {rel}",
+                user_message=(f"'{rel}' is a folder. Delete the files inside it one at a time."),
+                details={"path": rel, "reason": "directory deletion is not supported"},
+            )
+        if not target.exists():
+            raise InvalidPathError(
+                f"Cannot delete {rel}: it does not exist",
+                user_message=f"'{rel}' does not exist in this workspace.",
+                details={"path": rel},
+            )
+        try:
+            before = self.fingerprint(rel)
+            target.unlink()
+        except OSError as exc:
+            raise InvalidPathError(
+                f"Cannot delete {rel}: {exc}",
+                user_message=f"'{rel}' could not be deleted.",
+                details={"path": rel},
+                cause=exc,
+            ) from exc
+        return before
+
+    def _assert_contained(self, candidate: Path, original: str | os.PathLike[str]) -> None:
+        """Raise unless ``candidate`` is still inside the root."""
+
+        if not is_within(self._root, candidate):
+            raise self._deny(str(original), "resolves outside the workspace root")
 
     def count_children(self, relative: str | os.PathLike[str] = ".") -> int:
         try:
