@@ -7,12 +7,15 @@ without opening a window.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from quantsmind_agent import config as config_module
 from quantsmind_agent.app import ApplicationContext, _build_parser, _paths_from_args, main
 from quantsmind_agent.config import ConfigManager
+from quantsmind_agent.secrets import FileSecretStore
 
 pytestmark = pytest.mark.integration
 
@@ -25,6 +28,35 @@ def _portable_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("QM_CONFIG_DIR", str(root / "config"))
     monkeypatch.setenv("QM_LOG_DIR", str(root / "logs"))
     return root
+
+
+@pytest.fixture(autouse=True)
+def _no_os_credential_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    """Keep CLI credential lookups out of the real OS credential store.
+
+    ``main()`` builds its own ``ConfigManager``, whose default store consults the
+    Windows Credential Manager -- a machine-global resource that may hold a real
+    credential saved earlier through the Settings dialog. Tests must never read
+    it, for two reasons: the results would depend on machine state, and a failing
+    assertion could echo a live secret into CI output.
+
+    Redirecting the store *factory* to a temp file store isolates that external
+    resource without touching production code. Everything else still runs
+    unchanged: argument parsing, ``ConfigManager`` construction, the
+    environment-then-store resolution order, key masking, the report format and
+    the exit codes. ``test_secrets_paths.py`` still exercises the real keyring
+    construction, because it calls ``build_secret_store`` directly.
+
+    Nothing is written to or deleted from the real credential store.
+    """
+
+    store_path = tmp_path / "cli-profile" / "config" / "secrets.json"
+
+    def _file_store(_path: Path) -> FileSecretStore:
+        return FileSecretStore(store_path)
+
+    monkeypatch.setattr(config_module, "build_secret_store", _file_store)
+    yield
 
 
 class TestArgumentParsing:
@@ -76,12 +108,16 @@ class TestCheckConfig:
         out = capsys.readouterr().out
         assert "read_file" in out
         assert str(sample_project.resolve()) in out
-        assert code == 1  # still not ready: no API key in the test environment
+        # Readiness is deterministic here: the workspace is open and the
+        # isolated store holds no key, so the default OpenAI endpoint still
+        # needs one.
+        assert code == 1
 
     def test_output_never_contains_a_credential(self, capsys: pytest.CaptureFixture[str]) -> None:
         config_dir = Path(os.environ["QM_CONFIG_DIR"])
         config_dir.mkdir(parents=True, exist_ok=True)
-        # main() builds its own store from QM_CONFIG_DIR, so seed that one.
+        # main() builds its own store; _no_os_credential_store points it at this
+        # file, so the seeded value is the one it resolves.
         (config_dir / "secrets.json").write_text(
             '{"provider:openai_compatible:api_key": "super-secret-key-424242"}',
             encoding="utf-8",

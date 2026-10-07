@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests.fakes import FakeModelProvider
-
 from quantsmind_agent.agent import AgentCore, StreamEmitter
 from quantsmind_agent.context import ContextEngine
 from quantsmind_agent.events import AgentEvent, AgentEventType, EventBus
@@ -21,6 +19,7 @@ from quantsmind_agent.session import Session
 from quantsmind_agent.tools import ToolRegistry, ToolResult
 from quantsmind_agent.workspace import Workspace
 from quantsmind_agent.workspace_tools import build_default_tools
+from tests.fakes import FakeModelProvider
 
 __all__ = ["ActivityRecorder", "AgentHarness"]
 
