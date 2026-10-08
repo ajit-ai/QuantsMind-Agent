@@ -20,6 +20,9 @@ Windows 11::
     max_iterations = 8
     max_file_bytes = 256000
     auto_approve_reads = true
+    auto_approve_writes = false
+    command_timeout_seconds = 120.0
+    git_enabled = true
 
     [logging]
     level = "INFO"
@@ -112,7 +115,12 @@ class ProviderSettings(BaseModel):
 
 
 class AgentSettings(BaseModel):
-    """Behavioural limits for the Agent Core."""
+    """Behavioural limits for the Agent Core.
+
+    The v0.2 fields control how much autonomy the agent has once a workspace is
+    open. Their defaults are the conservative ones: writes and commands are
+    approved one at a time, and ``auto_approve_writes`` is false.
+    """
 
     model_config = ConfigDict(validate_assignment=True)
 
@@ -122,6 +130,24 @@ class AgentSettings(BaseModel):
     auto_approve_reads: bool = True
     system_prompt: str = ""
     history_turns: int = Field(default=12, ge=0, le=200)
+
+    auto_approve_writes: bool = False
+    """Approve ``write_file``/``edit_file`` without prompting.
+
+    Deleting a file always prompts regardless of this setting, and command
+    execution always prompts: both rules are registered per tool so this flag
+    cannot widen them.
+    """
+
+    command_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
+    """Default time limit for ``run_command`` when the model does not ask for one."""
+
+    max_command_output_chars: int = Field(default=20_000, gt=0, le=200_000)
+    """Per-stream cap on captured command output."""
+
+    git_enabled: bool = True
+    """Expose the read-only Git tools. Turning this off removes them entirely
+    rather than denying them, so a model cannot even name them."""
 
 
 class LoggingSettings(BaseModel):

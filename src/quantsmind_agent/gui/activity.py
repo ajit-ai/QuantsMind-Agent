@@ -20,6 +20,7 @@ _STATE_COLORS = {
     "completed": COLORS["success"],
     "failed": COLORS["error"],
     "notice": COLORS["muted"],
+    "awaiting": COLORS["warning"],
 }
 
 _STATE_MARKS = {
@@ -27,6 +28,7 @@ _STATE_MARKS = {
     "completed": "\u2713",
     "failed": "\u2717",
     "notice": "\u00b7",
+    "awaiting": "\u23f3",
 }
 
 _MAX_ROWS = 300

@@ -18,17 +18,21 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from quantsmind_agent.command_tools import build_command_tools
 from quantsmind_agent.config import ConfigManager
 from quantsmind_agent.context import ContextEngine
 from quantsmind_agent.errors import QuantsMindError
 from quantsmind_agent.events import AgentEvent, AgentEventType, EventBus
+from quantsmind_agent.git_tools import build_git_tools
 from quantsmind_agent.llm import ModelGateway
 from quantsmind_agent.logging_setup import get_logger, setup_logging, shutdown_logging
 from quantsmind_agent.paths import AppPaths, default_paths
 from quantsmind_agent.permissions import (
+    ApprovalOutcome,
     Decision,
     Permission,
     PermissionBroker,
@@ -41,6 +45,7 @@ from quantsmind_agent.session import Session
 from quantsmind_agent.tools import ToolRegistry
 from quantsmind_agent.workspace import Workspace
 from quantsmind_agent.workspace_tools import build_default_tools
+from quantsmind_agent.write_tools import build_mutating_tools
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from quantsmind_agent.agent import AgentCore
@@ -66,6 +71,11 @@ class ApplicationContext:
         self.context_engine = ContextEngine()
         self.workspace: Workspace | None = None
         self.bridge: Any | None = None
+        #: GUI approval bridge, attached by the main window. While it is absent
+        #: (CLI, tests, startup) every ASK resolves to DENY.
+        self.approval: Any | None = None
+        #: One cancellation flag shared by the agent loop and blocking tools.
+        self._cancel = threading.Event()
         self.events.subscribe_all(self._record_event)
         self._rebuild()
 
@@ -121,14 +131,95 @@ class ApplicationContext:
         }
 
     def _build_permission_provider(self) -> StaticPermissionProvider:
+        """Assemble the active policy.
+
+        Rule *order is load-bearing*, so the list is built explicitly rather than
+        by mutating a default one. :meth:`StaticPermissionProvider.decide` sorts
+        candidates by "exact tool first, then a non-wildcard target pattern", and
+        that sort is stable: two rules sharing the same tool wildcard and target
+        pattern keep their insertion order, which makes a permissive wildcard
+        added after a restrictive one unreachable. The order below is therefore
+        always permissive-before-restrictive within one key group:
+
+        1. exact-tool rules, which the sort always places first,
+        2. permissive wildcards,
+        3. restrictive wildcards (ASK/DENY).
+
+        Reads are allowed because they change nothing. Writes and commands ask,
+        and two operations ask regardless of how permissive the flags are:
+        ``delete_file`` (irreversible) and ``run_command`` (host-affecting).
+        ``git_enabled`` removes the Git tools rather than denying them.
+        """
+
+        agent = self.config_manager.config.agent
         provider = StaticPermissionProvider()
-        for rule in provider.default_rules():
-            provider.add_rule(rule)
-        if not self.config_manager.config.agent.auto_approve_reads:
-            # Reads become interactive; with no approver wired, ASK degrades
-            # to DENY, so nothing is read without an explicit approval.
-            provider.add_rule(PermissionRule(Permission.READ_WORKSPACE, Decision.ASK))
+
+        # 1. Per-tool rules: the sort places these ahead of every wildcard, so
+        #    they cannot be widened by a global flag.
+        provider.add_rule(
+            PermissionRule(Permission.WRITE_WORKSPACE, Decision.ASK, tool="delete_file")
+        )
+        provider.add_rule(
+            PermissionRule(Permission.EXECUTE_COMMAND, Decision.ASK, tool="run_command")
+        )
+
+        # 2. Permissive wildcards.
+        provider.add_rule(
+            PermissionRule(
+                Permission.READ_WORKSPACE,
+                Decision.ALLOW if agent.auto_approve_reads else Decision.ASK,
+            )
+        )
+        provider.add_rule(
+            PermissionRule(
+                Permission.WRITE_WORKSPACE,
+                Decision.ALLOW if agent.auto_approve_writes else Decision.ASK,
+            )
+        )
+        provider.add_rule(PermissionRule(Permission.GIT, Decision.ALLOW))
+
+        # 3. Restrictive wildcards last, so they are reachable when the matching
+        #    permissive rule above is not present.
+        provider.add_rule(PermissionRule(Permission.EXECUTE_COMMAND, Decision.ASK))
+        provider.add_rule(PermissionRule(Permission.NETWORK, Decision.DENY))
         return provider
+
+    def _request_approval(self, request: PermissionRequest) -> ApprovalOutcome:
+        """The broker's approver. Denies when no human is reachable.
+
+        Returning DENY rather than ALLOW is what keeps a headless run safe: the
+        CLI, tests and startup all reach this path with ``self.approval`` unset,
+        so nothing mutating ever executes without a GUI dialog behind it.
+        """
+
+        if self.approval is None:
+            logger.info(
+                "no approver available; denying %s for %s",
+                request.permission.value,
+                request.tool,
+            )
+            return ApprovalOutcome.DENY
+        # Imported lazily: this module must stay importable without Qt so the
+        # headless core and the CLI never load PySide6.
+        from quantsmind_agent.gui.approval import build_prompt
+
+        workspace = str(self.workspace.root) if self.workspace else ""
+        outcome: ApprovalOutcome = self.approval.request(build_prompt(request, workspace=workspace))
+        return outcome
+
+    def _on_approval(self, request: PermissionRequest, outcome: ApprovalOutcome) -> None:
+        """Record what the user chose, so the transcript shows intent."""
+
+        self.events.emit(
+            AgentEventType.PERMISSION_APPROVAL,
+            {
+                "tool": request.tool,
+                "permission": request.permission.value,
+                "summary": request.summary,
+                "target": request.target,
+                "approval": outcome.value,
+            },
+        )
 
     def _on_permission_decision(self, request: PermissionRequest, decision: Decision) -> None:
         logger.info("permission %s for %s on %s", decision.value, request.tool, request.target)
@@ -149,6 +240,8 @@ class ApplicationContext:
         permissions = PermissionBroker(
             provider=self._build_permission_provider(),
             on_decision=self._on_permission_decision,
+            on_approval=self._on_approval,
+            approver=self._request_approval,
         )
         registry = ToolRegistry(
             permissions=permissions,
@@ -156,9 +249,23 @@ class ApplicationContext:
             session_id=session.id,
         )
         if self.workspace is not None:
+            agent_settings = config.agent
             registry.register_all(
-                build_default_tools(self.workspace, max_read_bytes=config.agent.max_file_bytes)
+                build_default_tools(self.workspace, max_read_bytes=agent_settings.max_file_bytes)
             )
+            registry.register_all(
+                build_mutating_tools(self.workspace, max_file_bytes=agent_settings.max_file_bytes)
+            )
+            registry.register_all(
+                build_command_tools(
+                    self.workspace,
+                    cancel_event=self._cancel,
+                    default_timeout=agent_settings.command_timeout_seconds,
+                    redact_env=(config.provider.api_key_env,),
+                )
+            )
+            if agent_settings.git_enabled:
+                registry.register_all(build_git_tools(self.workspace))
 
         self.gateway = ModelGateway(
             build_provider(config.provider, api_key=self.config_manager.api_key_value),
@@ -180,6 +287,7 @@ class ApplicationContext:
             event_bus=self.events,
             max_iterations=config.agent.max_iterations,
             request_options=self._request_options,
+            cancel_event=self._cancel,
         )
 
     # -- workspace ---------------------------------------------------------
@@ -233,7 +341,12 @@ class ApplicationContext:
         self.session.reset(keep_workspace=True)
         self.events.clear_history()
         self.recorded_events.clear()
+        # A new conversation is a new trust boundary: "Allow for Session"
+        # grants from the previous one must not carry over.
+        self.deny_pending_approval()
+        self.reset_cancel()
         self._rebuild()
+        self.tools.permissions.clear_session_grants()
 
     # -- status ------------------------------------------------------------
     def status_line(self) -> str:
@@ -256,6 +369,44 @@ class ApplicationContext:
 
         self.bridge = bridge
 
+    def attach_approval(self, approval: Any) -> None:
+        """Attach the GUI approval bridge.
+
+        Called by the main window once it exists. Attaching is what makes an
+        ``ASK`` reachable: before this, :meth:`_request_approval` denies every
+        mutating call, which is why a headless start is safe by default.
+        """
+
+        self.approval = approval
+
+    def request_approval(self, request: PermissionRequest) -> ApprovalOutcome:
+        """Ask the attached bridge to prompt the user.
+
+        Exposed so the GUI, tests and the CLI can exercise one approval path
+        rather than reaching into the broker.
+        """
+
+        return self._request_approval(request)
+
+    def deny_pending_approval(self) -> None:
+        """Cancel an outstanding prompt, e.g. when the window closes."""
+
+        if self.approval is not None and hasattr(self.approval, "cancel_pending"):
+            self.approval.cancel_pending()
+
+    def cancel(self) -> None:
+        """Stop the running turn and any blocking tool sharing its cancel flag."""
+
+        self._cancel.set()
+        self.agent.cancel()
+
+    def reset_cancel(self) -> None:
+        self._cancel.clear()
+
+    @property
+    def cancel_event(self) -> threading.Event:
+        return self._cancel
+
     def current_agent(self) -> AgentCore:
         """The live :class:`~quantsmind_agent.agent.AgentCore`.
 
@@ -267,8 +418,11 @@ class ApplicationContext:
 
     # -- lifecycle ---------------------------------------------------------
     def shutdown(self) -> None:
+        self.deny_pending_approval()
         if self.bridge is not None and getattr(self.bridge, "is_busy", False):
             self.bridge.cancel()
+        else:
+            self.cancel()
 
 
 # --------------------------------------------------------------------------

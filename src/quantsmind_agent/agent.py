@@ -118,6 +118,12 @@ class AgentCore:
     request_options:
         Returns ``(model, temperature, max_tokens, timeout)`` for each request,
         so the GUI can apply live configuration changes.
+    cancel_event:
+        Optional shared cancellation flag. When supplied, the tools that can
+        block for a long time -- notably ``run_command`` -- observe the *same*
+        flag as :meth:`cancel`, so pressing Stop stops a running command rather
+        than only being noticed at the next model round-trip. Omitting it keeps
+        the core self-contained.
     """
 
     def __init__(
@@ -131,6 +137,7 @@ class AgentCore:
         max_iterations: int = 8,
         use_streaming: bool = True,
         request_options: Callable[[], dict[str, Any]] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         self._gateway = gateway
         self._tools = tools
@@ -140,10 +147,16 @@ class AgentCore:
         self._max_iterations = max(1, int(max_iterations))
         self._use_streaming = use_streaming
         self._request_options = request_options or (lambda: {})
-        self._cancel = threading.Event()
+        self._cancel = cancel_event if cancel_event is not None else threading.Event()
         #: Set when :meth:`cancel` is called before the turn's loop starts.
         self._cancel_pending = False
         self._running = False
+
+    @property
+    def cancel_event(self) -> threading.Event:
+        """The shared cancellation flag, also handed to blocking tools."""
+
+        return self._cancel
 
     # -- state -------------------------------------------------------------
     @property

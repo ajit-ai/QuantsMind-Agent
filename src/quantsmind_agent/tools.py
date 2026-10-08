@@ -348,7 +348,7 @@ class ToolRegistry:
             permission=spec.permission,
             tool=name,
             summary=summary,
-            target=str(arguments.get("path") or arguments.get("pattern") or ""),
+            target=_permission_target(name, arguments),
             details=dict(arguments),
         )
         try:
@@ -417,6 +417,28 @@ class ToolRegistry:
                 },
             )
         return result
+
+
+def _permission_target(name: str, arguments: dict[str, Any]) -> str:
+    """The subject of a tool call, for permission rules and the approval dialog.
+
+    A permission rule can match on this value with a glob, and the approval
+    prompt shows it, so it has to name the thing that would actually change:
+    the file for a filesystem tool, the search text for a search, and the whole
+    command line for command execution.
+    """
+
+    if name == "run_command":
+        command = arguments.get("command")
+        extra = arguments.get("arguments")
+        if isinstance(command, str) and isinstance(extra, list) and extra:
+            return " ".join([command, *[str(item) for item in extra]])
+        return str(command or "")
+    for key in ("path", "pattern", "target"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
 
 
 def _redact_arguments(arguments: dict[str, Any]) -> dict[str, Any]:

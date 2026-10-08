@@ -28,7 +28,7 @@ __all__ = [
 
 
 class AgentEventType(StrEnum):
-    """Stable identifiers for every event v0.1 emits."""
+    """Stable identifiers for every event the application emits."""
 
     USER_MESSAGE = "user_message"
     AGENT_STARTED = "agent_started"
@@ -39,6 +39,10 @@ class AgentEventType(StrEnum):
     TOOL_COMPLETED = "tool_completed"
     TOOL_FAILED = "tool_failed"
     PERMISSION_DECISION = "permission_decision"
+    PERMISSION_APPROVAL = "permission_approval"
+    """A human answered an ``ASK`` prompt: allowed once, allowed for the session,
+    or denied. Separate from ``PERMISSION_DECISION`` so the activity log can show
+    what the *user* chose rather than only the resulting decision."""
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
     AGENT_CANCELLED = "agent_cancelled"

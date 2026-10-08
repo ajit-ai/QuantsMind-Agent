@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from quantsmind_agent.agent import AgentOutcome
 from quantsmind_agent.errors import QuantsMindError
 from quantsmind_agent.gui.activity import ActivityView
+from quantsmind_agent.gui.approval import ApprovalBridge, ApprovalDialog
 from quantsmind_agent.gui.conversation import ConversationView
 from quantsmind_agent.gui.settings_dialog import SettingsDialog
 from quantsmind_agent.gui.sidebar import Sidebar
@@ -48,6 +49,13 @@ class MainWindow(QMainWindow):
         # resolving the agent per turn keeps it correct across rebuilds.
         self.bridge = AgentWorkerBridge(context.current_agent)
         context.attach_bridge(self.bridge)
+        # The approval bridge is what turns an ASK permission into a dialog.
+        # It is attached before the UI is built so a turn started immediately
+        # after construction still reaches a human.
+        self.approval = ApprovalBridge(self)
+        context.attach_approval(self.approval)
+        #: The approval dialog currently on screen, if any.
+        self._active_dialog: ApprovalDialog | None = None
         self._build()
         self._connect()
         self._refresh_from_context()
@@ -142,7 +150,10 @@ class MainWindow(QMainWindow):
 
         row = QHBoxLayout()
         row.setSpacing(8)
-        self._hint_label = QLabel("The agent can only read inside the open project folder.")
+        self._hint_label = QLabel(
+            "The agent can read and change files in this project; "
+            "it asks before writing, deleting or running a command."
+        )
         self._hint_label.setObjectName("StatusText")
         row.addWidget(self._hint_label)
         row.addStretch(1)
@@ -171,6 +182,8 @@ class MainWindow(QMainWindow):
         bridge.turn_finished.connect(self._on_turn_finished)
         bridge.turn_failed.connect(self._on_turn_failed)
         bridge.busy_changed.connect(self._on_busy_changed)
+
+        self.approval.connect_dialog(self._show_approval_dialog)
 
         self.sidebar.open_workspace_requested.connect(self._on_open_workspace)
         self.sidebar.close_workspace_requested.connect(self._on_close_workspace)
@@ -238,6 +251,43 @@ class MainWindow(QMainWindow):
         self._refresh_from_context()
         self.conversation.append_notice("Started a new conversation.")
 
+    # -- approval -----------------------------------------------------------
+    def _show_approval_dialog(self, prompt: Any) -> None:
+        """Show one approval prompt. Always runs on the GUI thread.
+
+        The dialog is application-modal, so the window stays responsive to
+        repaints but will not accept another turn while a decision is pending --
+        which is the point: nothing else may act on the workspace until the user
+        answers.
+        """
+
+        dialog = ApprovalDialog(prompt, parent=self)
+        self._active_dialog = dialog
+        self.activity.record(prompt.tool, f"waiting for approval: {prompt.summary}", "awaiting")
+        self._status_activity.setText(f"approval required: {prompt.tool}")
+        dialog.exec()
+        outcome = dialog.outcome
+        self._active_dialog = None
+        self.approval.resolve(outcome)
+        state = "completed" if outcome.value != "DENY" else "failed"
+        note = (
+            "user allowed once"
+            if outcome.value == "ALLOW_ONCE"
+            else "user allowed for session"
+            if outcome.value == "ALLOW_FOR_SESSION"
+            else "user denied"
+        )
+        self.activity.record(prompt.tool, note, state)
+        self.conversation.append_tool_notice(prompt.tool, note, state)
+        self._status_activity.setText("")
+
+    def cancel_pending_approval(self) -> None:
+        """Deny a pending prompt without showing a dialog (used by Stop/close)."""
+
+        if self._active_dialog is not None:
+            self._active_dialog.reject()
+        self.approval.cancel_pending()
+
     # -- composer ----------------------------------------------------------
     def _on_send_clicked(self) -> None:
         text = self.input.toPlainText().strip()
@@ -252,7 +302,11 @@ class MainWindow(QMainWindow):
         self.activity.record("agent", "request sent", "started")
 
     def _on_cancel_clicked(self) -> None:
+        # A pending approval is a request the user has not answered yet, so
+        # Stop must answer it: denying is the only non-committal outcome.
+        self.cancel_pending_approval()
         self.bridge.cancel()
+        self._context.cancel()
         self.activity.record("agent", "cancellation requested", "started")
 
     # -- worker callbacks --------------------------------------------------
@@ -329,7 +383,8 @@ class MainWindow(QMainWindow):
         self._hint_label.setText(
             "The agent is working \u2014 press Stop to cancel."
             if busy
-            else "The agent can only read inside the open project folder."
+            else "The agent can read and change files in this project; "
+            "it asks before writing, deleting or running a command."
         )
 
     def _on_agent_event(self, event: Any) -> None:
@@ -346,6 +401,15 @@ class MainWindow(QMainWindow):
             self.activity.notice(
                 f"permission {payload.get('decision', '')}: {payload.get('tool', '')}"
             )
+        elif name == "permission_approval":
+            payload = event.payload
+            approval = str(payload.get("approval", "")).lower()
+            label = {
+                "allow_once": "user allowed once",
+                "allow_for_session": "user allowed for session",
+                "deny": "user denied",
+            }.get(approval, approval)
+            self.activity.notice(f"{payload.get('tool', '')}: {label}")
 
     # -- helpers -----------------------------------------------------------
     def _response_meta(self, outcome: AgentOutcome) -> str:
@@ -367,5 +431,8 @@ class MainWindow(QMainWindow):
 
     # -- lifecycle ---------------------------------------------------------
     def closeEvent(self, event: Any) -> None:
+        # Deny first: a waiting worker must be released before the thread is
+        # asked to quit, or the turn would block on an unanswered dialog.
+        self.cancel_pending_approval()
         self._context.shutdown()
         super().closeEvent(event)

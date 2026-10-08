@@ -144,13 +144,34 @@ class TestApplicationContext:
         workspace = context.open_workspace(str(sample_project))
         assert workspace.root == sample_project.resolve()
         assert context.tools is not None
+        # Exact equality, not a subset: a tool appearing or disappearing without
+        # a decision is a security-relevant change, so it must fail here. v0.2
+        # adds the write/edit/delete tools, run_command and the read-only Git
+        # tools to the four v0.1 readers.
         assert context.tools.names == [
+            "delete_file",
+            "edit_file",
+            "git_diff",
+            "git_log",
+            "git_status",
             "list_directory",
             "project_structure",
             "read_file",
+            "run_command",
             "search_content",
+            "write_file",
         ]
         assert "No API key configured" in context.readiness()[1]
+
+    def test_git_tools_can_be_disabled(
+        self, context: ApplicationContext, sample_project: Path
+    ) -> None:
+        config = context.config_manager.config
+        config.agent.git_enabled = False
+        context.apply_configuration()
+        context.open_workspace(str(sample_project))
+        assert context.tools is not None
+        assert [name for name in context.tools.names if name.startswith("git_")] == []
 
     def test_closing_a_workspace_clears_tools(
         self, context: ApplicationContext, sample_project: Path
