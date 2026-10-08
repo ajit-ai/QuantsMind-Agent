@@ -346,8 +346,26 @@ _INTERPRETERS: frozenset[str] = frozenset(
 
 #: Flags that hand a program a code string rather than a script path.
 #: ``python -c "import os"`` is arbitrary code execution, so it can never be
-#: labelled low risk no matter which program carries it.
+#: labelled low risk. The check is restricted to interpreters below, because the
+#: same letters mean something else elsewhere -- ``pip -e .`` is an editable
+#: install, not code.
 _INLINE_CODE_FLAGS: frozenset[str] = frozenset({"-c", "--command", "-command", "/c", "-e", "-ec"})
+
+#: Programs for which an inline-code flag really does mean "execute this string".
+_CODE_STRING_PROGRAMS: frozenset[str] = frozenset(
+    {
+        "python",
+        "python3",
+        "py",
+        "node",
+        "ruby",
+        "perl",
+        "php",
+        "osascript",
+        "irb",
+        "jshell",
+    }
+)
 
 
 def _subverb(argv: list[str]) -> str:
@@ -453,8 +471,12 @@ def classify_command(
             rule="interpreter",
         )
 
-    # 5. An inline code string is arbitrary execution, whatever carries it.
-    if any(item.lower() in _INLINE_CODE_FLAGS for item in tokens[1:]):
+    # 5. An inline code string is arbitrary execution, whatever interpreter carries
+    #    it. Scoped to interpreters: ``pip -e .`` shares the flag letters but
+    #    means "editable install".
+    if lowered in _CODE_STRING_PROGRAMS and any(
+        item.lower() in _INLINE_CODE_FLAGS for item in tokens[1:]
+    ):
         return PolicyVerdict(
             CommandClass.DESTRUCTIVE,
             "passes a code string to the interpreter rather than running a file",

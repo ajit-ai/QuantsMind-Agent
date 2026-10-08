@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from quantsmind_agent.errors import (
@@ -41,6 +42,7 @@ class ToolSpec:
 
     __slots__ = (
         "description",
+        "guard",
         "input_schema",
         "name",
         "permission",
@@ -57,6 +59,7 @@ class ToolSpec:
         *,
         summary_template: str = "{target}",
         read_only: bool = True,
+        guard: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.name = name
         self.description = description
@@ -64,6 +67,11 @@ class ToolSpec:
         self.permission = permission
         self.summary_template = summary_template
         self.read_only = read_only
+        #: Optional pre-permission check, evaluated by the registry *before* the
+        #: approval prompt. Use it for refusals that are not the user's to make:
+        #: offering "Allow" for a command the application forbids would turn the
+        #: dialog into a speed bump rather than a control.
+        self.guard = guard
 
     def __repr__(self) -> str:  # pragma: no cover - trivial
         return f"ToolSpec(name={self.name!r}, permission={self.permission.value!r})"
@@ -343,6 +351,20 @@ class ToolRegistry:
             AgentEventType.TOOL_REQUESTED,
             {"tool": name, "summary": summary, "arguments": _redact_arguments(arguments)},
         )
+
+        # Refusals the application owns are settled before anyone is asked. The
+        # registry remains the enforcement point either way: a guard can only
+        # refuse, never allow, so it can never widen a permission.
+        if spec.guard is not None:
+            try:
+                spec.guard(arguments)
+            except QuantsMindError as exc:
+                logger.info("Tool %s refused by policy: %s", name, exc.message)
+                self._emit(
+                    AgentEventType.TOOL_FAILED,
+                    {"tool": name, "summary": summary, "error": exc.user_message},
+                )
+                return ToolResult.failure(name, summary, exc.user_message)
 
         request = PermissionRequest(
             permission=spec.permission,

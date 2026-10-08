@@ -241,7 +241,26 @@ class RunCommandTool:
             permission=Permission.EXECUTE_COMMAND,
             summary_template="run {command}",
             read_only=False,
+            guard=self._refuse_if_blocked,
         )
+
+    def _refuse_if_blocked(self, arguments: dict[str, Any]) -> None:
+        """Policy gate, run by the registry before the user is asked.
+
+        A blocked command must never reach an approval dialog: showing "Allow"
+        for ``format C:`` would make the dialog decorative. This raises for
+        refusals only -- it can never turn a denial into an approval.
+        """
+
+        argv = self._argv(arguments)
+        verdict = self.classify(argv)
+        if not verdict.permitted:
+            raise CommandDeniedError(
+                " ".join(argv),
+                verdict.reason,
+                rule=verdict.rule,
+                details={"risk": verdict.risk_label},
+            )
 
     # -- helpers ---------------------------------------------------------
     def _argv(self, arguments: dict[str, Any]) -> list[str]:

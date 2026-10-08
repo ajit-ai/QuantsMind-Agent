@@ -241,16 +241,19 @@ def _add_block(
 ) -> EditOutcome:
     block = _require(new_text, "new_text", path)
     addition = block.split("\n")
+    # A block that already ends with a newline must not add a blank line.
+    if addition and addition[-1] == "":
+        addition = addition[:-1]
+    if not addition:
+        raise EditConflictError(path, "new_text must not be empty")
+
     if op is EditOperation.PREPEND:
         updated = [*addition, *lines]
     else:
         updated = [*lines, *addition]
-    if not trailing and updated:
-        # Keep a file that had no trailing newline that way, unless we are
-        # adding to an empty file.
-        keep_trailing = trailing or not lines
-    else:
-        keep_trailing = True
+    # Keep a file that had no trailing newline that way, unless we are adding to
+    # an empty file, where there is nothing to preserve.
+    keep_trailing = trailing or not lines
     verb = "prepended to" if op is EditOperation.PREPEND else "appended to"
     return EditOutcome(
         _rebuild(updated, eol, keep_trailing),
