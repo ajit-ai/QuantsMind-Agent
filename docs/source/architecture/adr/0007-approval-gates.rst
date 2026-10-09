@@ -58,3 +58,37 @@ Consequences
   ``auto_approve_writes`` cannot widen them.
 * Session grants are cleared when the conversation, project or settings change.
   A new conversation is a new trust boundary.
+
+Threading consequence
+=====================
+
+The prompt is produced on the agent's worker thread and must be *shown* on the
+GUI thread. Two distinct handovers are involved, and the first version of v0.2
+got the second one wrong.
+
+**The prompt signal.** It is emitted on the worker thread and connected with the
+default ``AutoConnection``. Qt resolves that correctly, so the dialog *is*
+built on the GUI thread. It is now additionally decorated with ``@Slot(object)``
+and connected with an explicit ``QueuedConnection``, which is belt and braces:
+either alone would work, and a test pins each so neither can be dropped without
+failing.
+
+**Agent events, which were genuinely broken.** ``EventBus`` is a plain Python
+callback list, not a Qt signal. A subscriber therefore runs on whichever thread
+published the event -- and the window's subscriber renders activity rows and
+status-bar text. During an approval the worker publishes ``permission_decision``
+and ``permission_approval``, so the agent's worker thread was mutating
+``QListWidget`` and ``QLabel`` objects directly. Qt does not support that, and
+the observable result on Windows 11 was an approval window that opened blank and
+reported "Not Responding". The window now only *enqueues* bus events and drains
+them on a GUI-thread timer.
+
+Every failure path fails closed. An off-thread request, a dialog that cannot be
+constructed, and a second request while one is pending all deny and release the
+worker, because an unanswered prompt would otherwise block the agent
+indefinitely.
+
+The lesson is worth stating separately: a green test suite did not catch this,
+because the same code paths run correctly headless. Thread-affinity bugs need
+either a test that asserts the thread the handler ran on, or real on-desktop
+verification.

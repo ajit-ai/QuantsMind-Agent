@@ -6,9 +6,10 @@ services. It contains no provider or agent logic of its own.
 
 from __future__ import annotations
 
+import queue
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, QTimer, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -28,6 +29,7 @@ from quantsmind_agent.gui.conversation import ConversationView
 from quantsmind_agent.gui.settings_dialog import SettingsDialog
 from quantsmind_agent.gui.sidebar import Sidebar
 from quantsmind_agent.gui.worker import AgentWorkerBridge
+from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.permissions import ApprovalOutcome
 from quantsmind_agent.version import APP_NAME, __version__
 
@@ -35,6 +37,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from quantsmind_agent.app import ApplicationContext
 
 __all__ = ["MainWindow"]
+
+logger = get_logger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -120,6 +124,8 @@ class MainWindow(QMainWindow):
         self._status_activity = QLabel("")
         #: Text streamed so far in the current turn.
         self._streamed: list[str] = []
+        #: Agent events waiting to be rendered on the GUI thread.
+        self._event_queue: queue.Queue[Any] = queue.Queue()
         for label in (self._status_model, self._status_workspace, self._status_activity):
             label.setObjectName("StatusText")
         self.statusBar().addWidget(self._status_model, 2)
@@ -184,7 +190,12 @@ class MainWindow(QMainWindow):
         bridge.turn_failed.connect(self._on_turn_failed)
         bridge.busy_changed.connect(self._on_busy_changed)
 
-        self.approval.prompt_ready.connect(self._on_prompt_ready)
+        # An explicit QueuedConnection guarantees the slot runs on the GUI thread
+        # even if the decorator is ever lost; either alone is insufficient,
+        # which is exactly the blank-dialog failure this replaces.
+        self.approval.prompt_ready.connect(
+            self._on_prompt_ready, Qt.ConnectionType.QueuedConnection
+        )
 
         self.sidebar.open_workspace_requested.connect(self._on_open_workspace)
         self.sidebar.close_workspace_requested.connect(self._on_close_workspace)
@@ -192,7 +203,15 @@ class MainWindow(QMainWindow):
         self.sidebar.new_conversation_requested.connect(self._on_new_conversation)
 
         events = self._context.events
-        events.subscribe_all(self._on_agent_event)
+        events.subscribe_all(self._queue_agent_event)
+        # Agent events are published on whichever thread raised them -- usually
+        # the agent's worker thread -- and this handler mutates QWidgets. The
+        # subscription above therefore only enqueues; this timer is what makes
+        # the actual work happen on the GUI thread.
+        self._event_timer = QTimer(self)
+        self._event_timer.setInterval(50)
+        self._event_timer.timeout.connect(self._drain_agent_events)
+        self._event_timer.start()
 
     def _refresh_from_context(self) -> None:
         config = self._context.config_manager.config
@@ -253,29 +272,67 @@ class MainWindow(QMainWindow):
         self.conversation.append_notice("Started a new conversation.")
 
     # -- approval -----------------------------------------------------------
+    @Slot(object)
     def _on_prompt_ready(self, prompt: Any) -> None:
-        """Show one approval prompt. Runs on the GUI thread via the poll timer.
+        """Show one approval prompt.
 
-        The dialog is *shown*, not executed. ``QDialog.exec()`` would start a
-        nested event loop that blocks this slot until answered, stalling the rest
-        of the UI and making the window impossible to cancel cleanly. ``open()``
-        keeps window modality -- the user cannot act on the transcript while a
-        decision is pending -- while leaving the event loop free to paint,
-        resize and handle Stop.
+        This **must** run on the GUI thread. The ``@Slot(object)`` decorator and
+        the explicit ``QueuedConnection`` in :meth:`_connect` are both required:
+        connecting a Qt signal to a plain Python method leaves PySide6 to invoke
+        it directly on the emitting thread, and the agent's worker thread is
+        where the prompt originates. Building the dialog and touching the
+        activity list and composer from there produces a blank window that never
+        paints and never pumps events -- the "blank, not responding" failure.
+
+        Every failure path denies. A dialog that cannot be built, or a request
+        that arrives off-thread, must not silently authorise anything.
         """
 
-        if self._active_dialog is not None:
-            # One decision at a time: a second prompt cannot arrive while the
-            # first is unanswered, but be explicit rather than leak a dialog.
+        if not self._on_gui_thread():
+            # Fail closed rather than manipulate widgets from another thread.
+            logger.error("Approval request arrived off the GUI thread; denying")
+            self.approval.deny_prompt()
             return
-        dialog = ApprovalDialog(prompt, parent=self)
+
+        if self._active_dialog is not None:
+            # One decision at a time. A second prompt cannot legitimately
+            # arrive while the first is unanswered; deny it rather than leak a
+            # second window.
+            logger.warning("Approval already pending; denying the new request")
+            self.approval.deny_prompt()
+            return
+
+        try:
+            dialog = ApprovalDialog(prompt, parent=self)
+        except Exception:
+            logger.exception("Could not build the approval dialog; denying")
+            self.approval.deny_prompt()
+            return
+
         self._active_dialog = dialog
         dialog.finished.connect(lambda _code: self._approval_finished(dialog))
-        self.activity.record(prompt.tool, f"waiting for approval: {prompt.summary}", "awaiting")
-        self._status_activity.setText(f"approval required: {prompt.tool}")
-        self.input.setEnabled(False)
-        self.send_button.setEnabled(False)
-        dialog.open()
+        try:
+            self.activity.record(prompt.tool, f"waiting for approval: {prompt.summary}", "awaiting")
+            self._status_activity.setText(f"approval required: {prompt.tool}")
+            self.input.setEnabled(False)
+            self.send_button.setEnabled(False)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Could not update the activity panel; denying")
+            dialog.reject()
+            return
+
+        # show() rather than open()/exec(): exec() starts a nested event loop
+        # that blocks this slot until answered, which is what made the window
+        # appear unresponsive. show() + raise_ + activateWindow keeps the GUI
+        # thread free to paint and to handle Stop.
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_gui_thread(self) -> bool:
+        """Whether the caller is on the window's own thread."""
+
+        return QThread.currentThread() is self.thread()
 
     def _approval_finished(self, dialog: Any) -> None:
         """Release the waiting worker with the outcome the user chose."""
@@ -404,6 +461,31 @@ class MainWindow(QMainWindow):
             else "The agent can read and change files in this project; "
             "it asks before writing, deleting or running a command."
         )
+
+    def _queue_agent_event(self, event: Any) -> None:
+        """Enqueue a bus event. Called on the *publishing* thread.
+
+        :class:`~quantsmind_agent.events.EventBus` is a plain Python callback
+        list with no Qt involvement, so a subscriber runs on whichever thread
+        published the event. Handling it inline would mutate the activity panel
+        and status bar from the agent's worker thread, which Qt does not support
+        and which manifests as an unstable or frozen window.
+        """
+
+        self._event_queue.put(event)
+
+    def _drain_agent_events(self) -> None:
+        """Handle queued events. Runs on the GUI thread via the timer."""
+
+        while True:
+            try:
+                event = self._event_queue.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                self._on_agent_event(event)
+            except Exception:  # pragma: no cover - a widget must never kill the timer
+                logger.exception("Failed to render an agent event")
 
     def _on_agent_event(self, event: Any) -> None:
         """Mirror interesting agent events into the activity panel."""

@@ -75,6 +75,33 @@ can try a different approach.
    policy is a separate, non-overridable gate -- see
    :doc:`../architecture/command-execution`.
 
+Threading
+=========
+
+The agent runs on a worker thread; the prompt is a Qt dialog on the GUI thread.
+Two separate handovers are involved, and both must be marshalled:
+
+**The prompt itself.** It crosses from the worker thread via a Qt signal. The
+receiving slot is a real ``@Slot(object)`` and the connection is an explicit
+``Qt.ConnectionType.QueuedConnection``. Qt's default ``AutoConnection`` already
+queues correctly here, so the decorator is belt and braces rather than the fix
+for a defect -- but both are pinned by tests so neither can be lost silently.
+
+**Agent events.** :class:`~quantsmind_agent.events.EventBus` is a plain Python
+callback list with **no Qt involvement**: a subscriber runs on whichever thread
+published the event, which is usually the agent's worker. The window therefore
+only *enqueues* events and drains them on a GUI-thread timer, because the
+handler writes to the activity panel and the status bar. Mutating those widgets
+from the worker is undefined behaviour and shows up as an unstable or frozen
+window -- and it fires precisely while an approval is pending, since
+``permission_decision`` and ``permission_approval`` are published during the
+decision.
+
+Every failure path answers. If the dialog cannot be built, or a request arrives
+off-thread, or one is already pending, the request is **denied** and the waiting
+worker is released. A blank dialog, a timeout, a cancellation or a GUI
+exception never authorises anything.
+
 Decisions
 =========
 

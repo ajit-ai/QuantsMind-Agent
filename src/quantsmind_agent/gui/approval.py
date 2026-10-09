@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -250,8 +251,28 @@ class ApprovalBridge(QObject):
         if pending is not None:
             pending.set()
 
+    def deny_prompt(self) -> None:
+        """Deny the request that is queued for display but cannot be shown.
+
+        Used by the GUI when it refuses to build a dialog, receives a request
+        off-thread, or already has one pending. Without this the worker would
+        wait for an answer that can never arrive, which is how an earlier build
+        hung the agent indefinitely.
+        """
+
+        with self._lock:
+            self._answer = ApprovalOutcome.DENY
+        pending = self._pending
+        if pending is not None:
+            pending.set()
+
     def request(self, prompt: ApprovalPrompt) -> ApprovalOutcome:
-        """Called on the **worker** thread. Blocks until the user answers."""
+        """Called on the **worker** thread. Blocks until the user answers.
+
+        The ``finally`` is load-bearing: whatever happens -- a dialog that
+        cannot be built, a window that closes, an exception in the GUI -- the
+        worker is released, and the answer defaults to ``DENY``.
+        """
 
         done = threading.Event()
         with self._lock:
@@ -316,7 +337,8 @@ class ApprovalDialog(QDialog):
         # keeps the UI responsive and keeps the decision unambiguous.
         self.setModal(False)
         self.setWindowModality(Qt.WindowModality.NonModal)
-        self.setMinimumWidth(560)
+        self.resize(620, 420)
+        self.setMinimumWidth(480)
         self._build()
 
     # -- construction ----------------------------------------------------
@@ -330,14 +352,30 @@ class ApprovalDialog(QDialog):
         heading.setWordWrap(True)
         layout.addWidget(heading)
 
-        detail = QLabel(format_prompt(prompt))
+        # format_prompt renders whatever the model supplied. If any part of it
+        # fails, show a minimal but still-decisive prompt rather than an empty
+        # window: an unbuildable prompt must never read as "no information".
+        try:
+            details = format_prompt(prompt)
+        except Exception:  # pragma: no cover - defensive
+            details = (
+                f"tool      : {prompt.tool}\n"
+                f"target    : {prompt.target or '(none)'}\n"
+                f"workspace : {prompt.workspace or '(none)'}"
+            )
+        detail = QLabel(details)
         detail.setObjectName("StatusText")
         detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         detail.setWordWrap(True)
-        layout.addWidget(detail)
+        # Word-wrapped labels inside a dialog need a real size hint or the
+        # window can end up laid out with no usable height.
+        detail.setMinimumHeight(180)
+        detail.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout.addWidget(detail, 1)
 
-        if prompt.blocking_warning:
-            warning = QLabel(prompt.blocking_warning)
+        warning_text = prompt.blocking_warning
+        if warning_text:
+            warning = QLabel(warning_text)
             warning.setObjectName("ErrorText")
             warning.setWordWrap(True)
             layout.addWidget(warning)
