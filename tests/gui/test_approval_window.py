@@ -82,13 +82,11 @@ def close_dialog(dialog: Any) -> None:
         if dialog.parent() is None:
             shiboken6.delete(dialog)
         else:
+            # Left to the normal event loop on purpose. The owner decides when
+            # a child goes away, and the window may still be holding a
+            # reference to this dialog, so destroying it eagerly here tears it
+            # out from under code that has not finished with it.
             dialog.deleteLater()
-            # Complete the deferred delete now, while the parent is still
-            # alive. Leaving it queued is what makes this crash: if the parent
-            # is freed first, the pending event later dereferences a child
-            # that no longer exists, which showed up as an intermittent access
-            # violation partway through the suite.
-            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     except RuntimeError:  # pragma: no cover - already deleted
         return
     QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
@@ -143,12 +141,21 @@ class TestOwnershipAwareTeardown:
 
             close_dialog(dialog)
 
-            # Qt destroyed it, on its own schedule, while the parent was alive.
+            # close_dialog must not have freed it: that is the double free.
             assert freed == [], "close_dialog freed a C++-owned widget behind Qt's back"
+
+            # Ask Qt to deliver the deferred delete. The owner destroys the
+            # child exactly once, and the wrapper goes invalid rather than
+            # pointing at freed memory.
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             with pytest.raises(RuntimeError):
                 _ = dialog.objectName()
         finally:
-            close_dialog(owner)
+            # Hand the owner to Qt as well. Freeing it directly with
+            # shiboken6.delete would abandon the child's pending deferred delete
+            # and dereference a freed child when the event is delivered.
+            owner.deleteLater()
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             drain(10)
 
     def test_a_parentless_dialog_is_freed(
@@ -317,17 +324,12 @@ class TestChoicesReachTheWorker:
 
         dialog = window._active_dialog
         assert dialog is not None
-        try:
-            getattr(dialog, button).click()
-            drain(40)
-        finally:
-            # The window deletes the dialog itself on finish; make sure nothing
-            # is left holding it if the assertion below fails first.
-            close_dialog(window._active_dialog)
-            drain(10)
+        getattr(dialog, button).click()
+        drain(40)
 
         assert done.wait(timeout=5), "the worker stayed blocked"
         assert result == [expected]
+        assert window._active_dialog is None
 
 
 class TestAgentEventsAreHandledOnTheGuiThread:
