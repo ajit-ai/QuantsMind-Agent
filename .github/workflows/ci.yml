@@ -114,20 +114,13 @@ jobs:
       - name: Command policy and write/edit/delete unit tests
         run: pytest tests/unit/test_command_policy.py tests/unit/test_command_tools.py tests/unit/test_write_tools.py tests/unit/test_git_tools.py -q
 
-      # The GUI tests are excluded here on purpose. They run in their own step
-      # above, on every platform in the matrix, and they still have to pass
-      # there. Running them a second time in this all-in-one, coverage
-      # instrumented process segfaulted reproducibly on CPython 3.12: the Qt
-      # event-loop tests spin while a worker thread holds live Qt objects, and
-      # tracing every frame in that process reliably crashes the interpreter.
-      # The fault never occurred in the dedicated GUI job, which is the one
-      # that gates. GUI coverage is reported as navigation, not a release gate,
-      # and there is no enforced coverage threshold.
+      # The whole suite runs here, GUI tests included: they are part of the measured
+      # coverage and must keep being. run_qt_tests.py disposes Qt while the
+      # application is still alive and then exits with pytest's own code, so
+      # coverage.xml is written before the runner leaves.
       - name: Coverage summary
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
-        run: >-
-          python scripts/run_qt_tests.py --cov=quantsmind_agent
-          --cov-report=term-missing --cov-report=xml -q --ignore=tests/gui
+        run: python scripts/run_qt_tests.py --cov=quantsmind_agent --cov-report=term-missing --cov-report=xml -q
 
       - name: Upload coverage
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'

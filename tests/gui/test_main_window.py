@@ -252,3 +252,61 @@ class TestErrorHandling:
         gui_harness.ask("hello")
         combined = gui_harness.transcript + " ".join(gui_harness.activity)
         assert "super-secret-key-9999" not in combined
+
+
+class TestEventSubscriptionLifecycle:
+    """Closing the window must release its agent-event subscription.
+
+    ``EventBus.subscribe_all`` stores the bound method strongly, which forms a
+    cycle ``context -> bus -> bound method -> window -> context``. Nothing can
+    then reclaim the window by reference counting, so an unsubscribed window
+    stayed alive with a running 50ms timer until the *cyclic* collector happened
+    to finalise it. That is what produced an intermittent access violation
+    inside ``processEvents`` in the full-suite run, and the collector was
+    cancelling those windows at unpredictable moments.
+    """
+
+    def test_close_releases_the_subscription(self, gui_harness: GuiHarness) -> None:
+        window = gui_harness.window
+        bus = window._context.events
+        before = len(bus._any)
+        assert before > 0
+
+        window.close()
+
+        assert len(bus._any) == before - 1, "the window stayed subscribed after closing"
+
+    def test_close_stops_the_event_timer(self, gui_harness: GuiHarness) -> None:
+        window = gui_harness.window
+        assert window._event_timer.isActive()
+
+        window.close()
+
+        assert not window._event_timer.isActive(), "a closed window kept its timer running"
+
+    def test_a_closed_window_stops_rendering_agent_events(self, gui_harness: GuiHarness) -> None:
+        from PySide6.QtCore import QEventLoop, QThread
+        from PySide6.QtWidgets import QApplication
+
+        from quantsmind_agent.events import AgentEventType
+
+        window = gui_harness.window
+        window.close()
+        window.activity.clear_activity()
+
+        window._context.events.emit(AgentEventType.PERMISSION_APPROVAL, {"tool": "edit_file"})
+
+        # The drain runs on a 50ms timer, so the event loop has to be pumped for
+        # long enough to fire it. Checking without pumping would pass even with
+        # the timer still running.
+        for _ in range(30):
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
+            QThread.msleep(5)
+
+        assert window.activity.texts() == [], "a closed window still rendered agent events"
+
+    def test_releasing_twice_is_harmless(self, gui_harness: GuiHarness) -> None:
+        window = gui_harness.window
+        window._release_event_subscription()
+        window._release_event_subscription()
+        assert window._unsubscribe_events is None
