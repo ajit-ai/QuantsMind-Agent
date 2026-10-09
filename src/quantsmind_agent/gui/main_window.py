@@ -7,6 +7,7 @@ services. It contains no provider or agent logic of its own.
 from __future__ import annotations
 
 import queue
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Qt, QThread, QTimer, Slot
@@ -61,6 +62,8 @@ class MainWindow(QMainWindow):
         context.attach_approval(self.approval)
         #: The approval dialog currently on screen, if any.
         self._active_dialog: ApprovalDialog | None = None
+        #: Releases the agent-event subscription. ``None`` once released.
+        self._unsubscribe_events: Callable[[], None] | None = None
         self._build()
         self._connect()
         self._refresh_from_context()
@@ -203,7 +206,14 @@ class MainWindow(QMainWindow):
         self.sidebar.new_conversation_requested.connect(self._on_new_conversation)
 
         events = self._context.events
-        events.subscribe_all(self._queue_agent_event)
+        # Keep the unsubscribe callable. ``subscribe_all`` stores a strong
+        # reference to the bound method, which forms a cycle
+        # context -> bus -> bound method -> window -> context. Nothing can then
+        # reclaim the window by reference counting, so closing it would leave a
+        # live QMainWindow, a running 50ms timer and a subscription that keeps
+        # delivering events into a closed window's widgets. Releasing it on
+        # close breaks the cycle and hands the window back to normal teardown.
+        self._unsubscribe_events = events.subscribe_all(self._queue_agent_event)
         # Agent events are published on whichever thread raised them -- usually
         # the agent's worker thread -- and this handler mutates QWidgets. The
         # subscription above therefore only enqueues; this timer is what makes
@@ -547,9 +557,22 @@ class MainWindow(QMainWindow):
         )
 
     # -- lifecycle ---------------------------------------------------------
+    def _release_event_subscription(self) -> None:
+        """Stop consuming agent events. Safe to call more than once."""
+
+        unsubscribe, self._unsubscribe_events = self._unsubscribe_events, None
+        if unsubscribe is not None:
+            unsubscribe()
+        if self._event_timer is not None:
+            self._event_timer.stop()
+
     def closeEvent(self, event: Any) -> None:
         # Deny first: a waiting worker must be released before the thread is
         # asked to quit, or the turn would block on an unanswered dialog.
         self.cancel_pending_approval()
+        # Then stop consuming events and the timer that drains them, so a closed
+        # window neither keeps a 50ms timer alive nor keeps mutating its own
+        # widgets on the agent's thread boundary.
+        self._release_event_subscription()
         self._context.shutdown()
         super().closeEvent(event)
