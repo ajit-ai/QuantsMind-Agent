@@ -1,0 +1,97 @@
+# Native executable builds and smoke tests.
+#
+# Kept separate from ci.yml on purpose. A PyInstaller build takes minutes and
+# needs a native runner for the target OS -- PyInstaller does not cross-compile,
+# so a Linux binary must be built on Linux and a macOS bundle on macOS. Folding
+# this into the pull-request test matrix would slow every push down for no
+# extra confidence, so it runs on pushes to main, on release tags, and on demand.
+#
+# Artifacts are uploaded for inspection only. Nothing is published to a release
+# or a package index from here: that needs signing credentials and a release
+# decision that has not been made yet.
+name: package
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      onefile:
+        description: "Build the single-file layout instead of onedir"
+        type: boolean
+        default: false
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      # Never cancel a whole platform on another platform's failure; we want to
+      # know the full picture of what builds where.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows (x64)
+            arch: x86_64
+          - os: ubuntu-22.04
+            label: Linux (x64, glibc)
+            arch: x86_64
+          - os: macos-14
+            label: macOS (Apple Silicon)
+            arch: arm64
+          - os: macos-13
+            label: macOS (Intel)
+            arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[packaging]"
+
+      - name: Build executable
+        run: |
+          python scripts/build_executable.py --clean ${{ inputs.onefile && '--onefile' || '' }}
+
+      - name: Smoke test the packaged executable
+        # QT_QPA_PLATFORM=offscreen so the bundle resolves a Qt platform plugin
+        # in a runner with no display. The smoke test never opens a window.
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_test_executable.py --distpath dist
+
+      - name: Summarise build metadata
+        run: cat dist/BUILD-METADATA.json
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quantsmind-agent-${{ matrix.arch }}-${{ runner.os }}
+          path: |
+            dist/**
+            !dist/**/*.zip
+          retention-days: 14
+          if-no-files-found: error
