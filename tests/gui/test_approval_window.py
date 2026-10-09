@@ -21,7 +21,8 @@ import threading
 from typing import Any
 
 import pytest
-from PySide6.QtCore import QEvent, QEventLoop, Qt, QThread
+import shiboken6
+from PySide6.QtCore import QEventLoop, Qt, QThread
 from PySide6.QtWidgets import QApplication, QLabel
 
 from quantsmind_agent.events import AgentEventType
@@ -54,18 +55,25 @@ def edit_prompt(path: str = "README.md") -> Any:
 def close_dialog(dialog: Any) -> None:
     """Destroy a dialog deterministically.
 
-    PySide6 objects must not outlive the ``QApplication``. On Python 3.11 a
-    dialog, or an image taken from one, that is still referenced when the
-    session-scoped application is torn down aborts the interpreter with
-    ``none_dealloc: deallocating None``. Closing and processing the deferred
-    delete while the application is still alive keeps shutdown clean.
+    These dialogs are parentless, so Python owns them. ``deleteLater()`` is the
+    wrong tool for a Python-owned widget: Qt destroys the C++ object while the
+    wrapper still believes it owns the memory, and the next collection aborts
+    the interpreter with ``none_dealloc: deallocating None`` or a segmentation
+    fault. ``shiboken6.delete`` tells the wrapper the C++ object is gone, which
+    is what actually makes teardown safe.
+
+    It must also run while the ``QApplication`` is still alive, since a widget
+    that outlives its application has its C++ object torn down after Qt is
+    gone.
     """
 
     if dialog is None:
         return
-    dialog.close()
-    dialog.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    try:
+        dialog.close()
+        shiboken6.delete(dialog)
+    except RuntimeError:  # pragma: no cover - already deleted
+        return
     QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
 
 

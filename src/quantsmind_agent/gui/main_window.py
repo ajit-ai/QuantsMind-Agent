@@ -338,8 +338,25 @@ class MainWindow(QMainWindow):
         """Release the waiting worker with the outcome the user chose."""
 
         self._active_dialog = None
+
+        # Read everything needed from the dialog *before* scheduling its
+        # deletion. deleteLater() only posts an event: the C++ object can be
+        # gone at the next event-loop pass, and dereferencing it afterwards is
+        # a use-after-free that crashes the interpreter mid-decision.
         outcome = dialog.outcome
+        tool = dialog.prompt.tool
+
+        # Break the reference cycle between the dialog's signal and the closure
+        # that captured the dialog. Left connected, the Python wrapper outlives
+        # the C++ object and PySide6 aborts at collection time with
+        # "none_dealloc: deallocating None" or a segmentation fault.
+        try:
+            dialog.finished.disconnect()
+        except (RuntimeError, TypeError):  # pragma: no cover - already gone
+            logger.debug("Approval dialog signal was already disconnected")
+
         dialog.deleteLater()
+
         self.approval.resolve(outcome)
         self.input.setEnabled(True)
         self.send_button.setEnabled(True)
@@ -351,8 +368,8 @@ class MainWindow(QMainWindow):
             if outcome is ApprovalOutcome.ALLOW_FOR_SESSION
             else "user denied"
         )
-        self.activity.record(dialog.prompt.tool, note, state)
-        self.conversation.append_tool_notice(dialog.prompt.tool, note, state)
+        self.activity.record(tool, note, state)
+        self.conversation.append_tool_notice(tool, note, state)
         self._status_activity.setText("")
 
     def cancel_pending_approval(self) -> None:
