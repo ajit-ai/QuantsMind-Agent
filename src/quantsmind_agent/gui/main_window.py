@@ -28,6 +28,7 @@ from quantsmind_agent.gui.conversation import ConversationView
 from quantsmind_agent.gui.settings_dialog import SettingsDialog
 from quantsmind_agent.gui.sidebar import Sidebar
 from quantsmind_agent.gui.worker import AgentWorkerBridge
+from quantsmind_agent.permissions import ApprovalOutcome
 from quantsmind_agent.version import APP_NAME, __version__
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -183,7 +184,7 @@ class MainWindow(QMainWindow):
         bridge.turn_failed.connect(self._on_turn_failed)
         bridge.busy_changed.connect(self._on_busy_changed)
 
-        self.approval.connect_dialog(self._show_approval_dialog)
+        self.approval.prompt_ready.connect(self._on_prompt_ready)
 
         self.sidebar.open_workspace_requested.connect(self._on_open_workspace)
         self.sidebar.close_workspace_requested.connect(self._on_close_workspace)
@@ -252,40 +253,57 @@ class MainWindow(QMainWindow):
         self.conversation.append_notice("Started a new conversation.")
 
     # -- approval -----------------------------------------------------------
-    def _show_approval_dialog(self, prompt: Any) -> None:
-        """Show one approval prompt. Always runs on the GUI thread.
+    def _on_prompt_ready(self, prompt: Any) -> None:
+        """Show one approval prompt. Runs on the GUI thread via the poll timer.
 
-        The dialog is application-modal, so the window stays responsive to
-        repaints but will not accept another turn while a decision is pending --
-        which is the point: nothing else may act on the workspace until the user
-        answers.
+        The dialog is *shown*, not executed. ``QDialog.exec()`` would start a
+        nested event loop that blocks this slot until answered, stalling the rest
+        of the UI and making the window impossible to cancel cleanly. ``open()``
+        keeps window modality -- the user cannot act on the transcript while a
+        decision is pending -- while leaving the event loop free to paint,
+        resize and handle Stop.
         """
 
+        if self._active_dialog is not None:
+            # One decision at a time: a second prompt cannot arrive while the
+            # first is unanswered, but be explicit rather than leak a dialog.
+            return
         dialog = ApprovalDialog(prompt, parent=self)
         self._active_dialog = dialog
+        dialog.finished.connect(lambda _code: self._approval_finished(dialog))
         self.activity.record(prompt.tool, f"waiting for approval: {prompt.summary}", "awaiting")
         self._status_activity.setText(f"approval required: {prompt.tool}")
-        dialog.exec()
-        outcome = dialog.outcome
+        self.input.setEnabled(False)
+        self.send_button.setEnabled(False)
+        dialog.open()
+
+    def _approval_finished(self, dialog: Any) -> None:
+        """Release the waiting worker with the outcome the user chose."""
+
         self._active_dialog = None
+        outcome = dialog.outcome
+        dialog.deleteLater()
         self.approval.resolve(outcome)
-        state = "completed" if outcome.value != "DENY" else "failed"
+        self.input.setEnabled(True)
+        self.send_button.setEnabled(True)
+        state = "completed" if outcome is not ApprovalOutcome.DENY else "failed"
         note = (
             "user allowed once"
-            if outcome.value == "ALLOW_ONCE"
+            if outcome is ApprovalOutcome.ALLOW_ONCE
             else "user allowed for session"
-            if outcome.value == "ALLOW_FOR_SESSION"
+            if outcome is ApprovalOutcome.ALLOW_FOR_SESSION
             else "user denied"
         )
-        self.activity.record(prompt.tool, note, state)
-        self.conversation.append_tool_notice(prompt.tool, note, state)
+        self.activity.record(dialog.prompt.tool, note, state)
+        self.conversation.append_tool_notice(dialog.prompt.tool, note, state)
         self._status_activity.setText("")
 
     def cancel_pending_approval(self) -> None:
-        """Deny a pending prompt without showing a dialog (used by Stop/close)."""
+        """Deny a pending prompt without a dialog answer (used by Stop/close)."""
 
-        if self._active_dialog is not None:
-            self._active_dialog.reject()
+        dialog = self._active_dialog
+        if dialog is not None:
+            dialog.reject()
         self.approval.cancel_pending()
 
     # -- composer ----------------------------------------------------------

@@ -207,30 +207,48 @@ def format_prompt(prompt: ApprovalPrompt) -> str:
 
 
 class ApprovalBridge(QObject):
-    """Marshals an approval request from the worker thread to the GUI thread."""
+    """Marshals an approval request from the worker thread to the GUI thread.
+
+    The worker emits ``prompt_ready`` and waits. Because the bridge object lives
+    in the GUI thread and the emit happens on the worker thread, Qt delivers it
+    as a queued call on the GUI thread; no timer is involved, which keeps the
+    handover working even under a synthetic ``processEvents`` pump where timer
+    timeouts are not dispatched.
+
+    The wait is a bounded poll rather than one indefinite wait, so a window
+    close, a session reset or Stop can always release the worker.
+    """
 
     #: Emitted on the GUI thread with an :class:`ApprovalPrompt`.
-    approval_requested = Signal(object)
+    prompt_ready = Signal(object)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._pending: threading.Event | None = None
         self._answer: ApprovalOutcome = ApprovalOutcome.DENY
         self._cancelled = False
+        self._answered = 0
         self._lock = threading.Lock()
 
     @property
     def has_pending(self) -> bool:
         return self._pending is not None
 
+    @property
+    def answered_count(self) -> int:
+        """How many prompts have been answered (used by tests)."""
+
+        return self._answered
+
     def cancel_pending(self) -> None:
-        """Deny any outstanding request (window closing, session reset, Stop)."""
+        """Deny any outstanding request (Stop, window close, session reset)."""
 
         with self._lock:
             self._cancelled = True
             self._answer = ApprovalOutcome.DENY
-        if self._pending is not None:
-            self._pending.set()
+        pending = self._pending
+        if pending is not None:
+            pending.set()
 
     def request(self, prompt: ApprovalPrompt) -> ApprovalOutcome:
         """Called on the **worker** thread. Blocks until the user answers."""
@@ -240,17 +258,17 @@ class ApprovalBridge(QObject):
             self._pending = done
             self._answer = ApprovalOutcome.DENY
             self._cancelled = False
-
-        self.approval_requested.emit(prompt)
+        self.prompt_ready.emit(prompt)
 
         try:
             while not done.wait(_POLL_SECONDS):
                 pass
         finally:
             with self._lock:
-                answer = self._answer if not self._cancelled else ApprovalOutcome.DENY
+                answer = ApprovalOutcome.DENY if self._cancelled else self._answer
                 self._pending = None
                 self._cancelled = False
+                self._answered += 1
         return answer
 
     def resolve(self, outcome: ApprovalOutcome) -> None:
@@ -258,13 +276,9 @@ class ApprovalBridge(QObject):
 
         with self._lock:
             self._answer = outcome
-        if self._pending is not None:
-            self._pending.set()
-
-    def connect_dialog(self, slot: Any) -> None:
-        """Wire the request signal to a GUI-thread slot (queued delivery)."""
-
-        self.approval_requested.connect(slot, Qt.ConnectionType.QueuedConnection)
+        pending = self._pending
+        if pending is not None:
+            pending.set()
 
 
 def decision_for(outcome: ApprovalOutcome) -> Decision:
@@ -295,7 +309,13 @@ class ApprovalDialog(QDialog):
         self._prompt = prompt
         self.outcome: ApprovalOutcome = ApprovalOutcome.DENY
         self.setWindowTitle(dialog_title(prompt))
-        self.setModal(True)
+        # Deliberately non-modal. A modal dialog blocks the rest of the
+        # application, and Qt's blocking machinery makes the dialog either stall
+        # the event loop or trap the worker waiting for the answer. The window
+        # instead disables its composer while a decision is pending, which
+        # keeps the UI responsive and keeps the decision unambiguous.
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumWidth(560)
         self._build()
 
@@ -374,11 +394,14 @@ class ApprovalDialog(QDialog):
     def prompt(self) -> ApprovalPrompt:
         return self._prompt
 
+    def full_text(self) -> str:
+        """Everything the dialog shows, as one string (used by GUI tests)."""
+
+        parts = [widget.text() for widget in self.findChildren(QLabel)]
+        parts.extend(button.text() for button in self.findChildren(QPushButton))
+        return "\n".join(part for part in parts if part)
+
     def button_labels(self) -> list[str]:
         """Visible button texts, in order (used by GUI tests)."""
 
-        return [
-            button.text()
-            for button in self.findChildren(QPushButton)
-            if button.isVisible() or not self.isVisible()
-        ]
+        return [button.text() for button in self.findChildren(QPushButton)]

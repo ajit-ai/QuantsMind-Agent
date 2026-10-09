@@ -63,4 +63,6 @@ def gui_harness(qapp: object, config_manager: ConfigManager) -> Iterator[object]
     harness = GuiHarness(context, provider)
     harness.install_provider()
     yield harness
-    harness.window.close()
+    # Deny any dialog still on screen and drain the worker, so a failed test
+    # reports instead of leaving a blocked QThread hanging the session.
+    harness.shutdown()
