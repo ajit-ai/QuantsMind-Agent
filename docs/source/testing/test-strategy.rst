@@ -135,3 +135,4 @@ Related
 * :doc:`../developer/testing`
 * :doc:`manual-acceptance`
 * :doc:`acceptance-v0.1`
+* :doc:`acceptance-v0.2`

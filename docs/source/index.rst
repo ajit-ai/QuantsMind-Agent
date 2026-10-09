@@ -87,6 +87,7 @@ application rather than by the model.
    testing/test-strategy
    testing/manual-acceptance
    testing/acceptance-v0.1
+   testing/acceptance-v0.2
 
 .. toctree::
    :maxdepth: 2
