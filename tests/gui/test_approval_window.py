@@ -17,7 +17,10 @@ These tests pin the fix:
 
 from __future__ import annotations
 
+import gc
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -92,20 +95,77 @@ def close_dialog(dialog: Any) -> None:
     QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
 
 
+@contextmanager
+def gc_suspended() -> Iterator[None]:
+    """Run a block without the cyclic collector.
+
+    Spinning the Qt event loop while a worker thread holds live Qt objects is
+    exactly the window in which cyclic GC finalises an object whose C++ side
+    another thread is still using. That produced a reproducible segmentation
+    fault inside ``Garbage-collecting`` on CPython 3.12 in CI, during the
+    full-suite coverage run.
+
+    Reference counting is untouched, so objects that become garbage are still
+    freed promptly; only cyclic collection is deferred. Re-entrant: a nested
+    call leaves the collector disabled exactly once and restores the previous
+    state on the way out, so the collector can never be left switched off by a
+    failing test.
+    """
+
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
+
+
 def drain(rounds: int = 1, sleep_ms: int = 2) -> None:
     """Deliver queued GUI events, yielding the GIL so a worker can run."""
 
-    for _ in range(rounds):
-        QApplication.processEvents(FLAGS, 20)
-        QThread.msleep(sleep_ms)
+    with gc_suspended():
+        for _ in range(rounds):
+            QApplication.processEvents(FLAGS, 20)
+            QThread.msleep(sleep_ms)
 
 
 def pump_until(predicate: Any, limit: int = 300) -> bool:
-    for _ in range(limit):
-        drain()
-        if predicate():
-            return True
+    with gc_suspended():
+        for _ in range(limit):
+            drain()
+            if predicate():
+                return True
     return False
+
+
+class TestGarbageCollectorHygiene:
+    """Suspending cyclic GC must never leave it switched off."""
+
+    def test_collector_is_restored_after_draining(self) -> None:
+        assert gc.isenabled()
+        drain(2)
+        assert gc.isenabled(), "drain left the cyclic collector disabled"
+
+    def test_collector_is_restored_when_the_block_raises(self) -> None:
+        assert gc.isenabled()
+        with pytest.raises(RuntimeError), gc_suspended():
+            raise RuntimeError("boom")
+        assert gc.isenabled(), "a failing block left the cyclic collector disabled"
+
+    def test_nested_use_restores_the_outer_state(self) -> None:
+        assert gc.isenabled()
+        with gc_suspended():
+            assert not gc.isenabled()
+            with gc_suspended():
+                assert not gc.isenabled()
+            assert not gc.isenabled(), "a nested block re-enabled the collector"
+        assert gc.isenabled()
+
+    def test_pump_until_leaves_the_collector_enabled(self) -> None:
+        assert gc.isenabled()
+        assert pump_until(lambda: True) is True
+        assert gc.isenabled()
 
 
 class TestOwnershipAwareTeardown:
