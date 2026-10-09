@@ -333,9 +333,18 @@ class TestEventSubscriptionLifecycle:
         gc.disable()
         try:
             refs = [build() for _ in range(3)]
-            assert all(ref() is None for ref in refs), (
-                "windows survived with every reference dropped; teardown is still "
-                "relying on the cyclic collector"
-            )
+            survivors = [ref() for ref in refs if ref() is not None]
+            if survivors:
+                held_by = sorted(
+                    {
+                        f"{type(ref).__module__}.{type(ref).__qualname__}"
+                        for window in survivors
+                        for ref in gc.get_referrers(window)
+                    }
+                )
+                pytest.fail(
+                    "windows survived with every reference dropped; teardown is still "
+                    "relying on the cyclic collector. Referrers: " + ", ".join(held_by)
+                )
         finally:
             gc.enable()
