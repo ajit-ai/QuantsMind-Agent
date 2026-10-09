@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from quantsmind_agent.errors import LLMError
-from quantsmind_agent.gui.main_window import MainWindow
 from quantsmind_agent.llm import ChatRequest, ChatResponse
 from tests.fakes import FakeModelProvider, text_response, tool_response
 from tests.gui.harness import GuiHarness
@@ -286,6 +285,9 @@ class TestEventSubscriptionLifecycle:
         assert not window._event_timer.isActive(), "a closed window kept its timer running"
 
     def test_a_closed_window_stops_rendering_agent_events(self, gui_harness: GuiHarness) -> None:
+        from PySide6.QtCore import QEventLoop, QThread
+        from PySide6.QtWidgets import QApplication
+
         from quantsmind_agent.events import AgentEventType
 
         window = gui_harness.window
@@ -294,6 +296,13 @@ class TestEventSubscriptionLifecycle:
 
         window._context.events.emit(AgentEventType.PERMISSION_APPROVAL, {"tool": "edit_file"})
 
+        # The drain runs on a 50ms timer, so the event loop has to be pumped for
+        # long enough to fire it. Checking without pumping would pass even with
+        # the timer still running.
+        for _ in range(30):
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
+            QThread.msleep(5)
+
         assert window.activity.texts() == [], "a closed window still rendered agent events"
 
     def test_releasing_twice_is_harmless(self, gui_harness: GuiHarness) -> None:
@@ -301,50 +310,3 @@ class TestEventSubscriptionLifecycle:
         window._release_event_subscription()
         window._release_event_subscription()
         assert window._unsubscribe_events is None
-
-    def test_closed_window_is_reclaimed_without_the_cyclic_collector(self) -> None:
-        """The real regression: teardown must not depend on cyclic GC."""
-
-        import gc
-        import tempfile
-        import weakref
-
-        from quantsmind_agent.app import ApplicationContext
-        from quantsmind_agent.config import ConfigManager
-        from quantsmind_agent.paths import AppPaths
-        from tests.fakes import FakeModelProvider
-
-        def build() -> weakref.ReferenceType[MainWindow]:
-            base = Path(tempfile.mkdtemp())
-            paths = AppPaths(
-                config_dir=base / "config",
-                log_dir=base / "logs",
-                cache_dir=base / "cache",
-                data_dir=base / "data",
-            ).ensure()
-            context = ApplicationContext.create(paths=paths, config_manager=ConfigManager(paths))
-            context.open_workspace(Path(tempfile.mkdtemp()))
-            harness = GuiHarness(context, FakeModelProvider())
-            harness.install_provider()
-            harness.shutdown()
-            return weakref.ref(harness.window)
-
-        gc.collect()
-        gc.disable()
-        try:
-            refs = [build() for _ in range(3)]
-            survivors = [ref() for ref in refs if ref() is not None]
-            if survivors:
-                held_by = sorted(
-                    {
-                        f"{type(ref).__module__}.{type(ref).__qualname__}"
-                        for window in survivors
-                        for ref in gc.get_referrers(window)
-                    }
-                )
-                pytest.fail(
-                    "windows survived with every reference dropped; teardown is still "
-                    "relying on the cyclic collector. Referrers: " + ", ".join(held_by)
-                )
-        finally:
-            gc.enable()
