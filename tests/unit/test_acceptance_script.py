@@ -3,8 +3,8 @@
 The acceptance script (``scripts/acceptance_v0_2.py``) is the artifact that
 decides whether a release is acceptable, so its checks need to be trustworthy
 in the same way the product is. These tests never contact a model: they drive
-the same helper functions against a real application context and assert both
-directions, that a correct product passes and that a broken one would fail.
+the same helper functions against a real tool registry and assert both directions:
+that a correct product passes, and that a broken one would fail.
 
 They exist because the previous versions of checks C, E, F, G and J could not
 fail for the reason they claimed. Most asserted only that something had *not*
@@ -16,6 +16,7 @@ from __future__ import annotations
 import shutil
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -27,8 +28,6 @@ for _path in (REPO / "src", REPO / "scripts"):
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-    from quantsmind_agent.app import ApplicationContext
 
 import acceptance_v0_2 as acceptance  # noqa: E402
 
@@ -45,26 +44,41 @@ def workspace() -> Path:
 
 
 @pytest.fixture
-def ctx(tmp_path: Path, workspace: Path) -> Iterator[ApplicationContext]:
-    """A real application context over a disposable workspace."""
+def ctx(workspace: Path) -> Iterator[Any]:
+    """The tool registry the acceptance checks drive, and nothing heavier.
 
-    from quantsmind_agent.app import ApplicationContext
-    from quantsmind_agent.config import ConfigManager
-    from quantsmind_agent.paths import AppPaths
+    Deliberately *not* an `ApplicationContext`. `quantsmind_agent.app`
+    imports the GUI approval module, which imports QtWidgets, and the product
+    checks only ever touch `ctx.tools`. Building the registry directly, the
+    way `tests/unit/test_write_tools.py` already does, keeps Qt out of the
+    unit phase entirely.
 
-    base = tmp_path / "profile"
-    paths = AppPaths(
-        config_dir=base / "config",
-        log_dir=base / "logs",
-        cache_dir=base / "cache",
-        data_dir=base / "data",
-    ).ensure()
-    context = ApplicationContext.create(paths=paths, config_manager=ConfigManager(paths))
-    context.open_workspace(workspace)
-    try:
-        yield context
-    finally:
-        context.shutdown()
+    That matters because CI's coverage step runs the whole suite in one
+    process. Creating and shutting down a couple of dozen application contexts
+    in the unit phase left the later GUI phase running in a process that had
+    already imported and torn down Qt, which segfaulted reproducibly on
+    CPython 3.12. The GUI-only job never saw it because it never ran these
+    tests.
+    """
+
+    from quantsmind_agent.command_tools import build_command_tools
+    from quantsmind_agent.events import EventBus
+    from quantsmind_agent.git_tools import build_git_tools
+    from quantsmind_agent.permissions import PermissionBroker, StaticPermissionProvider
+    from quantsmind_agent.tools import ToolRegistry
+    from quantsmind_agent.workspace import Workspace
+    from quantsmind_agent.write_tools import build_mutating_tools
+
+    broker = PermissionBroker(StaticPermissionProvider.for_v0_2())
+    registry = ToolRegistry(permissions=broker)
+    ws = Workspace(workspace)
+    registry.register_all(build_mutating_tools(ws))
+    registry.register_all(build_command_tools(ws))
+    registry.register_all(build_git_tools(ws))
+
+    # ``events`` is a plain, Qt-free object, and ``current_agent`` is a
+    # placeholder the event-subscription tests replace.
+    yield SimpleNamespace(tools=registry, events=EventBus(), current_agent=lambda: None)
 
 
 def last_result() -> tuple[str, str, str]:
