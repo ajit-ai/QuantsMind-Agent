@@ -98,12 +98,12 @@ jobs:
         run: pytest tests/integration -q
 
 # Run through scripts/run_qt_tests.py: on CPython 3.11 the interpreter
-        # aborts with "none_dealloc" while finalising PySide6 objects after the
-        # QApplication is gone, even though every test passes. The runner
-        # disposes Qt while it is still alive and then exits with pytest's own
-        # code, so a real failure still fails the build.
-        - name: GUI tests
-          run: python scripts/run_qt_tests.py tests/gui -q
+      # aborts with "none_dealloc" while finalising PySide6 objects after the
+      # QApplication is gone, even though every test passes. The runner
+      # disposes Qt while it is still alive and then exits with pytest's own
+      # code, so a real failure still fails the build.
+      - name: GUI tests
+        run: python scripts/run_qt_tests.py tests/gui -q
 
       # v0.2 executes real commands and touches real files. Prove the safety
       # policy on a host with no display before trusting the suite above.
@@ -115,8 +115,8 @@ jobs:
         run: pytest tests/unit/test_command_policy.py tests/unit/test_command_tools.py tests/unit/test_write_tools.py tests/unit/test_git_tools.py -q
 
       # Runs the whole suite, so it includes the GUI tests and needs the same
-        # finalisation guard; coverage.xml is still written by pytest's own
-        # reporting before the runner exits.
+      # finalisation guard; coverage.xml is still written by pytest's own
+      # reporting before the runner exits.
       - name: Coverage summary
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
         run: python scripts/run_qt_tests.py --cov=quantsmind_agent --cov-report=term-missing --cov-report=xml -q
