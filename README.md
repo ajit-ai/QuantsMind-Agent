@@ -3,7 +3,7 @@
 **QuantsMind-Agent is an AI coding-agent platform inspired by modern
 coding-agent workflows.**
 
-QuantsMind-Agent is a Windows 11 desktop application that connects a real
+QuantsMind-Agent is a cross-platform desktop application (Windows, Linux, macOS) that connects a real
 language model to a local project folder. You open a repository, ask a coding
 question, and the agent inspects your files through controlled tools before
 answering — showing every tool call it makes.
@@ -14,11 +14,27 @@ answering — showing every tool call it makes.
 
 ---
 
+## Supported platforms
+
+Support is claimed per platform, and only where it has actually been verified.
+"Native-verified" means the application has been run on that operating system.
+
+| Platform | Status | Evidence |
+|---|---|---|
+| Windows 10/11 x64 | **Supported** | Full test suite, packaged executable built and smoke-tested on Windows 11 |
+| Linux x64 (glibc) | **Supported** | Full test suite in CI on Ubuntu; headless only, no on-desktop run yet |
+| macOS (Apple Silicon, Intel) | **Planned** | Artifact builds run in CI; the GUI has not been run on macOS |
+| BSD (FreeBSD, NetBSD, OpenBSD) | **Not supported** | Blocked: no PySide6 wheels exist for BSD. See docs/source/installation.rst |
+
+Windows and Linux are supported. macOS is building artifacts but has no
+on-desktop verification, so it is not claimed as supported. BSD is blocked at the
+dependency level, not by the application code.
+
 ## What v0.2 does
 
 | Capability | v0.2 |
 |---|---|
-| Windows 11 desktop GUI (PySide6) | ✅ |
+| Cross-platform desktop GUI (PySide6 / Qt 6): Windows, Linux, macOS | ✅ |
 | Open a local project folder | ✅ |
 | OpenAI-compatible provider (OpenAI, OpenRouter, Groq, Ollama, LM Studio, llama.cpp, …) | ✅ |
 | Streaming answers | ✅ |
@@ -33,11 +49,11 @@ answering — showing every tool call it makes.
 | Visible tool activity with per-call state | ✅ |
 | Permission layer (`ALLOW` / `DENY` / `ASK`, deny-by-default) | ✅ |
 | Path-traversal and symlink-escape protection | ✅ |
-| Credentials in the Windows Credential Manager, never logged | ✅ |
+| Credentials in the OS keyring (Windows Credential Manager, macOS Keychain, Secret Service on Linux), never logged, with a file-store fallback | ✅ |
 | Conversation kept for the session | ✅ |
 | Sphinx/RST documentation with a local HTML build | ✅ |
 | Automated tests (unit + integration + GUI, offline) | ✅ |
-| CI on Linux and Windows | ✅ |
+| CI on Linux and Windows, plus native artifact builds for Windows, Linux and macOS | ✅ |
 | **Git mutations (commit/push/checkout/reset)** | ❌ deliberately blocked |
 | **Persistent conversation history** | ❌ planned |
 | **MCP, VS Code extension, multi-agent** | ❌ planned |
@@ -154,7 +170,7 @@ and the diagnostic log.
   evaluated by this process. Read
   [security boundaries](docs/source/architecture/security-boundaries.rst) before
   pointing the agent at anything you care about.
-* Your API key lives in the Windows Credential Manager, is masked everywhere it
+* Your API key lives in your operating system keyring, is masked everywhere it
   is displayed, and is scrubbed from logs.
 * No telemetry, no update checks.
 
