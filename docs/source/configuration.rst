@@ -58,6 +58,10 @@ Agent settings
     max_context_files = 8
     max_file_bytes = 256000
     auto_approve_reads = true
+    auto_approve_writes = false
+    command_timeout_seconds = 120.0
+    max_command_output_chars = 20000
+    git_enabled = true
     system_prompt = ""
     history_turns = 12
 
@@ -71,12 +75,24 @@ Agent settings
      - Model round-trips per user turn (1-50). The last iteration offers no
        tools, forcing a written answer.
    * - ``max_context_files``
-     - Reserved for the v0.2 retrieval index.
+     - Reserved for a future retrieval index.
    * - ``max_file_bytes``
-     - Hard cap on what ``read_file`` returns.
+     - Hard cap on what ``read_file`` returns, and the ceiling for
+       ``write_file``/``edit_file`` content.
    * - ``auto_approve_reads``
      - ``false`` turns workspace reads into ``ASK`` decisions, which degrade to
        ``DENY`` without an approver.
+   * - ``auto_approve_writes``
+     - Approves ``write_file`` and ``edit_file`` without prompting. It cannot
+       widen ``delete_file`` or ``run_command``, which always ask.
+   * - ``command_timeout_seconds``
+     - Default time limit for ``run_command`` when the model does not ask for
+       one. Clamped to 1-600s.
+   * - ``max_command_output_chars``
+     - Per-stream cap on captured command output.
+   * - ``git_enabled``
+     - Registers the read-only Git tools. ``false`` removes them entirely
+       rather than denying them, so a model cannot even name them.
    * - ``system_prompt``
      - Extra operator instructions appended to the base prompt.
    * - ``history_turns``

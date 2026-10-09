@@ -14,6 +14,7 @@ import pytest
 
 pytest.importorskip("PySide6.QtWidgets", reason="PySide6 is required for GUI tests")
 
+from quantsmind_agent.version import __version__, version_info
 from tests.gui.harness import GuiHarness
 
 pytestmark = pytest.mark.gui
@@ -27,7 +28,10 @@ class TestStartupSmoke:
         gui_harness.settle()
 
         assert window.isVisible() is True
-        assert window.windowTitle() == "QuantsMind-Agent 0.1.0"
+        # Derived from the version module rather than hard-coded, so bumping the
+        # release does not silently require editing this test.
+        assert window.windowTitle() == f"QuantsMind-Agent {__version__}"
+        assert __version__ == ".".join(str(part) for part in version_info)
         assert window.width() == 1180
         assert window.height() == 800
 

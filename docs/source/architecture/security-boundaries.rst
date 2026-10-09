@@ -7,8 +7,80 @@ Security boundaries
 
 
 QuantsMind-Agent runs with your user privileges. There is no sandbox process and
-no OS-level isolation in v0.1. What exists is a set of *code* boundaries that
-make the trusted surface small and reviewable.
+no OS-level isolation in v0.2. What exists is a set of *code* boundaries that
+make the trusted surface small and reviewable -- and a short, explicit list of
+things the application does **not** promise.
+
+What is guaranteed
+==================
+
+**One containment implementation.** Every path -- read, write, edit or delete --
+passes through :meth:`~quantsmind_agent.workspace.Workspace.resolve`, which
+rejects absolute paths, drive-qualified and UNC references, ``..`` traversal,
+null bytes, and any path that resolves outside the workspace root after
+following symlinks and junctions.
+
+**The registry is the only enforcement point.** Tools never check permissions
+themselves. The registry runs a tool's ``guard`` and then its permission
+requirement *before* the tool body executes, so a mis-annotated tool cannot
+bypass policy and a denied call never reaches the code that would change
+anything.
+
+**Blocked commands cannot be approved into existence.** The command policy is
+evaluated before the approval request is built, so the prompt never offers
+Allow for something the application forbids.
+
+**Writes cannot leave a half-written file.** Content goes to a temporary sibling
+and is moved into place, so an interrupted write cannot truncate the original.
+
+**Edits refuse to clobber concurrent work.** An edit states what must already be
+in the file; a mismatch is an error, never a silent overwrite.
+
+**Credentials stay out of tooling.** Model-provider keys are stripped from the
+environment of any command the agent runs, and credential-shaped values are
+withheld from the approval prompt and the activity log.
+
+.. _git-read-only:
+
+Git cannot mutate
+=================
+
+v0.2 registers ``git_status``, ``git_diff`` and ``git_log``, and no mutation
+tool. That is structural rather than a denylist: every argument vector is
+assembled from a fixed vocabulary of read-only sub-commands, so the model
+chooses flags and paths but never the sub-command, and a ``--`` separator always
+precedes a user-supplied path so a path beginning with ``-`` is a path. The
+mutating verbs are additionally refused by the command policy, so they cannot be
+reached through ``run_command`` either.
+
+What is not guaranteed
+======================
+
+**Application-level command policy is not an OS sandbox.** The policy is a
+configurable deny list evaluated by this process. A permitted interpreter can
+spawn children, read environment variables or invoke another program, and
+approving a command approves that program, not a verified effect. Real
+isolation needs OS-level mechanisms -- containers, job objects, AppContainer, a
+dedicated low-privilege account -- and none of those are in scope for v0.2.
+
+**Cancellation stops the direct child only.** Windows has no portable
+process-tree kill, so a command that spawned grandchildren may leave them
+running.
+
+**Allow for Session is a convenience, not a sandbox.** It is scoped to one tool
+and one permission, and it is cleared when the conversation, project or
+settings change.
+
+**Workspace containment protects the host, not your intent.** The model can read
+anything inside the folder you opened; opening a repository is an explicit act.
+
+**Deletion is irreversible from the agent,** and directory-tree deletion is not
+supported at all -- a recursive delete is irreversible at a scale an approval
+dialog cannot meaningfully display.
+
+**Symlink and junction behaviour on Windows depends on process privilege.** The
+defence is always active; only the tests that must *create* a symlink are
+skipped where the platform refuses.
 
 Trust model
 ===========
@@ -26,18 +98,23 @@ Trust model
       provider responses and headers
       repository content (READMEs, source files) -> prompt injection surface
 
-    OUT OF SCOPE (no capability in v0.1)
-      shell / process execution
-      file writes
-      git
+    OUT OF SCOPE (no capability in v0.2)
       outbound HTTP to arbitrary hosts (only the configured LLM endpoint)
 
-Boundary 1 -- the model cannot name its own capability
+Boundary 1 -- the model cannot widen its own capability
 =======================================================
 
-A model that "wants" to run a command cannot get one: there is no command tool,
-and the permission taxonomy has no path from text to execution. Capabilities
-exist only because code registered a tool that declares one.
+A model that "wants" to run a command cannot invent permission for it. The
+registry evaluates a declared requirement against the policy before the tool
+body runs, and extra arguments cannot change that evaluation -- the permission
+request is built from the tool's declared metadata, not from whatever the model
+sent.
+
+In v0.1 this boundary was absolute: there was no command tool at all. In v0.2 the
+model *can* reach one, and the boundary is enforced rather than structural --
+which is exactly what the approval prompt and the command policy are for. Both
+are documented above, and the ordering between them is recorded in
+:doc:`adr/0007-approval-gates`.
 
 Boundary 2 -- paths are contained
 =================================

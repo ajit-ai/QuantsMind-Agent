@@ -14,7 +14,9 @@ model to a local project folder. You point it at a repository, ask a coding
 question, and the agent inspects your files through controlled tools before
 answering. Everything it touches is visible in the interface.
 
-Version 0.1 is a complete vertical slice:
+Version 0.2 is a controlled coding agent: it can read, write, edit, delete, run
+approved commands and inspect Git state, and every change is authorised by the
+application rather than by the model.
 
 .. code-block:: text
 
@@ -27,8 +29,9 @@ Version 0.1 is a complete vertical slice:
           |            v               v
           |        Tool Registry     Tool schemas
           |        + Permissions     + Observations
+          |        + Command policy
           v
-    Tool activity + answer
+    Approval prompt + tool activity + answer
 
 .. toctree::
    :maxdepth: 2
@@ -58,6 +61,7 @@ Version 0.1 is a complete vertical slice:
    architecture/model-gateway
    architecture/context-engine
    architecture/tool-system
+   architecture/command-execution
    architecture/workspace
    architecture/permissions
    architecture/session
@@ -89,6 +93,7 @@ Version 0.1 is a complete vertical slice:
    :caption: Project
 
    releases/v0.1
+   releases/v0.2
    roadmap/roadmap
    security
 

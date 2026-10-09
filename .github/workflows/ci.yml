@@ -100,6 +100,15 @@ jobs:
       - name: GUI tests
         run: pytest tests/gui -q
 
+      # v0.2 executes real commands and touches real files. Prove the safety
+      # policy on a host with no display before trusting the suite above.
+      - name: Command policy and write/edit/delete unit tests
+        run: |
+          pytest tests/unit/test_command_policy.py \
+                 tests/unit/test_command_tools.py \
+                 tests/unit/test_write_tools.py \
+                 tests/unit/test_git_tools.py -q
+
       - name: Coverage summary
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
         run: pytest --cov=quantsmind_agent --cov-report=term-missing --cov-report=xml -q
@@ -132,6 +141,13 @@ jobs:
       - name: Build sdist and wheel
         run: python -m build
 
+      - name: Verify the version is reported correctly
+        run: |
+          python -c "import quantsmind_agent, sys; \
+          expected = '0.2.0'; \
+          assert quantsmind_agent.__version__ == expected, quantsmind_agent.__version__; \
+          print('version', quantsmind_agent.__version__)"
+
       - name: Verify the wheel installs and imports
         run: |
           python -m venv /tmp/smoke
@@ -160,3 +176,12 @@ jobs:
           echo "docs/source/windows.rst and docs/source/testing/manual-acceptance.rst"
           echo "and record the results in"
           echo "docs/source/testing/acceptance-v0.1.rst."
+
+      - name: Reminder for v0.2 mutating tools
+        run: |
+          echo "::notice title=v0.2 acceptance pending::"
+          echo "v0.2 adds write/edit/delete, run_command and read-only Git."
+          echo "CI proves the automated suite only. The approval prompt, a real"
+          echo "write/edit/delete round trip, a real approved command and the"
+          echo "command safety policy MUST be exercised by hand on Windows 11"
+          echo "against a disposable workspace before v0.2 is treated as accepted."

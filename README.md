@@ -8,22 +8,28 @@ language model to a local project folder. You open a repository, ask a coding
 question, and the agent inspects your files through controlled tools before
 answering — showing every tool call it makes.
 
-> **Status: v0.1.0 (alpha).** The core workflow is complete and tested offline.
-> Real-model behaviour and on-desktop rendering are verified manually, not by
-> CI. See [the acceptance report](docs/source/testing/acceptance-v0.1.rst).
+> **Status: v0.2.0 (alpha).** The agent can now read, write, edit, delete, run
+> approved commands and inspect Git state. Real-model behaviour and on-desktop
+> rendering are verified manually, not by CI.
 
 ---
 
-## What v0.1 does
+## What v0.2 does
 
-| Capability | v0.1 |
+| Capability | v0.2 |
 |---|---|
 | Windows 11 desktop GUI (PySide6) | ✅ |
 | Open a local project folder | ✅ |
 | OpenAI-compatible provider (OpenAI, OpenRouter, Groq, Ollama, LM Studio, llama.cpp, …) | ✅ |
 | Streaming answers | ✅ |
 | Tool-calling agent loop | ✅ |
-| Workspace tools: `project_structure`, `list_directory`, `read_file`, `search_content` | ✅ |
+| Read tools: `project_structure`, `list_directory`, `read_file`, `search_content` | ✅ |
+| Write tools: `write_file`, `edit_file` (deterministic, staleness-checked) | ✅ v0.2 |
+| `delete_file`, file-only, always approved | ✅ v0.2 |
+| `run_command` with timeout, cancellation and bounded output | ✅ v0.2 |
+| Command safety policy (deny-by-default, not an OS sandbox) | ✅ v0.2 |
+| Read-only Git: `git_status`, `git_diff`, `git_log` | ✅ v0.2 |
+| Human approval prompts (Allow / Allow Once / Deny / Allow for Session) | ✅ v0.2 |
 | Visible tool activity with per-call state | ✅ |
 | Permission layer (`ALLOW` / `DENY` / `ASK`, deny-by-default) | ✅ |
 | Path-traversal and symlink-escape protection | ✅ |
@@ -32,13 +38,24 @@ answering — showing every tool call it makes.
 | Sphinx/RST documentation with a local HTML build | ✅ |
 | Automated tests (unit + integration + GUI, offline) | ✅ |
 | CI on Linux and Windows | ✅ |
-| **File writes, commands, git, network tools** | ❌ v0.2 |
-| **Persistent conversation history** | ❌ v0.2 |
+| **Git mutations (commit/push/checkout/reset)** | ❌ deliberately blocked |
+| **Persistent conversation history** | ❌ planned |
 | **MCP, VS Code extension, multi-agent** | ❌ planned |
 
 QuantsMind-Agent is **not** a Cline/OpenCode clone and does not claim parity
 with them. It implements the core loop of a coding agent: a request, controlled
 tools, observations, and an answer grounded in files it actually read.
+
+The rule the rest of the design follows:
+
+> The LLM may propose actions, but the application remains responsible for
+> authorization and execution.
+
+Concretely: every write, every delete and every command is authorised by the
+application, not by the model. Commands that would be obviously destructive on
+the host are refused outright and are never shown in an approval dialog at all.
+See [the v0.2 release notes](docs/source/releases/v0.2.rst) and the
+[security boundaries](docs/source/architecture/security-boundaries.rst).
 
 ## Quick start
 
@@ -110,8 +127,10 @@ user request
   → Model Gateway       provider-independent request
   → real LLM
   ← tool calls, or an answer
-  → Tool Registry       permission check
-  → workspace tool      contained, read-only
+  → Tool Registry       permission check + command policy
+  → workspace tool      contained; reads, writes, edits, deletes
+  → run_command         only after explicit approval
+  → git tool            read-only, structurally
   ← observation
   → Model Gateway       next round
   ← final answer        streamed to the transcript
@@ -122,11 +141,19 @@ and the diagnostic log.
 
 ## Security
 
-* The agent **only reads** files inside the folder you opened. Absolute paths,
-  `..` traversal and symlinks leaving the root are refused.
-* The model cannot grant itself a capability: tools declare permissions, and
-  the registry enforces them. Unmatched rules are denied.
-* No command execution, no file writes, no network tools in v0.1.
+* Every path — read, write, edit or delete — is validated by the same
+  containment check. Absolute paths, `..` traversal, null bytes and symlinks
+  leaving the root are refused.
+* The model cannot grant itself a capability: tools declare permissions, the
+  registry enforces them, and unmatched rules are denied.
+* Anything that changes the workspace prompts first. Deleting a file and running
+  a command always prompt, every time.
+* Destructive host commands are refused outright and are never offered in an
+  approval dialog. Git mutations are refused too.
+* **Application-level command policy is not an OS sandbox.** It is a deny list
+  evaluated by this process. Read
+  [security boundaries](docs/source/architecture/security-boundaries.rst) before
+  pointing the agent at anything you care about.
 * Your API key lives in the Windows Credential Manager, is masked everywhere it
   is displayed, and is scrubbed from logs.
 * No telemetry, no update checks.
@@ -159,6 +186,7 @@ Start with:
 * [Configuration](docs/source/configuration.rst)
 * [Windows 11](docs/source/windows.rst)
 * [Architecture](docs/source/architecture/overview.rst)
+* [v0.2 release notes](docs/source/releases/v0.2.rst)
 * [v0.1 release notes](docs/source/releases/v0.1.rst)
 * [Roadmap](docs/source/roadmap/roadmap.rst)
 

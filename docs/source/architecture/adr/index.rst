@@ -19,6 +19,7 @@ detail is deliberately *not* recorded here; it belongs in the code and in
    0004-workspace-isolation
    0005-no-persistence-in-v01
    0006-events-and-threading
+   0007-approval-gates
 
 .. list-table::
    :header-rows: 1
@@ -45,6 +46,9 @@ detail is deliberately *not* recorded here; it belongs in the code and in
    * - :doc:`0006-events-and-threading`
      - Event bus + Qt worker bridge
      - Observable, testable, responsive GUI; three threading rules documented
+   * - :doc:`0007-approval-gates`
+     - Command policy runs before approval
+     - A blocked command is never offered to the user
 
 Template
 ========

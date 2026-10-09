@@ -1,0 +1,146 @@
+.. _release-v0.2:
+
+
+===========
+Version 0.2
+===========
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Field
+     - Value
+   * - Version
+     - 0.2.0
+   * - Codename
+     - Agency
+   * - Status
+     - Alpha; mutating tools, command execution and human approval
+   * - Baseline
+     - ``62a61d9b11fbcfdca5228c8dc5c495b8fe1941d7`` (v0.1, frozen)
+
+What v0.2 is
+============
+
+v0.1 could read a project. v0.2 lets it **change** one -- and keeps the same
+central rule the rest of the application is built on:
+
+   The LLM may propose actions, but the application remains responsible for
+   authorization and execution.
+
+The agent can now write files, apply deterministic edits, delete files, run
+approved commands and inspect Git state. Every one of those is a separate,
+individually approved operation, and the three highest-risk ones -- deleting a
+file, running a command, and anything the safety policy forbids -- cannot be
+approved into existence at all.
+
+.. code-block:: text
+
+    Windows 11 user
+          |
+    QuantsMind-Agent GUI
+          |
+    Workspace -> Agent Core -> Model Gateway -> real LLM
+                      |
+              Tool Registry  <- enforcement point
+                      |
+        +-------------+-------------+
+        |             |             |
+   Permissions   Command policy   Workspace containment
+        |             |             |
+        v             v             v
+   Allow/Deny     Block/Allow   path validation
+   (human)        (structural)  + symlink defence
+
+New capabilities
+================
+
+Filesystem
+----------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Tool
+     - Behaviour
+   * - ``write_file``
+     - Create or replace a text file. Parent folders are created only when the
+       call explicitly authorises it.
+   * - ``edit_file``
+     - One deterministic edit (``replace``, ``replace_all``, ``insert_before``,
+       ``insert_after``, ``replace_lines``, ``append``, ``prepend``) with an
+       explicit precondition.
+   * - ``delete_file``
+     - Remove a single file. Always asks. Never removes a directory tree.
+
+Command execution
+-----------------
+
+``run_command`` runs one development command inside the project folder after
+approval, with a working-directory containment check, a timeout, cancellation,
+bounded stdout and stderr, and the exit code reported back to the model.
+
+Git awareness
+-------------
+
+``git_status``, ``git_diff`` and ``git_log`` report branch, staged/unstaged/
+untracked state, line-level changes and recent commits. All three are
+structurally read-only: see :ref:`git-read-only`.
+
+Approvals
+=========
+
+Any tool that can change the machine or the workspace prompts first. The prompt
+shows the operation, the target, the workspace, the arguments, the reason the
+model gave and the risk classification.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Decision
+     - Meaning
+   * - Allow / Allow Once
+     - Run this one call only.
+   * - Allow for Session
+     - Allow every later call of the same tool until the conversation, project
+       or settings change. Never offered for ``delete_file``.
+   * - Deny
+     - Do not run. The tool returns a failure the model can react to, and the
+       turn continues.
+
+A denial is a failed observation, not a crash: the agent is told and may try
+something else. Escape or closing the window denies.
+
+What did not change
+===================
+
+* The permission layer is still the only enforcement point. A tool never
+  checks its own permissions, so a mis-annotated tool cannot bypass policy.
+* Path containment is still one implementation
+  (:meth:`~quantsmind_agent.workspace.Workspace.resolve`), shared by reads and
+  writes.
+* The agent loop is still bounded, interruptible and recoverable.
+* Git mutations are still absent. ``commit``, ``push``, ``checkout``, ``reset``,
+  ``merge`` and ``rebase`` are blocked even through the generic command tool.
+
+Known limitations
+=================
+
+**Application-level command policy is not an OS sandbox.** It is a deny list
+evaluated by this process. A permitted interpreter can spawn children, read
+environment variables or invoke another program, and approving a command means
+approving that program, not a verified effect. Real isolation needs OS-level
+mechanisms -- containers, job objects, a low-privilege account -- and none of
+those are in scope for v0.2.
+
+**Cancellation stops the direct child only.** Windows has no portable
+process-tree kill, so a command that spawned grandchildren may leave them
+running.
+
+**Delete is file-only.** Removing a directory tree is irreversible at a scale an
+approval dialog cannot meaningfully display, so it is deferred.
+
+See :ref:`architecture-security-boundaries` for the full list.

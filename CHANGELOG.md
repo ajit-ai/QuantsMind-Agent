@@ -13,6 +13,76 @@ Nothing yet.
 
 ---
 
+## [0.2.0] - 2026-07-10
+
+A controlled coding agent: the model can now change the workspace and run
+approved commands, and every such action is authorised by the application rather
+than by the model.
+
+Baseline: `62a61d9b11fbcfdca5228c8dc5c495b8fe1941d7` (v0.1, frozen).
+
+### Added
+
+**Filesystem tools**
+
+- `write_file` creates or replaces a text file; parent folders are created only
+  when the call explicitly authorises it.
+- `edit_file` applies one deterministic edit (`replace`, `replace_all`,
+  `insert_before`, `insert_after`, `replace_lines`, `append`, `prepend`) with an
+  explicit precondition, so a stale request fails instead of overwriting work.
+- `delete_file` removes a single file after an explicit, non-session approval.
+
+**Command execution**
+
+- `run_command` with working-directory containment, timeout, cancellation,
+  bounded stdout/stderr, exit code and a credential-stripped environment.
+- An application-level command policy classifying commands as safe, mutating,
+  destructive, unknown or blocked, with a non-overridable deny list.
+
+**Git awareness**
+
+- `git_status`, `git_diff` and `git_log`, structurally read-only.
+
+**Approvals and audit**
+
+- Human approval prompts for every `ASK` decision, with Allow, Allow Once, Deny
+  and Allow for Session. The prompt shows the operation, target, workspace,
+  arguments, the reason the model gave and the risk class.
+- A `permission_approval` event recording what the user chose, separate from the
+  resulting decision.
+
+**Configuration**
+
+- `auto_approve_writes`, `command_timeout_seconds`, `max_command_output_chars`
+  and `git_enabled`.
+
+### Security
+
+- A blocked command is refused *before* the approval request is built, so the
+  prompt never offers Allow for something the application forbids.
+- Model-provider credentials are stripped from the environment of every command
+  the agent runs.
+- Git mutating verbs are blocked, so "mutations are deferred" holds even when
+  reached through the generic command tool.
+
+### Fixed
+
+- `auto_approve_reads = false` never took effect: two wildcard rules shared a
+  sort key, so the stricter rule was unreachable. The permission policy is now
+  assembled in an explicit, documented order.
+- `edit_file` appending text that already ended in a newline produced a
+  trailing blank line.
+- `pip install -e .` was classified high risk, because `-e` means "execute this
+  string" for `node` but "editable install" for `pip`.
+
+### Known limitations
+
+- Application-level command policy is **not** an OS sandbox.
+- Cancellation terminates the direct child only.
+- Directory-tree deletion is not supported.
+
+---
+
 ## [0.1.0] — 2026-03-14
 
 The first complete vertical slice: a runnable Windows 11 application that
