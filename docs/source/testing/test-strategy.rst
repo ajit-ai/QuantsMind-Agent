@@ -118,6 +118,33 @@ Rules
 #. A bug fix ships with its regression test.
 #. Never report ``NOT RUN`` as ``PASS``.
 
+Qt teardown is part of this
+===========================
+
+GUI tests share one `QApplication` for the whole session, so a window that is
+not released deterministically survives into later tests. `EventBus.subscribe_all`
+stores the bound method it is given, which forms a cycle
+`context -> bus -> bound method -> window -> context`. A window that never
+unsubscribes therefore cannot be reclaimed by reference counting, and its 50ms
+event timer keeps running into a closed window's widgets.
+
+That failure is intermittent by nature: the cyclic collector eventually
+finalises the abandoned windows, and it does so in the middle of
+`processEvents` in some later test. It presented as an access violation in an
+unrelated GUI test, and a green GUI-only run was not evidence of anything.
+
+Two rules follow, and both are enforced by tests:
+
+* Anything subscribing to the shared event bus must keep the unsubscribe
+  callable and release it when it closes.
+* Teardown must be provable with the cyclic collector disabled. A test that
+  only passes because the garbage collector eventually runs is not a test.
+
+The whole suite, GUI tests included, is expected to pass in a single process.
+If it does not, that is a defect to fix, not a reason to split the run: running
+the layers in separate processes hides exactly this class of bug, and it also
+removes the GUI package from the reported coverage figure.
+
 Coverage
 ========
 

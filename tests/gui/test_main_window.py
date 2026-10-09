@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from quantsmind_agent.errors import LLMError
+from quantsmind_agent.gui.main_window import MainWindow
 from quantsmind_agent.llm import ChatRequest, ChatResponse
 from tests.fakes import FakeModelProvider, text_response, tool_response
 from tests.gui.harness import GuiHarness
@@ -252,3 +253,89 @@ class TestErrorHandling:
         gui_harness.ask("hello")
         combined = gui_harness.transcript + " ".join(gui_harness.activity)
         assert "super-secret-key-9999" not in combined
+
+
+class TestEventSubscriptionLifecycle:
+    """Closing the window must release its agent-event subscription.
+
+    ``EventBus.subscribe_all`` stores the bound method strongly, which forms a
+    cycle ``context -> bus -> bound method -> window -> context``. Nothing can
+    then reclaim the window by reference counting, so an unsubscribed window
+    stayed alive with a running 50ms timer until the *cyclic* collector happened
+    to finalise it. That is what produced an intermittent access violation
+    inside ``processEvents`` in the full-suite run, and the collector was
+    cancelling those windows at unpredictable moments.
+    """
+
+    def test_close_releases_the_subscription(self, gui_harness: GuiHarness) -> None:
+        window = gui_harness.window
+        bus = window._context.events
+        before = len(bus._any)
+        assert before > 0
+
+        window.close()
+
+        assert len(bus._any) == before - 1, "the window stayed subscribed after closing"
+
+    def test_close_stops_the_event_timer(self, gui_harness: GuiHarness) -> None:
+        window = gui_harness.window
+        assert window._event_timer.isActive()
+
+        window.close()
+
+        assert not window._event_timer.isActive(), "a closed window kept its timer running"
+
+    def test_a_closed_window_stops_rendering_agent_events(self, gui_harness: GuiHarness) -> None:
+        from quantsmind_agent.events import AgentEventType
+
+        window = gui_harness.window
+        window.close()
+        window.activity.clear_activity()
+
+        window._context.events.emit(AgentEventType.PERMISSION_APPROVAL, {"tool": "edit_file"})
+
+        assert window.activity.texts() == [], "a closed window still rendered agent events"
+
+    def test_releasing_twice_is_harmless(self, gui_harness: GuiHarness) -> None:
+        window = gui_harness.window
+        window._release_event_subscription()
+        window._release_event_subscription()
+        assert window._unsubscribe_events is None
+
+    def test_closed_window_is_reclaimed_without_the_cyclic_collector(self) -> None:
+        """The real regression: teardown must not depend on cyclic GC."""
+
+        import gc
+        import tempfile
+        import weakref
+
+        from quantsmind_agent.app import ApplicationContext
+        from quantsmind_agent.config import ConfigManager
+        from quantsmind_agent.paths import AppPaths
+        from tests.fakes import FakeModelProvider
+
+        def build() -> weakref.ReferenceType[MainWindow]:
+            base = Path(tempfile.mkdtemp())
+            paths = AppPaths(
+                config_dir=base / "config",
+                log_dir=base / "logs",
+                cache_dir=base / "cache",
+                data_dir=base / "data",
+            ).ensure()
+            context = ApplicationContext.create(paths=paths, config_manager=ConfigManager(paths))
+            context.open_workspace(Path(tempfile.mkdtemp()))
+            harness = GuiHarness(context, FakeModelProvider())
+            harness.install_provider()
+            harness.shutdown()
+            return weakref.ref(harness.window)
+
+        gc.collect()
+        gc.disable()
+        try:
+            refs = [build() for _ in range(3)]
+            assert all(ref() is None for ref in refs), (
+                "windows survived with every reference dropped; teardown is still "
+                "relying on the cyclic collector"
+            )
+        finally:
+            gc.enable()
