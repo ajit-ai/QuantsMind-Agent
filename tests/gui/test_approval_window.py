@@ -22,8 +22,8 @@ from typing import Any
 
 import pytest
 import shiboken6
-from PySide6.QtCore import QEventLoop, Qt, QThread
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtCore import QEvent, QEventLoop, Qt, QThread
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from quantsmind_agent.events import AgentEventType
 from quantsmind_agent.gui.approval import ApprovalBridge, ApprovalDialog, build_prompt
@@ -53,25 +53,42 @@ def edit_prompt(path: str = "README.md") -> Any:
 
 
 def close_dialog(dialog: Any) -> None:
-    """Destroy a dialog deterministically.
+    """Destroy a dialog deterministically, respecting who owns it.
 
-    These dialogs are parentless, so Python owns them. ``deleteLater()`` is the
-    wrong tool for a Python-owned widget: Qt destroys the C++ object while the
-    wrapper still believes it owns the memory, and the next collection aborts
-    the interpreter with ``none_dealloc: deallocating None`` or a segmentation
-    fault. ``shiboken6.delete`` tells the wrapper the C++ object is gone, which
-    is what actually makes teardown safe.
+    Ownership is the whole problem, and the two cases need opposite treatment.
 
-    It must also run while the ``QApplication`` is still alive, since a widget
-    that outlives its application has its C++ object torn down after Qt is
-    gone.
+    A **parentless** dialog is Python owned. ``deleteLater()`` is wrong for it:
+    Qt frees the C++ object while the wrapper still believes it owns the memory,
+    and the next collection aborts the interpreter with ``none_dealloc:
+    deallocating None``. ``shiboken6.delete`` tells the wrapper the object is
+    gone, which is what makes teardown safe.
+
+    A dialog **parented to the main window** is C++ owned by that parent, and
+    the parent will delete it when it is destroyed. Calling ``shiboken6.delete``
+    on one frees the object while Qt still holds it as a child, so Qt frees it a
+    second time. That double free aborted the interpreter mid-run on CPython
+    3.11 in CI, intermittently enough to look like flakiness rather than a
+    defect. Such a dialog is closed and left to its owner.
+
+    Either way this runs while the ``QApplication`` is still alive, since a
+    widget that outlives its application has its C++ object torn down after Qt
+    is gone.
     """
 
     if dialog is None:
         return
     try:
         dialog.close()
-        shiboken6.delete(dialog)
+        if dialog.parent() is None:
+            shiboken6.delete(dialog)
+        else:
+            dialog.deleteLater()
+            # Complete the deferred delete now, while the parent is still
+            # alive. Leaving it queued is what makes this crash: if the parent
+            # is freed first, the pending event later dereferences a child
+            # that no longer exists, which showed up as an intermittent access
+            # violation partway through the suite.
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     except RuntimeError:  # pragma: no cover - already deleted
         return
     QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
@@ -91,6 +108,74 @@ def pump_until(predicate: Any, limit: int = 300) -> bool:
         if predicate():
             return True
     return False
+
+
+class TestOwnershipAwareTeardown:
+    """``close_dialog`` must not free a widget that Qt's parent still owns."""
+
+    def test_a_parented_dialog_is_destroyed_by_qt_not_by_us(
+        self, qapp: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A parented dialog must be left to its owner.
+
+        Freeing it here would leave Qt holding a dangling child pointer and it
+        would be freed a second time when the parent is destroyed. That double
+        free aborted CPython 3.11 mid-run in CI, intermittently enough to be
+        mistaken for flakiness.
+        """
+
+        from quantsmind_agent.gui.approval import ApprovalDialog
+
+        freed: list[object] = []
+        real_delete = shiboken6.delete
+
+        def _record(obj: Any) -> None:
+            freed.append(obj)
+            real_delete(obj)
+
+        monkeypatch.setattr(shiboken6, "delete", _record)
+
+        owner = QWidget()
+        try:
+            dialog = ApprovalDialog(edit_prompt(), parent=owner)
+            dialog.show()
+            qapp.processEvents()  # type: ignore[attr-defined]
+
+            close_dialog(dialog)
+
+            # Qt destroyed it, on its own schedule, while the parent was alive.
+            assert freed == [], "close_dialog freed a C++-owned widget behind Qt's back"
+            with pytest.raises(RuntimeError):
+                _ = dialog.objectName()
+        finally:
+            close_dialog(owner)
+            drain(10)
+
+    def test_a_parentless_dialog_is_freed(
+        self, qapp: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A parentless dialog is Python owned, so it must actually be freed."""
+
+        from quantsmind_agent.gui.approval import ApprovalDialog
+
+        freed: list[object] = []
+        real_delete = shiboken6.delete
+
+        def _record(obj: Any) -> None:
+            freed.append(obj)
+            real_delete(obj)
+
+        monkeypatch.setattr(shiboken6, "delete", _record)
+
+        dialog = ApprovalDialog(edit_prompt())
+        dialog.show()
+        qapp.processEvents()  # type: ignore[attr-defined]
+
+        close_dialog(dialog)
+
+        assert freed == [dialog]
+        with pytest.raises(RuntimeError):
+            _ = dialog.objectName()
 
 
 class TestDialogIsNeverBlank:
