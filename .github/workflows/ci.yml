@@ -102,12 +102,12 @@ jobs:
 
       # v0.2 executes real commands and touches real files. Prove the safety
       # policy on a host with no display before trusting the suite above.
+      # One line on purpose: GitHub's default shell on Windows is PowerShell,
+      # which does not treat a trailing backslash as a line continuation, so a
+      # wrapped command silently passes "\" as an argument and pytest then
+      # collects from the drive root.
       - name: Command policy and write/edit/delete unit tests
-        run: |
-          pytest tests/unit/test_command_policy.py \
-                 tests/unit/test_command_tools.py \
-                 tests/unit/test_write_tools.py \
-                 tests/unit/test_git_tools.py -q
+        run: pytest tests/unit/test_command_policy.py tests/unit/test_command_tools.py tests/unit/test_write_tools.py tests/unit/test_git_tools.py -q
 
       - name: Coverage summary
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
@@ -141,12 +141,10 @@ jobs:
       - name: Build sdist and wheel
         run: python -m build
 
-      - name: Verify the version is reported correctly
-        run: |
-          python -c "import quantsmind_agent, sys; \
-          expected = '0.2.0'; \
-          assert quantsmind_agent.__version__ == expected, quantsmind_agent.__version__; \
-          print('version', quantsmind_agent.__version__)"
+      # Read the version from the built wheel rather than importing the package:
+      # this job installs only `build`, not the project itself.
+      - name: Verify the wheel reports version 0.2.0
+        run: python scripts/verify_version.py dist/quantsmind_agent-0.2.0-py3-none-any.whl
 
       - name: Verify the wheel installs and imports
         run: |

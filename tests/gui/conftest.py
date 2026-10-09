@@ -46,7 +46,34 @@ def qapp() -> Iterator[object]:
     app = QApplication.instance() or QApplication(["quantsmind-agent-tests"])
     apply_theme(app)
     yield app
+    _dispose_top_level_widgets()
     app.processEvents()
+
+
+def _dispose_top_level_widgets() -> None:
+    """Destroy every surviving top-level widget while Qt is still alive.
+
+    A ``QWidget`` that outlives its ``QApplication`` has its C++ object torn
+    down after Qt is gone, which aborts the interpreter at shutdown with
+    ``none_dealloc: deallocating None`` -- seen on CPython 3.11 in CI. Tests
+    should close their own dialogs; this is the backstop that keeps one leaky
+    test from taking down the whole suite, and it runs at session teardown,
+    when the application is guaranteed to still exist.
+    """
+
+    from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop
+    from PySide6.QtWidgets import QApplication
+
+    for widget in QApplication.topLevelWidgets():
+        try:
+            widget.close()
+            widget.deleteLater()
+        except RuntimeError:  # pragma: no cover - already deleted
+            continue
+
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    for _ in range(5):
+        QCoreApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
 
 
 @pytest.fixture

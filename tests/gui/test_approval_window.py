@@ -21,7 +21,7 @@ import threading
 from typing import Any
 
 import pytest
-from PySide6.QtCore import QEventLoop, Qt, QThread
+from PySide6.QtCore import QEvent, QEventLoop, Qt, QThread
 from PySide6.QtWidgets import QApplication, QLabel
 
 from quantsmind_agent.events import AgentEventType
@@ -51,6 +51,24 @@ def edit_prompt(path: str = "README.md") -> Any:
     return build_prompt(request, workspace=r"C:\proj")
 
 
+def close_dialog(dialog: Any) -> None:
+    """Destroy a dialog deterministically.
+
+    PySide6 objects must not outlive the ``QApplication``. On Python 3.11 a
+    dialog, or an image taken from one, that is still referenced when the
+    session-scoped application is torn down aborts the interpreter with
+    ``none_dealloc: deallocating None``. Closing and processing the deferred
+    delete while the application is still alive keeps shutdown clean.
+    """
+
+    if dialog is None:
+        return
+    dialog.close()
+    dialog.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
+
+
 def drain(rounds: int = 1, sleep_ms: int = 2) -> None:
     """Deliver queued GUI events, yielding the GIL so a worker can run."""
 
@@ -78,7 +96,7 @@ class TestDialogIsNeverBlank:
         text = dialog.full_text()
         assert "edit_file" in text
         assert "README.md" in text
-        dialog.close()
+        close_dialog(dialog)
 
     def test_renders_a_non_uniform_pixmap(self, qapp: object) -> None:
         dialog = ApprovalDialog(edit_prompt())
@@ -91,11 +109,14 @@ class TestDialogIsNeverBlank:
             for x in range(0, image.width(), 5)
             for y in range(0, image.height(), 5)
         }
+        del image
+        close_dialog(dialog)
         assert len(shades) > 1, "dialog painted a single flat colour, i.e. blank"
-        dialog.close()
 
     def test_offers_every_authorization_choice(self, qapp: object) -> None:
-        labels = ApprovalDialog(edit_prompt()).button_labels()
+        dialog = ApprovalDialog(edit_prompt())
+        labels = dialog.button_labels()
+        close_dialog(dialog)
         assert "Allow" in labels
         assert "Deny" in labels
         assert "Allow for Session" in labels
@@ -110,8 +131,9 @@ class TestDialogIsNeverBlank:
             if "README.md" in label.text() or "edit_file" in label.text()
         ]
         assert details, "no label carries the request details"
-        assert any(label.height() > 0 for label in details), "details laid out with zero height"
-        dialog.close()
+        laid_out = any(label.height() > 0 for label in details)
+        close_dialog(dialog)
+        assert laid_out, "details laid out with zero height"
 
 
 class TestDeliveryHappensOnTheGuiThread:
@@ -202,8 +224,14 @@ class TestChoicesReachTheWorker:
 
         dialog = window._active_dialog
         assert dialog is not None
-        getattr(dialog, button).click()
-        drain(40)
+        try:
+            getattr(dialog, button).click()
+            drain(40)
+        finally:
+            # The window deletes the dialog itself on finish; make sure nothing
+            # is left holding it if the assertion below fails first.
+            close_dialog(window._active_dialog)
+            drain(10)
 
         assert done.wait(timeout=5), "the worker stayed blocked"
         assert result == [expected]
@@ -234,28 +262,35 @@ class TestAgentEventsAreHandledOnTheGuiThread:
 
         window._on_agent_event = spy
 
-        def worker() -> None:
-            window._context.events.emit(
-                AgentEventType.PERMISSION_APPROVAL,
-                {
-                    "tool": "edit_file",
-                    "permission": "WRITE_WORKSPACE",
-                    "approval": "ALLOW_ONCE",
-                },
+        try:
+
+            def worker() -> None:
+                window._context.events.emit(
+                    AgentEventType.PERMISSION_APPROVAL,
+                    {
+                        "tool": "edit_file",
+                        "permission": "WRITE_WORKSPACE",
+                        "approval": "ALLOW_ONCE",
+                    },
+                )
+
+            thread = threading.Thread(target=worker, daemon=True)
+            thread.start()
+            thread.join(timeout=5)
+
+            # Nothing may have been rendered yet: the worker only enqueued.
+            assert handled_on == [], "an event was rendered from the publishing thread"
+
+            assert pump_until(lambda: bool(handled_on)), "the queued event was never drained"
+            assert handled_on, "event not handled"
+            assert all(seen is gui_thread for seen in handled_on), (
+                "an agent event was handled off the GUI thread"
             )
-
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
-        thread.join(timeout=5)
-
-        # Nothing may have been rendered yet: the worker only enqueued.
-        assert handled_on == [], "an event was rendered from the publishing thread"
-
-        assert pump_until(lambda: bool(handled_on)), "the queued event was never drained"
-        assert handled_on, "event not handled"
-        assert all(thread_obj is gui_thread for thread_obj in handled_on), (
-            "an agent event was handled off the GUI thread"
-        )
+        finally:
+            window._on_agent_event = original
+            # Render anything still queued with the real handler so the spy is
+            # not left installed behind a live queue.
+            window._drain_agent_events()
 
     def test_permission_events_reach_the_activity_panel(self, gui_harness: Any) -> None:
         window = gui_harness.window
