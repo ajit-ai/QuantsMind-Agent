@@ -25,7 +25,13 @@ def _select_qpa() -> str | None:
     """Choose and install a headless QPA platform plugin."""
 
     if sys.platform == "win32" or (
-        not os.environ.get("DISPLAY") and sys.platform.startswith("linux")
+        not os.environ.get("DISPLAY")
+        and not os.environ.get("WAYLAND_DISPLAY")
+        # Linux has no usable default without an X or Wayland display. macOS
+        # uses Cocoa, which needs nothing, so only force it off when we are
+        # clearly running headless -- otherwise a developer on a real macOS
+        # desktop would get offscreen rendering with no display to show it on.
+        and (sys.platform.startswith("linux") or os.environ.get("CI"))
     ):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     return os.environ.get("QT_QPA_PLATFORM")
