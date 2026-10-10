@@ -81,9 +81,9 @@ def window_titles_windows(pid: int) -> list[str]:
 
     ``Get-Process`` reads ``MainWindowTitle``, which the window manager populates
     for a visible top-level window. This is used rather than an EnumWindows
-    delegate because the delegate form needs an Add-Type delegate signature that
-    is fragile to inline and silently returned nothing when it failed -- which
-    would have looked exactly like "the app renders no window".
+    delegate because the delegate form needs an inline Add-Type signature that
+    is fragile and silently returned nothing when it failed -- which looked
+    exactly like "the app renders no window".
     """
 
     try:
@@ -103,6 +103,39 @@ def window_titles_windows(pid: int) -> list[str]:
     except (OSError, subprocess.SubprocessError):
         return []
     return [line for line in out.splitlines() if line.strip()]
+
+
+def child_pids_windows(pid: int) -> list[int]:
+    """Direct child process ids of ``pid`` on Windows.
+
+    A one-file PyInstaller build is a self-extracting bootloader: the process
+    you launch unpacks the archive and runs the real application as a *child*.
+    The window therefore belongs to the child, and probing only the launched pid
+    reports "no window" for a build that works. Onedir has no such child.
+    """
+
+    try:
+        out = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f'Get-CimInstance Win32_Process -Filter "ParentProcessId={pid}"'
+                " | Select-Object -ExpandProperty ProcessId",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids = []
+    for line in out.splitlines():
+        line = line.strip()
+        if line.isdigit():
+            pids.append(int(line))
+    return pids
 
 
 def window_titles_x11(pid: int) -> list[str]:
@@ -158,6 +191,20 @@ def window_titles_macos(pid: int) -> list[str]:
     except (OSError, subprocess.SubprocessError):
         return []
     return [line.strip() for line in out.stdout.split(",") if line.strip()]
+
+
+def window_titles_of(pid: int) -> list[str]:
+    """Title of the main window owned by `pid`, or by one of its children."""
+
+    titles = window_titles_windows(pid)
+    if titles:
+        return titles
+    # A one-file build runs the real application as a child of the bootloader.
+    for child in child_pids_windows(pid):
+        titles = window_titles_windows(child)
+        if titles:
+            return titles
+    return []
 
 
 def probe(pid: int) -> list[str]:
