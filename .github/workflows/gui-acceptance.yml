@@ -39,13 +39,35 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install system and test libraries
+        # The xcb list is the full Qt 6 xcb dependency set. Phase 1 only ever
+        # ran Qt's *offscreen* platform on Linux, which links none of these, so
+        # a missing library here was never detected until a real X server was
+        # used. Qt aborts the process when no platform plugin can be initialised,
+        # and pytest captures the explanatory message, so the symptom is a bare
+        # "Fatal Python error: Aborted" with no explanation.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libegl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 \
+            libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxcb-xkb1 libxcb-glx0 \
             xvfb xdotool
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,packaging]"
+
+      - name: Confirm Qt can load the xcb platform plugin
+        # Fails loudly and usefully instead of aborting inside pytest.
+        env:
+          QT_DEBUG_PLUGINS: "0"
+        run: |
+          xvfb-run -a --server-args="-screen 0 1600x1000x24" python -c "
+          import sys
+          from PySide6.QtWidgets import QApplication
+          app = QApplication(['plugin-check'])
+          print('platform plugin in use:', app.platformName())
+          assert app.platformName() == 'xcb', app.platformName()
+          "
 
       - name: GUI tests against a real X display
         # QT_QPA_PLATFORM is deliberately NOT set: the point is to render on the
