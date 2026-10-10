@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import locale
 import os
 import platform
 import shutil
@@ -35,7 +36,14 @@ REPO = Path(__file__).resolve().parents[1]
 LAYOUT = {
     "Windows": ("QuantsMindAgent", "QuantsMindAgent.exe"),
     "Linux": ("QuantsMindAgent", "QuantsMindAgent"),
-    "Darwin": ("QuantsMindAgent.app", "MacOS/QuantsMindAgent"),
+    "Darwin": ("QuantsMindAgent.app", "Contents/MacOS/QuantsMindAgent"),
+}
+
+#: The executable's file name, used for the discovery fallback.
+EXE_NAME = {
+    "Windows": "QuantsMindAgent.exe",
+    "Linux": "QuantsMindAgent",
+    "Darwin": "QuantsMindAgent",
 }
 
 #: Qt platform plugin that must ship for the app to start at all.
@@ -51,28 +59,69 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def locate(distpath: Path) -> Path | None:
-    """Find the packaged executable for the current platform."""
+    """Find the packaged executable for the current platform.
+
+    The documented layout is tried first. If it is not there, the dist
+    directory is searched for the executable by name: PyInstaller's exact
+    output nesting differs between platforms and between its onedir and
+    onefile modes, and a smoke test that hard-codes one layout reports "no
+    executable" on a perfectly good build.
+    """
 
     system = platform.system()
     if system not in LAYOUT:
         return None
+
     root, exe = LAYOUT[system]
     candidate = distpath / root / exe
-    return candidate if candidate.exists() else None
+    if candidate.exists():
+        return candidate
+
+    wanted = EXE_NAME[system]
+    matches = sorted(p for p in distpath.rglob(wanted) if p.is_file())
+    if not matches:
+        return None
+    # Prefer the shallowest match: the real bundle is less deeply nested than
+    # anything copied inside it.
+    return min(matches, key=lambda p: len(p.parts))
+
+
+def decode_output(raw: bytes) -> str:
+    """Decode a child process's stdout the way that child encoded it.
+
+    A windowed PyInstaller build writes stdout in the machine's legacy ANSI code
+    page (cp1252 on Windows) and ignores both PYTHONIOENCODING and PYTHONUTF8 --
+    verified against a real build. Decoding it as UTF-8 turns every non-ASCII
+    character into U+FFFD, which would make the non-ASCII workspace check measure
+    the console encoding rather than the application's path handling.
+
+    UTF-8 is tried first, because that is what a console-mode build and the
+    Linux/macOS runners produce; the locale encoding is the fallback.
+    """
+
+    for encoding in ("utf-8", locale.getpreferredencoding(False), "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 def run(exe: Path, args: list[str], cwd: Path) -> tuple[int, str, str]:
-    """Run the executable and capture output, tolerating a windowed build."""
+    """Run the executable and capture its output."""
 
     completed = subprocess.run(
         [str(exe), *args],
         cwd=str(cwd),
         capture_output=True,
-        text=True,
         timeout=180,
         check=False,
     )
-    return completed.returncode, completed.stdout or "", completed.stderr or ""
+    return (
+        completed.returncode,
+        decode_output(completed.stdout or b""),
+        decode_output(completed.stderr or b""),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -10,6 +10,7 @@ cannot be traced back to a platform.
 from __future__ import annotations
 
 import ast
+import platform
 import sys
 from pathlib import Path
 
@@ -113,6 +114,53 @@ class TestSmokeTestConfiguration:
         target.parent.mkdir(parents=True)
         target.write_text("", encoding="utf-8")
         assert smoke.locate(tmp_path) == target
+
+
+class TestSmokeTestOutputDecoding:
+    """A windowed build writes the ANSI code page; decoding must cope."""
+
+    def test_utf8_output_decodes(self) -> None:
+        assert smoke.decode_output(b"ready       : yes") == "ready       : yes"
+
+    def test_ansi_encoded_path_is_not_mangled(self) -> None:
+        # A cp1252-encoded path decoded as UTF-8 turns every non-ASCII
+        # character into U+FFFD, which silently broke the non-ASCII workspace
+        # check on the Windows runner.
+        raw = "workspace   : C:/tmp/ünïcode".encode("cp1252")
+        assert smoke.decode_output(raw) == "workspace   : C:/tmp/ünïcode"
+
+    def test_utf8_path_is_not_mangled(self) -> None:
+        raw = "workspace   : /tmp/ünïcode".encode()
+        assert smoke.decode_output(raw) == "workspace   : /tmp/ünïcode"
+
+    def test_empty_output_is_empty_text(self) -> None:
+        assert smoke.decode_output(b"") == ""
+
+
+class TestSmokeTestExecutableDiscovery:
+    """A good build must not be reported as missing because of its layout."""
+
+    def test_finds_an_executable_at_an_unexpected_depth(self, tmp_path: Path) -> None:
+        system = platform.system()
+        if system not in smoke.LAYOUT:
+            pytest.skip(f"no layout defined for {system}")
+        nested = tmp_path / "dist" / "some" / "other" / "place" / smoke.EXE_NAME[system]
+        nested.parent.mkdir(parents=True)
+        nested.write_text("", encoding="utf-8")
+        found = smoke.locate(tmp_path / "dist")
+        assert found is not None, "discovery must not depend on the documented layout"
+        assert found.name == smoke.EXE_NAME[system]
+
+    def test_prefers_the_shallowest_match(self, tmp_path: Path) -> None:
+        system = platform.system()
+        if system not in smoke.LAYOUT:
+            pytest.skip(f"no layout defined for {system}")
+        deep = tmp_path / "a" / "b" / "c" / smoke.EXE_NAME[system]
+        deep.parent.mkdir(parents=True)
+        deep.write_text("", encoding="utf-8")
+        shallow = tmp_path / smoke.EXE_NAME[system]
+        shallow.write_text("", encoding="utf-8")
+        assert smoke.locate(tmp_path) == shallow
 
 
 class TestPlatformMetadata:
