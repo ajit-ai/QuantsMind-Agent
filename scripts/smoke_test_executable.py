@@ -204,17 +204,22 @@ def main(argv: list[str] | None = None) -> int:
             ["--check-config", "--config-dir", str(config_dir), "--workspace", str(workspace)],
             workdir,
         )
-        check("opens a workspace with a non-ASCII path", "ready       : yes" in out, f"exit={code}")
+        # Deliberately not asserting on "ready: yes". Readiness also requires a
+        # stored API key, so on a clean runner without a credential the
+        # workspace opens perfectly and the app still reports "not ready" and
+        # exits 1. Asserting readiness made this check measure the machine's
+        # credential state rather than the application's path handling. The
+        # workspace opening is proved by the app echoing the exact path back and
+        # registering the tools that only exist once a workspace is open.
+        round_trips = str(workspace) in out
+        tools_live = "run_command" in out and "edit_file" in out and "write_file" in out
         check(
-            "registers the full tool set",
-            "run_command" in out and "edit_file" in out and "write_file" in out,
-            "",
+            "opens a workspace with a non-ASCII path",
+            round_trips and tools_live,
+            f"exit={code} (1 expected without a stored API key)",
         )
-        check(
-            "workspace path round-trips unchanged",
-            str(workspace) in out,
-            str(workspace),
-        )
+        check("workspace path round-trips unchanged", round_trips, str(workspace))
+        check("registers the full tool set", tools_live, "")
 
         # -- a bad argument must fail clearly, not silently ---------------
         code, _out, err = run(exe, ["--no-such-flag"], workdir)
