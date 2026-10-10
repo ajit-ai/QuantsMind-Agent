@@ -29,17 +29,26 @@ Intermittent CPython 3.11 GUI abort (exit 134)
 Evidence
 --------
 
-* Failing runs produce no test name and no Python traceback. The process dies
-  mid-suite.
+* Failing runs produce no test name and no Python traceback naming a test. The
+  process dies mid-suite.
 * Re-running the same commit passes every time. Observed on ``f611536``,
-  ``30e6542``, ``f1ef166`` and ``845c0f8`` -- the failures appear on commits
-  where a re-run of the identical tree succeeded.
-* The traceback frame has moved between ``Garbage-collecting`` inside
-  ``_drain_agent_events`` and plain ``drain`` calls, so it is not one specific
-  test.
+  ``30e6542``, ``f1ef166``, ``845c0f8`` and ``7f33e59`` -- the failures appear
+  on commits where a re-run of the identical tree succeeded.
+* The banner alternates between ``none_dealloc: deallocating None`` and
+  ``Fatal Python error: Aborted``.
+* The faulting frame moves with wherever a finalisation happens to be triggered:
+  it has been seen inside ``Garbage-collecting`` in ``_drain_agent_events``,
+  inside a plain ``drain`` call, and most recently in
+  ``_pytest/warnings.py`` inside ``pytest_runtest_protocol``. Nothing in our
+  code is consistently responsible.
+* ``pyproject.toml`` sets
+  ``filterwarnings = ["error::DeprecationWarning:quantsmind_agent.*"]``, so
+  pytest installs and tears down a warnings filter around **every** test. The
+  most recent failure landed inside that machinery, which makes the warnings
+  plugin a plausible trigger rather than a bystander.
 * It is **not** the same defect as the Linux xcb problem below. That one was
   reproducible on demand and is fixed. This one occurs on the *offscreen*
-  platform too, and it has also been seen on Python 3.12, so it is neither
+  platform too, and has also been seen on Python 3.12, so it is neither
   display-plugin-specific nor 3.11-specific.
 * An earlier, separately identified defect -- ``MainWindow`` never releasing its
   ``EventBus`` subscription, which left abandoned windows with live timers for
@@ -57,21 +66,27 @@ What has been ruled out
 Next diagnostic step
 --------------------
 
-The abort needs a native stack, and this environment has no debugger. On a
-Linux runner, install ``gdb`` and re-run the GUI job under it, so the
-``SIGABRT`` is captured with the faulting native frames rather than only the
-Python-level ``Fatal Python error`` banner. A concrete command to add to the job
-temporarily::
+Two steps, cheapest first, neither of which hides the failure:
 
-    sudo apt-get install -y gdb
-    xvfb-run -a gdb --batch \\
-      -ex run -ex bt -ex "thread apply all bt" \\
-      --args python scripts/run_qt_tests.py tests/gui -q
+#. **Test whether the warnings plugin is the trigger.** Run the GUI job with the
+   plugin disabled::
+
+       python scripts/run_qt_tests.py tests/gui -q -p no:warnings
+
+   If several consecutive runs are clean, the interaction is pytest's
+   per-test warning filter combined with PySide6 finalisation, and the fix
+   belongs in how the suite is configured -- not in a retry.
+#. **Capture a native stack.** If it still aborts, install ``gdb`` and run::
+
+       xvfb-run -a gdb --batch \\
+         -ex run -ex bt -ex "thread apply all bt" \\
+         --args python scripts/run_qt_tests.py tests/gui -q
 
 Suspected area, stated as a hypothesis and not a conclusion: teardown ordering
-between PySide's object ownership and interpreter shutdown. That is the class of
-fault that produces ``none_dealloc``/``SIGABRT`` with no Python traceback, and
-it matches the only evidence available. It has not been confirmed.
+between PySide's object ownership and CPython's finalisation, provoked by the
+per-test warnings filter. That is the class of fault that produces
+``none_dealloc``/``SIGABRT`` with no test named, and it matches every
+observation so far. It has not been confirmed.
 
 Linux Qt xcb system libraries (fixed)
 ======================================
