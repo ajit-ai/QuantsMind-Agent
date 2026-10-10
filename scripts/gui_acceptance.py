@@ -106,21 +106,37 @@ def window_titles_windows(pid: int) -> list[str]:
 
 
 def window_titles_x11(pid: int) -> list[str]:
-    """Titles of X11 windows owned by ``pid``, via xdotool."""
+    """Titles of X11 windows belonging to ``pid``.
+
+    Bare Xvfb runs no window manager, so ``xdotool search --pid`` can come back
+    empty even for a window that is mapped and titled. Several strategies are
+    tried and their results merged: associate by pid, then fall back to
+    searching by the known title, which does not depend on the pid association
+    surviving.
+    """
 
     if not shutil.which("xdotool"):
         return []
-    try:
-        out = subprocess.run(
-            ["xdotool", "search", "--pid", str(pid), "getwindowname", "%@"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    return [line for line in out.stdout.splitlines() if line.strip()]
+
+    def run(*args: str) -> list[str]:
+        try:
+            out = subprocess.run(
+                ["xdotool", *args],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+
+    titles = run("search", "--onlyvisible", "--pid", str(pid), "getwindowname", "%@")
+    if not titles:
+        titles = run("search", "--pid", str(pid), "getwindowname", "%@")
+    if not titles:
+        titles = run("search", "--name", WINDOW_TITLE_PREFIX, "getwindowname", "%@")
+    return titles
 
 
 def window_titles_macos(pid: int) -> list[str]:

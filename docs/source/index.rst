@@ -88,6 +88,9 @@ application rather than by the model.
    testing/manual-acceptance
    testing/acceptance-v0.1
    testing/acceptance-v0.2
+   testing/platform-acceptance-matrix
+   testing/native-gui-acceptance
+   known-issues
 
 .. toctree::
    :maxdepth: 2

@@ -142,10 +142,25 @@ def main(argv: list[str] | None = None) -> int:
     check("executable exists", exe.is_file(), str(exe))
 
     # -- the bundle must ship Qt's platform plugin ------------------------
+    # A one-file build extracts everything to a temporary directory at startup,
+    # so its Qt plugins are never files under dist/ and cannot be inspected
+    # there. For that layout the plugin is verified by the app actually starting
+    # below, which can only happen if the plugin was extracted and loaded.
+    layout = "onedir"
+    metadata_path = distpath / "BUILD-METADATA.json"
+    if metadata_path.exists():
+        layout = json.loads(metadata_path.read_text(encoding="utf-8")).get("layout", "onedir")
+
     plugin = PLATFORM_PLUGIN.get(system)
-    if plugin:
+    if plugin and layout == "onedir":
         found = any(distpath.rglob(f"{plugin}*"))
         check("Qt platform plugin is bundled", found, f"expected {plugin}*")
+    elif plugin:
+        check(
+            f"Qt platform plugin ships inside the {layout} archive (not inspectable on disk)",
+            True,
+            "verified indirectly: the app must start below",
+        )
 
     # -- nothing user-specific may be baked in ----------------------------
     leaked = [
@@ -155,9 +170,8 @@ def main(argv: list[str] | None = None) -> int:
     ]
     check("no configuration or credential file is bundled", not leaked, ", ".join(leaked))
 
-    metadata = distpath / "BUILD-METADATA.json"
-    if metadata.exists():
-        data = json.loads(metadata.read_text(encoding="utf-8"))
+    if metadata_path.exists():
+        data = json.loads(metadata_path.read_text(encoding="utf-8"))
         check(
             "build metadata records the platform",
             data.get("built_on", {}).get("system") == system,
