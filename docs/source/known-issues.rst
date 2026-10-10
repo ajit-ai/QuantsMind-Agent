@@ -122,11 +122,19 @@ Implications, measured and expected:
      - Roughly the same installed footprint, but a single large file rather
        than a directory.
 
-The one-file build **succeeded** and passed 13 of 14 smoke checks; the one
-failure was the file-presence plugin check, which is meaningless for a layout
-that extracts at runtime. That check is now layout-aware. This does **not**
-promote one-file to the verified layout: onedir remains the release candidate
-until one-file is signed and its startup cost is measured.
+The one-file build **succeeded** and passes **14 of 14** smoke checks. The
+original failure was the file-presence plugin check, which is meaningless for a
+layout that extracts at runtime; that check is now layout-aware.
+
+Its GUI step is a further finding. A one-file build is a self-extracting
+bootloader that runs the real application as a **child process**, so the window
+belongs to the child, not to the pid that was launched. The probe now walks
+child processes and finally falls back to matching on the window title.
+
+This does **not** promote one-file to the verified layout. Onedir remains the
+release candidate: one-file is slower to start, writes to the system temp
+directory on every launch, is flagged more readily by security software, and
+still has to be signed.
 
 macOS Intel is unverified
 =========================

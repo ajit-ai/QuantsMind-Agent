@@ -194,23 +194,53 @@ def window_titles_macos(pid: int) -> list[str]:
 
 
 def window_titles_of(pid: int) -> list[str]:
-    """Title of the main window owned by `pid`, or by one of its children."""
+    """Title of the main window owned by ``pid``, or by one of its children.
+
+    Three strategies, in order of how much they can be trusted:
+
+    1. the launched process
+    2. its direct children -- a one-file PyInstaller build is a self-extracting
+       bootloader that runs the real application as a child, so the window
+       belongs to the child
+    3. any process whose main window carries the application title. This is
+       weaker: it attributes by title rather than by ancestry, so it is only
+       meaningful when the host is not running another copy. It exists because
+       a one-file build can nest deeper than one level.
+    """
 
     titles = window_titles_windows(pid)
     if titles:
         return titles
-    # A one-file build runs the real application as a child of the bootloader.
+
     for child in child_pids_windows(pid):
         titles = window_titles_windows(child)
         if titles:
             return titles
-    return []
+
+    try:
+        out = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "Get-Process | Where-Object { $_.MainWindowTitle -like '"
+                + WINDOW_TITLE_PREFIX
+                + "*' } | Select-Object -ExpandProperty MainWindowTitle",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
 
 
 def probe(pid: int) -> list[str]:
     system = platform.system()
     if system == "Windows":
-        return window_titles_windows(pid)
+        return window_titles_of(pid)
     if system == "Linux":
         return window_titles_x11(pid)
     if system == "Darwin":
