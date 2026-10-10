@@ -100,7 +100,7 @@ class TestSmokeTestConfiguration:
 
     def test_macos_layout_points_inside_the_bundle(self) -> None:
         # macOS executables live in Contents/MacOS, not at the top level.
-        assert "MacOS/" in smoke.LAYOUT["Darwin"][1]
+        assert "Contents/MacOS/" in smoke.LAYOUT["Darwin"][1]
 
     def test_locate_returns_none_when_nothing_is_built(self, tmp_path: Path) -> None:
         assert smoke.locate(tmp_path) is None
