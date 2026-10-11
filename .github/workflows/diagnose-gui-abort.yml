@@ -55,6 +55,19 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      - name: Install Qt system libraries
+        # Required, and previously missing here. Without these, every run died
+        # during collection with "ImportError: libEGL.so.1", so the harness
+        # reported a 0% abort rate from runs that never executed a single test.
+        # A diagnostic that measures nothing is worse than no diagnostic.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxcb-xkb1 libxcb-glx0
+
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -93,10 +106,17 @@ jobs:
                   rows.append(f"- **{label}**: no summary produced")
                   continue
               d = json.load(open(path))
+              rate = d["abort_rate"]
+              measured = f"{rate:.0%}" if rate is not None else "NOT MEASURED"
               rows.append(
-                  f"- **{label}**: abort {d['process_aborts']}/{d['iterations']} "
-                  f"({d['abort_rate']:.0%}), outcomes {d['outcomes']}"
+                  f"- **{label}**: abort {d['process_aborts']}/{d['executed_runs']} "
+                  f"executed runs ({measured}), outcomes {d['outcomes']}"
               )
+              if d["collection_errors"]:
+                  rows.append(
+                      f"  - {d['collection_errors']}/{d['iterations']} runs failed during "
+                      "collection, so this rate covers only the runs that executed"
+                  )
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write("### GUI abort diagnostic\n\n" + "\n".join(rows) + "\n")
           print("\n".join(rows))
