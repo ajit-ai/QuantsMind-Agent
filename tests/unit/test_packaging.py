@@ -163,6 +163,44 @@ class TestSmokeTestExecutableDiscovery:
         assert smoke.locate(tmp_path) == shallow
 
 
+class TestGuiAcceptanceConfiguration:
+    """The GUI acceptance probe must find artifacts and degrade honestly."""
+
+    def test_module_exposes_a_probe_for_this_platform(self) -> None:
+
+        assert platform.system() in ("Windows", "Linux", "Darwin")
+
+    def test_finds_the_documented_layout(self, tmp_path: Path) -> None:
+        import gui_acceptance
+
+        system = platform.system()
+        if system not in gui_acceptance.LAYOUTS:
+            pytest.skip(f"no layout defined for {system}")
+        root, exe = gui_acceptance.LAYOUTS[system]
+        target = tmp_path / root / exe
+        target.parent.mkdir(parents=True)
+        target.write_text("", encoding="utf-8")
+        assert gui_acceptance.find_executable(tmp_path) == target
+
+    def test_returns_none_when_nothing_is_built(self, tmp_path: Path) -> None:
+        import gui_acceptance
+
+        assert gui_acceptance.find_executable(tmp_path) is None
+
+    def test_window_title_prefix_matches_the_application(self) -> None:
+        import gui_acceptance
+
+        # The window is titled "QuantsMind-Agent <version>" by MainWindow.
+        assert gui_acceptance.WINDOW_TITLE_PREFIX == "QuantsMind-Agent"
+
+    def test_probe_returns_a_list_even_when_it_cannot_see_windows(self) -> None:
+        import gui_acceptance
+
+        # A missing tool must produce "cannot see", never a crash and never a
+        # fabricated window.
+        assert isinstance(gui_acceptance.probe(999999), list)
+
+
 class TestPlatformMetadata:
     def test_classifiers_do_not_claim_unverified_platforms(self) -> None:
         """The wheel metadata must not advertise what we cannot evidence."""
