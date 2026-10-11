@@ -172,5 +172,28 @@ Documentation is not published
 ==============================
 
 ``docs.yml`` builds the HTML and uploads it as a CI artifact. There is no
-deploy or publish step. Documentation is therefore not publicly available, and
-nothing should claim otherwise until a deployment exists.
+deploy or publish step, so documentation is **not** publicly available and no
+URL should be quoted for it.
+
+Public deployment is additionally **not available in this repository's current
+configuration**, which was verified rather than assumed:
+
+* the repository is **private** (``"private": true``, ``"visibility":
+  "private"``)
+* GitHub Pages is **not enabled** (``has_pages: false``; the Pages API returns
+  404)
+* the available API token carries ``gist, read:org, repo, workflow`` -- no
+  Pages or administration scope
+
+GitHub Pages for a private repository requires GitHub Enterprise Cloud. On
+github.com a private repository cannot host public Pages. Enabling publication
+would require at least one of:
+
+* making the repository public -- a significant, deliberate decision that is
+  not taken here and is not implied by this work
+* moving to GitHub Enterprise Cloud
+* choosing a different host (Read the Docs, Netlify, Vercel, S3) and
+  configuring its credentials
+
+None of these has been done. Until one is, the documentation **build** is
+verified and publication is **pending**.
