@@ -31,8 +31,10 @@ import argparse
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections import Counter
 from pathlib import Path
@@ -43,6 +45,15 @@ REPO = Path(__file__).resolve().parents[1]
 #: a genuine failure is a different defect and must not be counted as this bug.
 EXIT_TEST_FAILURE = 1
 
+#: pytest's exit code for a usage or collection error.
+EXIT_COLLECTION_ERROR = 2
+
+#: Outcomes that mean the suite genuinely ran. Anything else -- a collection
+#: error, an unknown exit code -- means the process never got far enough to
+#: produce a sample, and counting it as one would let a completely misconfigured
+#: environment report a confident 0% abort rate from zero real runs.
+EXECUTED_OUTCOMES = frozenset({"pass", "test-failure", "abort", "segfault"})
+
 
 def classify(returncode: int) -> str:
     """Map a process exit code onto the outcome this harness cares about."""
@@ -51,6 +62,8 @@ def classify(returncode: int) -> str:
         return "pass"
     if returncode == EXIT_TEST_FAILURE:
         return "test-failure"
+    if returncode == EXIT_COLLECTION_ERROR:
+        return "collection-error"
     if returncode in (-6, 134):
         return "abort"
     if returncode in (-11, 139):
@@ -87,6 +100,13 @@ def main(argv: list[str] | None = None) -> int:
 
     command = [sys.executable, "scripts/run_qt_tests.py", args.target, "-q", *extra]
 
+    # Each run gets its own basetemp. pytest's default is a single shared
+    # directory that it rewrites per run, so back-to-back runs -- or a stale
+    # directory some other process still holds open -- can make every run fail
+    # with "PermissionError: ... pytest-of-<user>" and look like a real test
+    # failure. Isolating them keeps a measurement measuring what it claims to.
+    basetemp_root = Path(tempfile.gettempdir()) / f"qm-gui-abort-{args.label}"
+
     env_report = {
         "platform": platform.platform(),
         "python": platform.python_version(),
@@ -108,59 +128,94 @@ def main(argv: list[str] | None = None) -> int:
 
     for index in range(1, args.iterations + 1):
         run_started = time.monotonic()
+        run_basetemp = basetemp_root / f"run{index:02d}"
+        shutil.rmtree(run_basetemp, ignore_errors=True)
+        run_basetemp.mkdir(parents=True, exist_ok=True)
         completed = subprocess.run(
-            command,
+            [*command, "--basetemp", str(run_basetemp)],
             cwd=REPO,
             capture_output=True,
             env=dict(os.environ),
             check=False,
         )
         elapsed = time.monotonic() - run_started
+        tail = (completed.stdout + completed.stderr).decode("utf-8", "replace")
         outcome = classify(completed.returncode)
         outcomes[outcome] += 1
         codes.append(completed.returncode)
         banner = "clean" if outcome == "pass" else outcome.upper()
         print(
             f"  run {index:>3}/{args.iterations}: exit={completed.returncode:<4} "
-            f"{banner:<12} {elapsed:6.1f}s",
+            f"{banner:<16} {elapsed:6.1f}s",
             flush=True,
         )
-        if outcome not in ("pass",):
-            tail = (completed.stdout + completed.stderr).decode("utf-8", "replace")
+        if outcome != "pass":
             if log_dir is not None:
                 log_path = log_dir / f"{args.label}-run{index:02d}.log"
                 log_path.write_text(tail, encoding="utf-8")
                 print(f"        full output: {log_path}", flush=True)
             # Only the failure banner; a full suite log would bury it.
             for line in tail.splitlines():
-                if "Fatal Python error" in line or "Aborted" in line or "Segmentation" in line:
+                if (
+                    "Fatal Python error" in line
+                    or "Aborted" in line
+                    or "Segmentation" in line
+                    or "cannot open shared object file" in line
+                ):
                     print(f"        > {line.strip()}", flush=True)
 
     total = args.iterations
     aborts = outcomes["abort"] + outcomes["segfault"]
+    collection_errors = outcomes["collection-error"]
+
+    # A run that died in collection never executed the suite. Counting it as a
+    # sample would dilute the abort rate and, worse, make a completely
+    # misconfigured environment look like a clean result.
+    executed = sum(outcomes[name] for name in EXECUTED_OUTCOMES)
     summary = {
         "label": args.label,
         "environment": env_report,
         "command": command,
         "iterations": total,
+        "executed_runs": executed,
+        "collection_errors": collection_errors,
         "outcomes": dict(outcomes),
         "exit_codes": codes,
         "process_aborts": aborts,
-        "abort_rate": round(aborts / total, 3) if total else 0.0,
+        "abort_rate": (round(aborts / executed, 3) if executed else None),
         "wall_seconds": round(time.monotonic() - started, 1),
     }
 
     print("\nsummary")
     for outcome, count in sorted(outcomes.items()):
-        print(f"  {outcome:<14} {count}/{total}")
-    print(f"  abort rate    {summary['abort_rate']:.0%} over {total} runs")
+        print(f"  {outcome:<16} {count}/{total}")
+    if executed:
+        print(f"  abort rate      {aborts}/{executed} executed runs ({aborts / executed:.0%})")
+    else:
+        print(f"  abort rate      NOT MEASURED -- 0 of {total} runs executed the suite")
 
     if args.summary:
         Path(args.summary).write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
         print(f"\nwrote {args.summary}")
 
-    # An abort is a failure of this harness's purpose, not something to retry away.
-    return 1 if aborts else 0
+    if executed != total:
+        print(
+            f"\nERROR: {total - executed}/{total} runs did not execute the suite, so the "
+            "abort rate above is not a measurement.\n"
+            "Outcomes seen: "
+            + ", ".join(
+                f"{k}={v}" for k, v in sorted(outcomes.items()) if k not in EXECUTED_OUTCOMES
+            )
+            + "\nMost often this means the Qt system libraries are missing on this\n"
+            "runner (for example libEGL.so.1). Install them and re-run; see the step\n"
+            "'Install Qt system libraries' in .github/workflows/diagnose-gui-abort.yml.",
+            file=sys.stderr,
+        )
+
+    # Any run that failed to produce a sample invalidates the measurement, not
+    # just the ones we recognise by name. An abort is a failure of this
+    # harness's purpose; a suite that never ran is not a pass either.
+    return 1 if aborts or executed != total else 0
 
 
 def _pyside6_version() -> str:

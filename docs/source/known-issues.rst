@@ -56,6 +56,37 @@ Evidence
   in PR #1. That fix made the single-process full suite stable, but this
   residual remains.
 
+The diagnostic exists now, and measuring it immediately paid off
+----------------------------------------------------------------
+
+``scripts/diagnose_gui_abort.py`` runs the suite N times and records what each
+run did. The **first dispatch of it produced a false result, and that is worth
+recording**: every run failed during collection with
+``ImportError: libEGL.so.1`` because the workflow was missing the Qt system
+libraries. The harness reported ``abort 0/8 (0%)``.
+
+That number was meaningless -- it was 0% over *zero runs that executed a single
+test*. So the harness was changed to make that class of failure impossible to
+report as a clean result:
+
+* exit code 2 is now classified as ``collection-error`` and never counts as a
+  sample;
+* a run whose outcome is not one of ``pass`` / ``test-failure`` / ``abort`` /
+  ``segfault`` is not counted as executed either;
+* if fewer runs executed than were requested, the rate prints as
+  ``NOT MEASURED`` and the process exits **non-zero** with a message pointing at
+  the missing libraries;
+* each run now gets its own ``--basetemp``. pytest's default is one shared
+  directory that it rewrites per run; on a machine where that directory was held
+  open by another process, every run failed with
+  ``PermissionError: ... pytest-of-<user>`` and looked like a genuine test
+  failure.
+
+The workflow now installs the Qt system libraries. Three consecutive local runs
+of the harness report ``pass 3/3, abort rate 0/3 executed runs (0%)`` -- on
+Windows/Python 3.14, where the abort has never reproduced. **This is not
+evidence that the abort is fixed.** It is evidence that the instrument works.
+
 What has been ruled out
 -----------------------
 
