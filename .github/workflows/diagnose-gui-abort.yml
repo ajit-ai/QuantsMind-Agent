@@ -1,0 +1,114 @@
+# Characterise the intermittent GUI test-process abort.
+#
+# This workflow does not gate anything. It exists to turn an intermittent
+# native abort into a number that can be compared between configurations, so
+# the cause can be decided on evidence rather than on the fact that a re-run
+# happened to be green.
+#
+# It is deliberately NOT wired into ci.yml: it runs the GUI suite many times
+# over, which is far too slow and too noisy for a pull-request gate, and a
+# diagnostic that gates becomes a diagnostic nobody trusts.
+#
+# Nothing here retries or suppresses. Each configuration runs the identical
+# suite; only the pytest configuration differs. The job fails if any
+# configuration aborts, because a passing summary that hides an abort is worse
+# than a red job.
+name: diagnose-gui-abort
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Runs per configuration"
+        type: string
+        default: "8"
+  schedule:
+    # Nightly, so the abort rate is sampled over time rather than only when
+    # someone remembers to look.
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-gui-abort-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: py${{ matrix.python-version }} baseline vs no-warnings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Baseline configuration
+        run: |
+          python scripts/diagnose_gui_abort.py \
+            --iterations "${{ inputs.iterations || 8 }}" \
+            --label baseline \
+            --log-dir diag-logs \
+            --summary diag-baseline.json
+
+      - name: Same suite with the warnings plugin disabled
+        # The comparison the previous report proposed. It is a measurement, not
+        # a fix: if this is clean and baseline is not, the interaction is
+        # pytest's per-test filterwarnings rule with PySide6 finalisation, and
+        # the fix belongs in the suite's configuration. Warning handling is NOT
+        # changed anywhere in the repository by this experiment.
+        run: |
+          python scripts/diagnose_gui_abort.py \
+            --iterations "${{ inputs.iterations || 8 }}" \
+            --label no-warnings \
+            --log-dir diag-logs \
+            --summary diag-no-warnings.json \
+            -- -p no:warnings
+
+      - name: Publish comparison
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          rows = []
+          for label, path in (("baseline", "diag-baseline.json"), ("no-warnings", "diag-no-warnings.json")):
+              if not os.path.exists(path):
+                  rows.append(f"- **{label}**: no summary produced")
+                  continue
+              d = json.load(open(path))
+              rows.append(
+                  f"- **{label}**: abort {d['process_aborts']}/{d['iterations']} "
+                  f"({d['abort_rate']:.0%}), outcomes {d['outcomes']}"
+              )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### GUI abort diagnostic\n\n" + "\n".join(rows) + "\n")
+          print("\n".join(rows))
+          PY
+
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-abort-diagnostics-py${{ matrix.python-version }}
+          path: |
+            diag-*.json
+            diag-logs/
+          retention-days: 14
+          if-no-files-found: warn
