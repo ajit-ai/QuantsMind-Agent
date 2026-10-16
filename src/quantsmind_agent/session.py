@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from quantsmind_agent.events import AgentEvent
+from quantsmind_agent.revisions import RevisionJournal
 from quantsmind_agent.schema import Message, MessageRole, make_conversation_id
 from quantsmind_agent.tools import ToolResult
 from quantsmind_agent.workspace import Workspace
@@ -74,6 +75,12 @@ class Session:
         self._events: list[AgentEvent] = []
         self._tool_results: list[ToolResult] = []
         self._active_turn: TurnRecord | None = None
+        #: Pre-images for the session's undo list. Owned here, not by the tools,
+        #: so the journal outlives the tool instances: the application rebuilds
+        #: every tool on each workspace or settings change, and a write from the
+        #: previous turn must still be undoable afterwards. Cleared by
+        #: :meth:`reset`, because a new conversation is a new trust boundary.
+        self.revisions = RevisionJournal()
 
     # -- workspace --------------------------------------------------------
     @property
@@ -81,9 +88,20 @@ class Session:
         return self._workspace
 
     def set_workspace(self, workspace: Workspace | None) -> None:
-        """Point the session at a project. The conversation is preserved."""
+        """Point the session at a project. The conversation is preserved.
 
+        The undo list is *not* preserved across a workspace change: its entries
+        name paths relative to the project that recorded them, so carrying them
+        into another project would offer to restore content from somewhere the
+        user is no longer looking.
+        """
+
+        changed = (workspace.root if workspace else None) != (
+            self._workspace.root if self._workspace else None
+        )
         self._workspace = workspace
+        if changed:
+            self.revisions.clear()
 
     @property
     def has_workspace(self) -> bool:
@@ -164,6 +182,10 @@ class Session:
         self._events.clear()
         self._tool_results.clear()
         self._active_turn = None
+        # The undo list dies with the conversation: revisions restore writes the
+        # user already saw, and a fresh conversation must not be able to reach
+        # back into the previous one's filesystem changes.
+        self.revisions.clear()
         if not keep_workspace:
             self._workspace = None
 

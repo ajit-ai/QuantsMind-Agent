@@ -45,7 +45,7 @@ from quantsmind_agent.session import Session
 from quantsmind_agent.tools import ToolRegistry
 from quantsmind_agent.workspace import Workspace
 from quantsmind_agent.workspace_tools import build_default_tools
-from quantsmind_agent.write_tools import build_mutating_tools
+from quantsmind_agent.write_tools import build_mutating_tools, build_undo_tool
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from quantsmind_agent.agent import AgentCore
@@ -146,9 +146,11 @@ class ApplicationContext:
         3. restrictive wildcards (ASK/DENY).
 
         Reads are allowed because they change nothing. Writes and commands ask,
-        and two operations ask regardless of how permissive the flags are:
-        ``delete_file`` (irreversible) and ``run_command`` (host-affecting).
-        ``git_enabled`` removes the Git tools rather than denying them.
+        and three operations ask regardless of how permissive the flags are:
+        ``delete_file`` (irreversible), ``undo_file`` (also a mutation, and a
+        deletion when it reverts a creation) and ``run_command``
+        (host-affecting). ``git_enabled`` removes the Git tools rather than
+        denying them.
         """
 
         agent = self.config_manager.config.agent
@@ -158,6 +160,9 @@ class ApplicationContext:
         #    they cannot be widened by a global flag.
         provider.add_rule(
             PermissionRule(Permission.WRITE_WORKSPACE, Decision.ASK, tool="delete_file")
+        )
+        provider.add_rule(
+            PermissionRule(Permission.WRITE_WORKSPACE, Decision.ASK, tool="undo_file")
         )
         provider.add_rule(
             PermissionRule(Permission.EXECUTE_COMMAND, Decision.ASK, tool="run_command")
@@ -253,9 +258,17 @@ class ApplicationContext:
             registry.register_all(
                 build_default_tools(self.workspace, max_read_bytes=agent_settings.max_file_bytes)
             )
+            # The journal lives on the session, not on the tools: every tool is
+            # rebuilt here, and a write from the previous turn must still be
+            # undoable afterwards.
             registry.register_all(
-                build_mutating_tools(self.workspace, max_file_bytes=agent_settings.max_file_bytes)
+                build_mutating_tools(
+                    self.workspace,
+                    max_file_bytes=agent_settings.max_file_bytes,
+                    journal=session.revisions,
+                )
             )
+            registry.register_all([build_undo_tool(self.workspace, session.revisions)])
             registry.register_all(
                 build_command_tools(
                     self.workspace,

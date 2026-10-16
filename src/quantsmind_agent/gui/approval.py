@@ -112,6 +112,21 @@ class ApprovalPrompt:
         return self.permission is Permission.WRITE_WORKSPACE and self.tool == "delete_file"
 
     @property
+    def always_asks(self) -> bool:
+        """Operations the user must confirm every single time.
+
+        ``delete_file`` because it cannot be taken back, ``undo_file`` because
+        it rewrites a file the user may have changed since the agent last wrote
+        it. Neither may be granted for the session: a grant would silently let a
+        later call rewrite or remove a file without anybody deciding at the
+        moment it happens.
+        """
+
+        return self.is_delete or (
+            self.permission is Permission.WRITE_WORKSPACE and self.tool == "undo_file"
+        )
+
+    @property
     def blocking_warning(self) -> str:
         """Extra warning text for the operations that deserve one."""
 
@@ -383,11 +398,11 @@ class ApprovalDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
 
-        if prompt.permission is Permission.WRITE_WORKSPACE and not prompt.is_delete:
+        if prompt.permission is Permission.WRITE_WORKSPACE and not prompt.always_asks:
             self.allow_session_button = QPushButton("Allow for Session")
             self.allow_session_button.setToolTip(
                 "Allow this tool without asking again until the conversation, project "
-                "or settings change. Delete always asks."
+                "or settings change. Delete and undo always ask."
             )
             self.allow_session_button.clicked.connect(self._on_allow_session)
             buttons.addWidget(self.allow_session_button)

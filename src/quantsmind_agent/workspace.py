@@ -512,6 +512,51 @@ class Workspace:
     def file_size(self, relative: str | os.PathLike[str]) -> int:
         return self.resolve(relative).stat().st_size
 
+    def read_bytes(
+        self, relative: str | os.PathLike[str], *, max_bytes: int | None = None
+    ) -> bytes:
+        """Read a file's exact bytes, without decoding them.
+
+        :meth:`read_text` is the right default for showing content to the model,
+        but it decodes with ``errors="replace"`` and normalises newlines, so it
+        cannot round-trip content that is not valid UTF-8. Anything that has to
+        *put bytes back exactly as they were* -- the undo journal pre-image --
+        reads the raw bytes here.
+
+        Unlike :meth:`read_text` this does not refuse files with a binary
+        suffix: the caller is restoring bytes it captured itself, not feeding a
+        model text.
+        """
+
+        target = self.resolve(relative)
+        rel = self._relative_of(target)
+        if not target.is_file():
+            raise InvalidPathError(
+                f"Not a file: {rel}",
+                user_message=f"'{rel}' does not exist in this workspace.",
+                details={"path": rel},
+            )
+        limit = max_bytes if max_bytes is not None else self._max_read_bytes
+        try:
+            size = target.stat().st_size
+            if size > limit:
+                raise InvalidPathError(
+                    f"Refusing to read {rel}: {size} bytes exceeds the {limit} byte limit",
+                    user_message=f"'{rel}' is too large to handle in one step.",
+                    details={"path": rel, "size": size, "limit": limit},
+                )
+            with open(target, "rb") as handle:
+                return handle.read(limit + 1)[:limit]
+        except InvalidPathError:
+            raise
+        except OSError as exc:
+            raise InvalidPathError(
+                f"Cannot read {rel}: {exc}",
+                user_message=f"'{rel}' could not be read.",
+                details={"path": rel},
+                cause=exc,
+            ) from exc
+
     # -- mutation (v0.2) ---------------------------------------------------
     def fingerprint(self, relative: str | os.PathLike[str]) -> FileFingerprint:
         """Content identity of ``relative``, for stale-edit detection.
@@ -631,6 +676,46 @@ class Workspace:
             # through cannot leave the user with a truncated file.
             temporary = target.with_name(f".{target.name}.qm-tmp")
             temporary.write_text(content, encoding=encoding, newline="")
+            os.replace(temporary, target)
+        except OSError as exc:
+            raise InvalidPathError(
+                f"Cannot write {rel}: {exc}",
+                user_message=f"'{rel}' could not be written.",
+                details={"path": rel},
+                cause=exc,
+            ) from exc
+        return self.fingerprint(rel)
+
+    def write_bytes(
+        self,
+        relative: str | os.PathLike[str],
+        data: bytes,
+        *,
+        create_parents: bool = False,
+    ) -> FileFingerprint:
+        """Replace a file with exactly ``data``.
+
+        :meth:`write_text` is the right default for model-authored content: it
+        takes a ``str`` and encodes it. This method exists for the undo journal,
+        whose pre-image is raw bytes that must be restored byte for byte --
+        including content that is not valid UTF-8 and line endings that
+        ``write_text`` would not preserve. Containment, the directory refusal and
+        the temp-file-then-replace strategy are shared with :meth:`write_text`,
+        so there is still exactly one implementation of "inside the workspace".
+        """
+
+        target = self.resolve(relative)
+        rel = self._relative_of(target)
+        if target.is_dir():
+            raise InvalidPathError(
+                f"Refusing to write over a directory: {rel}",
+                user_message=f"'{rel}' is a folder. Write a file inside it instead.",
+                details={"path": rel},
+            )
+        self.ensure_parent(relative, create_parents=create_parents)
+        try:
+            temporary = target.with_name(f".{target.name}.qm-tmp")
+            temporary.write_bytes(data)
             os.replace(temporary, target)
         except OSError as exc:
             raise InvalidPathError(

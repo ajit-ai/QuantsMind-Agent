@@ -146,8 +146,8 @@ class TestApplicationContext:
         assert context.tools is not None
         # Exact equality, not a subset: a tool appearing or disappearing without
         # a decision is a security-relevant change, so it must fail here. v0.2
-        # adds the write/edit/delete tools, run_command and the read-only Git
-        # tools to the four v0.1 readers.
+        # adds the write/edit/delete tools, undo_file, run_command and the
+        # read-only Git tools to the four v0.1 readers.
         assert context.tools.names == [
             "delete_file",
             "edit_file",
@@ -159,6 +159,7 @@ class TestApplicationContext:
             "read_file",
             "run_command",
             "search_content",
+            "undo_file",
             "write_file",
         ]
         assert "No API key configured" in context.readiness()[1]

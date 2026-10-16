@@ -74,6 +74,23 @@ Filesystem
        explicit precondition.
    * - ``delete_file``
      - Remove a single file. Always asks. Never removes a directory tree.
+   * - ``undo_file``
+     - Put one file back the way it was before the newest change the agent made
+       to it. Always asks. Restores the previous bytes exactly, removes the file
+       when the change being undone created it, and refuses when the file
+       changed outside the agent. ``delete_file`` is deliberately not undoable.
+
+Reversible changes
+------------------
+
+``write_file`` and ``edit_file`` record a pre-image in a session-scoped undo
+list: a stack per file, holding the exact bytes and a SHA-256 digest. One
+``undo_file`` call reverses one step, so successive changes to one file can be
+walked back one at a time, and files can be undone independently of each other.
+
+The list lives in memory for the current conversation only. A new conversation,
+a different project, or closing the application discards it. A write that failed
+records nothing, and an undo that failed leaves its step available to retry.
 
 Command execution
 -----------------
@@ -106,7 +123,7 @@ model gave and the risk classification.
      - Run this one call only.
    * - Allow for Session
      - Allow every later call of the same tool until the conversation, project
-       or settings change. Never offered for ``delete_file``.
+       or settings change. Never offered for ``delete_file`` or ``undo_file``.
    * - Deny
      - Do not run. The tool returns a failure the model can react to, and the
        turn continues.
@@ -142,5 +159,12 @@ running.
 
 **Delete is file-only.** Removing a directory tree is irreversible at a scale an
 approval dialog cannot meaningfully display, so it is deferred.
+
+**The undo list is per session and per file.** It does not survive a restart, it
+never crosses a project boundary, and it holds the pre-images it needs in memory,
+so a file too large to keep is written without a reversible step recorded. It
+also cannot reconstruct anything the agent did not write through the tools: a
+file deleted with ``delete_file``, or edited by another program, is outside it by
+construction.
 
 See :ref:`architecture-security-boundaries` for the full list.

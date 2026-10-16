@@ -83,6 +83,17 @@ class TestApprovalPrompt:
         assert prompt.is_delete
         assert "cannot be undone" in prompt.blocking_warning
 
+    def test_undo_always_asks_but_is_not_a_delete(self) -> None:
+        # It is a mutation, so it must always be confirmed; but the user is not
+        # being asked to accept an irreversible operation, so it must not claim
+        # to be one.
+        prompt = build_prompt(
+            _request(Permission.WRITE_WORKSPACE, "undo_file", summary="undo a.txt")
+        )
+        assert prompt.always_asks
+        assert not prompt.is_delete
+        assert prompt.blocking_warning == ""
+
     def test_reason_is_surfaced(self) -> None:
         prompt = build_prompt(
             _request(
@@ -150,6 +161,18 @@ class TestApprovalDialog:
         )
         labels = dialog.button_labels()
         assert "Allow" in labels
+        assert "Allow for Session" not in labels
+        dialog.close()
+
+    def test_undo_never_offers_a_session_grant(self, qapp: object) -> None:
+        # Undo rewrites a file, so "ask me every time" is the point: a session
+        # grant would let a later call overwrite the file without a decision.
+        dialog = ApprovalDialog(
+            build_prompt(_request(Permission.WRITE_WORKSPACE, "undo_file", summary="undo a.txt"))
+        )
+        labels = dialog.button_labels()
+        assert "Allow" in labels
+        assert "Deny" in labels
         assert "Allow for Session" not in labels
         dialog.close()
 
