@@ -32,12 +32,21 @@ so a failed write leaves nothing to undo. ``delete_file`` is deliberately absent
 from the journal: it is the one irreversible operation, its approval dialog says
 so, and journalling it would quietly weaken a promise the product makes to the
 user.
+
+Structured diffs
+----------------
+``write_file`` and ``edit_file`` also report *what* changed, as a bounded unified
+diff plus line counts, in ``ToolResult.data`` (see
+:mod:`quantsmind_agent.diffs`). The text comes from the same pre-image the undo
+journal captures, so no extra read of the file is needed. ``delete_file`` has no
+diff: the file it changed no longer has content to compare against.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from quantsmind_agent.diffs import revision_diff
 from quantsmind_agent.edit_ops import EditOperation, apply_edit, detect_eol
 from quantsmind_agent.errors import (
     InvalidPathError,
@@ -248,6 +257,12 @@ class WriteFileTool:
                 "sha256": after.sha256,
                 "previous_sha256": before.sha256 or None,
                 "undoable": undoable,
+                **revision_diff(
+                    pre_image.bytes,
+                    content,
+                    path=after.path,
+                    previous_available=pre_image.captured,
+                ).to_payload(),
             },
         )
 
@@ -386,6 +401,12 @@ class EditFileTool:
                 "sha256_before": before.sha256,
                 "sha256_after": after.sha256,
                 "undoable": undoable,
+                **revision_diff(
+                    pre_image.bytes,
+                    outcome.content,
+                    path=after.path,
+                    previous_available=pre_image.captured,
+                ).to_payload(),
             },
         )
 

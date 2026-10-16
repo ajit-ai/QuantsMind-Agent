@@ -80,6 +80,31 @@ Filesystem
        when the change being undone created it, and refuses when the file
        changed outside the agent. ``delete_file`` is deliberately not undoable.
 
+Structured diffs
+----------------
+
+``write_file`` and ``edit_file`` report what they changed, not only that they
+changed something. The result the model reads back carries a unified diff, the
+number of lines added and removed, and whether the diff was truncated:
+
+.. code-block:: text
+
+   diff          +DEFAULT_PORT = 9090
+                 -DEFAULT_PORT = 8080
+   diff_kind     modified
+   diff_added    1
+   diff_removed  1
+   diff_truncated false
+
+``diff_kind`` names the cases where there is nothing to compare: ``created``
+when the file did not exist before, and ``unavailable`` when the previous
+content exists but was too large to read. ``delete_file`` reports no diff at all
+-- the file it changed no longer has content to compare against.
+
+The diff is bounded so a whole-file rewrite cannot flood the context: at most
+200 lines and 8000 characters. The line counts always describe the whole change,
+so they stay usable as a summary even when the text is cut short.
+
 Reversible changes
 ------------------
 
@@ -166,5 +191,11 @@ so a file too large to keep is written without a reversible step recorded. It
 also cannot reconstruct anything the agent did not write through the tools: a
 file deleted with ``delete_file``, or edited by another program, is outside it by
 construction.
+
+**Diffs are bounded and lossy for display.** The text is capped at 200 lines and
+8000 characters, and content that is not valid UTF-8 is decoded leniently for
+the diff even though the undo journal stores the exact bytes. ``write_file``
+replacing an entire large file therefore produces a summary, not a full patch;
+reading the file is how the model sees more.
 
 See :ref:`architecture-security-boundaries` for the full list.
