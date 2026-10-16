@@ -478,8 +478,14 @@ def build_command_tools(
     cancel_event: threading.Event | None = None,
     default_timeout: float = 120.0,
     redact_env: tuple[str, ...] = (),
+    max_output_chars: int = MAX_OUTPUT_CHARS,
 ) -> list[Any]:
-    """Instantiate the v0.2 command tool bound to ``workspace``."""
+    """Instantiate the v0.2 command tool bound to ``workspace``.
+
+    ``max_output_chars`` is the per-stream cap on captured output, validated by
+    the configuration model before it reaches here; the default keeps the
+    constant's value so a caller that never configures it is unaffected.
+    """
 
     return [
         RunCommandTool(
@@ -487,5 +493,6 @@ def build_command_tools(
             cancel_event=cancel_event,
             default_timeout=default_timeout,
             redact_env=redact_env,
+            max_output_chars=max_output_chars,
         )
     ]

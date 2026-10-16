@@ -9,7 +9,13 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- `max_command_output_chars` now reaches the command tool. The setting was
+  loaded, validated and documented but never passed to `run_command`, so the cap
+  was always the built-in 20000 characters and changing it did nothing. Both
+  stdout and stderr are capped by the configured value, and truncation is still
+  reported through `stdout_truncated` / `stderr_truncated`.
 
 ---
 

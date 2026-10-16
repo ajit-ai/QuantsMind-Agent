@@ -274,6 +274,7 @@ class ApplicationContext:
                     self.workspace,
                     cancel_event=self._cancel,
                     default_timeout=agent_settings.command_timeout_seconds,
+                    max_output_chars=agent_settings.max_command_output_chars,
                     redact_env=(config.provider.api_key_env,),
                 )
             )

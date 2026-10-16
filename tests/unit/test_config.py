@@ -58,6 +58,24 @@ class TestProviderSettings:
             ProviderSettings(max_output_tokens=0)
 
 
+class TestAgentOutputCap:
+    """The command output cap is validated once, where it is configured."""
+
+    def test_the_default_is_a_usable_value(self) -> None:
+        assert AgentSettings().max_command_output_chars == 20_000
+
+    @pytest.mark.parametrize("value", [1, 512, 200_000])
+    def test_valid_values_are_accepted(self, value: int) -> None:
+        assert AgentSettings(max_command_output_chars=value).max_command_output_chars == value
+
+    @pytest.mark.parametrize("value", [0, -1, 200_001])
+    def test_out_of_range_values_are_rejected(self, value: int) -> None:
+        # A cap of zero would silently discard every command's output, and an
+        # unbounded one would defeat the point of having a limit.
+        with pytest.raises(ValidationError):
+            AgentSettings(max_command_output_chars=value)
+
+
 class TestConfiguration:
     def test_defaults(self) -> None:
         config = default_configuration()

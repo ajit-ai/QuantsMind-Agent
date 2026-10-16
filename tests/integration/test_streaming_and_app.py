@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -11,6 +13,7 @@ from quantsmind_agent.app import ApplicationContext
 from quantsmind_agent.config import ConfigManager
 from quantsmind_agent.events import AgentEventType
 from quantsmind_agent.llm import ChatRequest, ChatResponse, StreamChunk
+from quantsmind_agent.permissions import ApprovalOutcome
 from quantsmind_agent.workspace import Workspace
 from tests.fakes import FakeModelProvider, text_response, tool_response
 from tests.harness import AgentHarness
@@ -127,10 +130,47 @@ class TestCancellation:
         assert second.text == "clean run"
 
 
+def _print_x(context: ApplicationContext, count: int) -> Any:
+    """Run the workspace interpreter, printing ``count`` characters."""
+
+    context.tools.permissions.set_approver(lambda request: ApprovalOutcome.ALLOW_ONCE)
+    return context.tools.execute(
+        "run_command",
+        {"command": sys.executable, "arguments": ["-c", f"print('x' * {count})"]},
+    )
+
+
 class TestApplicationContext:
     @pytest.fixture
     def context(self, config_manager: ConfigManager, sample_project: Path) -> ApplicationContext:
         return ApplicationContext.create(paths=config_manager.paths, config_manager=config_manager)
+
+    def test_the_configured_output_cap_reaches_the_command_tool(
+        self, context: ApplicationContext, sample_project: Path
+    ) -> None:
+        # The setting was inert until it was wired through: a user who lowered
+        # it saw no change in what the model was told.
+        context.config_manager.config.agent.max_command_output_chars = 64
+        context.open_workspace(str(sample_project))
+
+        result = _print_x(context, 5000)
+
+        assert result.ok
+        assert len(result.data["stdout"]) == 64
+        assert result.data["stdout_truncated"] is True
+
+    def test_saving_the_cap_rebuilds_the_command_tool(
+        self, context: ApplicationContext, sample_project: Path
+    ) -> None:
+        context.open_workspace(str(sample_project))
+        context.config_manager.config.agent.max_command_output_chars = 128
+
+        context.apply_configuration()
+
+        result = _print_x(context, 5000)
+
+        assert len(result.data["stdout"]) == 128
+        assert result.data["stdout_truncated"] is True
 
     def test_boots_without_a_workspace(self, context: ApplicationContext) -> None:
         assert context.workspace is None

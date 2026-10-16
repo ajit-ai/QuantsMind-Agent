@@ -9,7 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from quantsmind_agent.command_tools import RunCommandTool, build_command_tools, tokenize_command
+from quantsmind_agent.command_tools import (
+    MAX_OUTPUT_CHARS,
+    RunCommandTool,
+    build_command_tools,
+    tokenize_command,
+)
+from quantsmind_agent.config import AgentSettings
 from quantsmind_agent.errors import CommandTimeoutError
 from quantsmind_agent.permissions import ApprovalOutcome, PermissionBroker, StaticPermissionProvider
 from quantsmind_agent.tools import ToolRegistry
@@ -314,3 +320,80 @@ class TestCredentialHygiene:
         script = "import os; print(len(os.environ.get('MY_SECRET_TOKEN', '')))"
         result = registry.execute("run_command", {"command": PYTHON, "arguments": ["-c", script]})
         assert result.data["stdout"].strip() == "0"
+
+
+def _capped_registry(project: Path, cap: int | None) -> ToolRegistry:
+    registry = ToolRegistry(
+        permissions=PermissionBroker(
+            StaticPermissionProvider.for_v0_2(),
+            approver=lambda request: ApprovalOutcome.ALLOW_ONCE,
+        )
+    )
+    if cap is None:
+        tools = build_command_tools(Workspace(project), default_timeout=30.0)
+    else:
+        tools = build_command_tools(Workspace(project), default_timeout=30.0, max_output_chars=cap)
+    registry.register_all(tools)
+    return registry
+
+
+class TestConfiguredOutputCap:
+    """``max_command_output_chars`` has to reach the reader that does the capping."""
+
+    def test_a_custom_cap_is_applied(self, sample_project: Path) -> None:
+        registry = _capped_registry(sample_project, 100)
+
+        result = registry.execute(
+            "run_command", {"command": PYTHON, "arguments": ["-c", "print('x' * 50000)"]}
+        )
+
+        assert len(result.data["stdout"]) == 100
+        assert result.data["stdout_truncated"] is True
+
+    def test_a_custom_cap_never_shrinks_the_output(self, sample_project: Path) -> None:
+        registry = _capped_registry(sample_project, 100_000)
+
+        result = registry.execute(
+            "run_command", {"command": PYTHON, "arguments": ["-c", "print('x' * 50000)"]}
+        )
+
+        assert len(result.data["stdout"]) == 50_001  # 50000 characters plus the newline
+        assert result.data["stdout_truncated"] is False
+
+    def test_output_exactly_at_the_cap_is_not_truncated(self, sample_project: Path) -> None:
+        # 99 characters plus the newline the child adds: exactly at the boundary.
+        registry = _capped_registry(sample_project, 100)
+
+        result = registry.execute(
+            "run_command", {"command": PYTHON, "arguments": ["-c", "print('x' * 99)"]}
+        )
+
+        assert len(result.data["stdout"]) == 100
+        assert result.data["stdout_truncated"] is False
+
+    def test_stderr_is_capped_by_the_same_setting(self, sample_project: Path) -> None:
+        # Both streams are drained and capped independently; neither may bypass
+        # the limit the user configured.
+        registry = _capped_registry(sample_project, 100)
+        script = "import sys; sys.stdout.write('o' * 5000); sys.stderr.write('e' * 5000)"
+
+        result = registry.execute("run_command", {"command": PYTHON, "arguments": ["-c", script]})
+
+        assert len(result.data["stdout"]) == 100
+        assert len(result.data["stderr"]) == 100
+        assert result.data["stdout_truncated"] is True
+        assert result.data["stderr_truncated"] is True
+
+    def test_the_default_is_used_when_no_cap_is_configured(self, sample_project: Path) -> None:
+        registry = _capped_registry(sample_project, None)
+
+        result = registry.execute(
+            "run_command", {"command": PYTHON, "arguments": ["-c", "print('x' * 50000)"]}
+        )
+
+        assert len(result.data["stdout"]) == MAX_OUTPUT_CHARS
+        assert result.data["stdout_truncated"] is True
+
+    def test_the_default_cap_matches_the_configuration_default(self) -> None:
+        # A fresh install sets neither value; the two must not drift apart.
+        assert AgentSettings().max_command_output_chars == MAX_OUTPUT_CHARS
