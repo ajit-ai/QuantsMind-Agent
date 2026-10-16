@@ -203,6 +203,71 @@ class TestDeniedEdit:
         assert outcome == [ApprovalOutcome.DENY]
 
 
+class TestSessionGrantsDoNotOutliveTheirScope:
+    """A grant is for one conversation, one project and one set of settings.
+
+    These drive the application directly rather than the agent loop: the
+    question is what survives a rebuild, and the agent is not involved.
+    """
+
+    def _granted(self, context: ApplicationContext, asked: list[str]) -> None:
+        def approve(request: Any) -> ApprovalOutcome:
+            asked.append(request.tool)
+            return ApprovalOutcome.ALLOW_FOR_SESSION
+
+        context.tools.permissions.set_approver(approve)
+        assert context.tools.execute("write_file", {"path": "README.md", "content": "changed\n"}).ok
+        assert context.tools.permissions.session_grants, "the grant was not recorded"
+
+    def _assert_next_write_asks_again(self, context: ApplicationContext, asked: list[str]) -> None:
+        def approve(request: Any) -> ApprovalOutcome:
+            asked.append(request.tool)
+            return ApprovalOutcome.ALLOW_ONCE
+
+        context.tools.permissions.set_approver(approve)
+        assert context.tools.execute(
+            "write_file", {"path": "README.md", "content": "changed again\n"}
+        ).ok
+
+    def test_a_new_conversation_drops_the_grant(self, app_paths: Any, sample_project: Path) -> None:
+        context = _context(app_paths, sample_project, FakeModelProvider([]))
+        asked: list[str] = []
+        self._granted(context, asked)
+
+        context.reset_conversation()
+
+        assert not context.tools.permissions.session_grants
+        asked.clear()
+        self._assert_next_write_asks_again(context, asked)
+        assert asked == ["write_file"], "the new conversation must ask again"
+
+    def test_changing_project_drops_the_grant(self, app_paths: Any, sample_project: Path) -> None:
+        context = _context(app_paths, sample_project, FakeModelProvider([]))
+        asked: list[str] = []
+        self._granted(context, asked)
+        other = sample_project.parent / "other_project"
+        other.mkdir()
+
+        context.open_workspace(other)
+
+        assert not context.tools.permissions.session_grants
+        asked.clear()
+        self._assert_next_write_asks_again(context, asked)
+        assert asked == ["write_file"], "the new project must ask again"
+
+    def test_saving_settings_drops_the_grant(self, app_paths: Any, sample_project: Path) -> None:
+        context = _context(app_paths, sample_project, FakeModelProvider([]))
+        asked: list[str] = []
+        self._granted(context, asked)
+
+        context.apply_configuration()
+
+        assert not context.tools.permissions.session_grants
+        asked.clear()
+        self._assert_next_write_asks_again(context, asked)
+        assert asked == ["write_file"], "the new settings must ask again"
+
+
 class TestBlockedOperationsNeverReachApproval:
     """A policy refusal happens before the user is asked."""
 

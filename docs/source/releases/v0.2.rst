@@ -31,9 +31,11 @@ central rule the rest of the application is built on:
 
 The agent can now write files, apply deterministic edits, delete files, run
 approved commands and inspect Git state. Every one of those is a separate,
-individually approved operation, and the three highest-risk ones -- deleting a
-file, running a command, and anything the safety policy forbids -- cannot be
-approved into existence at all.
+individually decided operation. Deleting a file and running a command always
+reach the user, whatever else the settings allow, and can never be granted for
+the session; anything the command safety policy forbids is refused before the
+user is asked at all, because offering "Allow" for it would turn the dialog into
+a speed bump rather than a control.
 
 .. code-block:: text
 
@@ -134,9 +136,21 @@ structurally read-only: see :ref:`git-read-only`.
 Approvals
 =========
 
-Any tool that can change the machine or the workspace prompts first. The prompt
-shows the operation, the target, the workspace, the arguments, the reason the
-model gave and the risk classification.
+By default, any tool that can change the machine or the workspace prompts first.
+The prompt shows the operation, the target, the workspace, the arguments, the
+reason the model gave and the risk classification.
+
+Two settings relax that default, and neither relaxes it completely:
+
+* **Auto-approve reads** skips the prompt for reading, which cannot change
+  anything. Off by default in a fresh installation.
+* **Auto-approve writes** skips the prompt for ``write_file`` and ``edit_file``
+  only. ``delete_file``, ``undo_file`` and ``run_command`` keep asking whatever
+  this is set to, and ``NETWORK`` stays denied.
+
+A headless run -- the CLI, the tests, a start with no window attached -- has
+nobody to ask, so every prompt resolves to a denial and nothing mutating runs
+unattended.
 
 .. list-table::
    :header-rows: 1
