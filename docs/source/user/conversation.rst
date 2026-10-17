@@ -1,4 +1,4 @@
-.. _user-conversation:
+﻿.. _user-conversation:
 
 
 ============
@@ -34,7 +34,7 @@ Notice     Errors, cancellations and application messages.
 =========  ===============================================================
 
 The *Tool activity* panel mirrors tool calls as a compact audit log with state
-markers (``→`` started, ``✓`` completed, ``✗`` failed). Permission decisions
+markers (``â†’`` started, ``âœ“`` completed, ``âœ—`` failed). Permission decisions
 appear there too.
 
 Streaming
@@ -78,24 +78,47 @@ Starting a new conversation
 keeps the open project and your settings, and starts a fresh session id. To
 switch projects as well, close the project first.
 
-Good questions to try
-=====================
+Asking for a change
+===================
 
-Questions that reward tool use:
+The agent can carry out a change end to end. It locates the code with the
+navigation tools, makes the smallest edit that solves the problem, and runs the
+check you named to confirm it. Every write, delete, undo and command asks you
+first; a denial is final and the agent moves on rather than asking again.
+
+Two behaviours are worth knowing, because both save you time:
+
+* **Output is bounded from both ends.** A verbose build or test command is cut
+  at the configured cap, but the *tail* is kept along with the head, because the
+  failing assertion is at the end. When anything was dropped, the result says
+  how much, so a cut is never mistaken for the whole output.
+* **Repeats are refused.** If the agent runs the same command with the same
+  arguments twice and nothing has changed in between, the second run is refused
+  instead of repeating itself. Change something and it will run the same command
+  again -- which is exactly what validating a fix looks like.
+
+Questions that reward tool use
+===============================
 
 * ``Explain the structure of this project.``
-* ``Read the README and summarize the project.``
 * ``Where is the default port configured?``
-* ``Find every place that raises an exception, and explain why.``
 * ``Which files would I need to change to rename the config module?``
+* ``average() crashes on an empty list -- fix it and run the tests.``
 
-Questions v0.1 cannot answer
-----------------------------
+What the agent still cannot do
+==============================
 
-* ``Run the tests.``
-* ``Fix the bug.``
-* ``Commit this.``
 * ``Search the web for ...``
 
-The agent will say it cannot run commands, modify files, use git or access the
-network in this version. That is the v0.1 boundary, not a bug.
+There is no network access in any version. Git *mutations* -- commit, push,
+checkout, reset, merge, rebase and the rest -- are blocked too, including
+through the command tool; the read-only ``git_status``, ``git_diff`` and
+``git_log`` are available.
+
+Related
+=======
+
+* :doc:`tools`
+* :doc:`permissions`
+* :doc:`settings`
+

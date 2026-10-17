@@ -124,7 +124,10 @@ Command execution
 
 ``run_command`` runs one development command inside the project folder after
 approval, with a working-directory containment check, a timeout, cancellation,
-bounded stdout and stderr, and the exit code reported back to the model.
+bounded stdout and stderr, and the exit code reported back to the model. Both
+streams are capped from both ends -- the head and the tail of the output are
+kept, with a marker where the middle was dropped -- because the part of a
+failing command that matters is usually its last line.
 
 Git awareness
 -------------

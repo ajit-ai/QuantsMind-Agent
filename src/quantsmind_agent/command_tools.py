@@ -128,14 +128,29 @@ class CappedReader(threading.Thread):
 
     The drain continues past the cap so the child never blocks on a full pipe;
     only the retained text is bounded.
+
+    When output overflows, the *tail* is kept as well as the head. A build or
+    test command prints its interesting part last -- the failing assertion, the
+    traceback, the error summary -- and a head-only cap silently throws away the
+    one thing the agent needs in order to fix the failure it just caused. The
+    middle is dropped, with an explicit marker so a truncated observation never
+    reads as a complete one.
     """
+
+    #: Marker inserted where the middle of the output was dropped. Kept short so
+    #: it fits inside a modest cap -- the marker is part of the budget.
+    OMITTED = "\n... [{omitted} chars omitted] ...\n"
 
     def __init__(self, stream: Any, cap: int) -> None:
         super().__init__(daemon=True)
         self._stream = stream
-        self._cap = cap
-        self.chunks: list[str] = []
-        self.kept = 0
+        self._cap = max(0, int(cap))
+        self._head_budget = (self._cap + 1) // 2
+        self._tail_budget = self._cap // 2
+        self._head: list[str] = []
+        self._tail_text = ""
+        self._head_size = 0
+        self._omitted = 0
         self.total = 0
 
     def run(self) -> None:
@@ -145,23 +160,87 @@ class CappedReader(threading.Thread):
                 if not chunk:
                     return
                 self.total += len(chunk)
-                if self.kept < self._cap:
-                    room = self._cap - self.kept
-                    self.chunks.append(chunk[:room])
-                    self.kept += len(self.chunks[-1])
+                self._keep(chunk)
         except (OSError, ValueError):  # pragma: no cover - pipe closed mid-read
             return
         finally:
             with contextlib.suppress(OSError, ValueError):  # pragma: no cover
                 self._stream.close()
 
+    def _keep(self, chunk: str) -> None:
+        """Route one chunk to the head, the tail, or the omitted middle.
+
+        Half the budget goes to each end. Once a buffer is full, everything
+        after it is only useful from the other side, so the tail slides instead
+        of growing.
+        """
+
+        head_room = self._head_budget - self._head_size
+        if head_room > 0:
+            self._head.append(chunk[:head_room])
+            self._head_size += min(head_room, len(chunk))
+            chunk = chunk[head_room:]
+            if not chunk:
+                return
+        self._keep_tail(chunk)
+
+    def _keep_tail(self, chunk: str) -> None:
+        """Slide the tail window so it always ends at the newest byte seen.
+
+        A tail that simply stopped filling would be wrong for exactly the case
+        that matters: a command that prints a lot and then fails, where the
+        diagnosis arrives after the window is already full.
+        """
+
+        if self._tail_budget == 0:
+            self._omitted += len(chunk)
+            return
+        combined = self._tail_text + chunk
+        if len(combined) <= self._tail_budget:
+            self._tail_text = combined
+            return
+        self._omitted += len(combined) - self._tail_budget
+        self._tail_text = combined[-self._tail_budget :]
+
     @property
     def text(self) -> str:
-        return "".join(self.chunks)
+        """The retained text, never longer than the cap, marker included."""
+
+        head = "".join(self._head)
+        tail = self._tail_text
+        if not self._omitted:
+            return head + tail
+        marker = self.OMITTED.format(omitted=self._omitted)
+        # The marker is part of the budget: a cap is a promise about how much
+        # text the model is handed, not just about how much is kept.
+        room = self._cap - len(head) - len(marker)
+        if room >= 0:
+            return head + marker + tail[-room:] if room else head + marker
+        # A cap too small to carry the head, the marker and the tail: keep the
+        # tail alone, because that is where the failure is. The omission is
+        # still reported in the result metadata, so nothing here is silent.
+        return tail[-self._cap :]
+
+    @property
+    def omitted_chars(self) -> int:
+        return self._omitted
 
     @property
     def truncated(self) -> bool:
-        return self.total > self.kept
+        return self._omitted > 0
+
+
+def _truncation_metadata(prefix: str, reader: CappedReader) -> dict[str, Any]:
+    """Truncation facts for one stream, so a cut is never silent.
+
+    ``*_omitted_chars`` says how much was dropped, which is the difference
+    between "this output was complete" and "look at what survived".
+    """
+
+    return {
+        f"{prefix}_truncated": reader.truncated,
+        f"{prefix}_omitted_chars": reader.omitted_chars,
+    }
 
 
 class RunCommandTool:
@@ -419,8 +498,8 @@ class RunCommandTool:
                 "exit_code": exit_code,
                 "stdout": stdout,
                 "stderr": stderr,
-                "stdout_truncated": out_reader.truncated,
-                "stderr_truncated": err_reader.truncated,
+                **_truncation_metadata("stdout", out_reader),
+                **_truncation_metadata("stderr", err_reader),
                 "timed_out": False,
                 "duration_seconds": round(elapsed, 2),
                 "risk": verdict.command_class.value,

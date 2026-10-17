@@ -22,6 +22,7 @@ user sees text appear progressively.
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -42,9 +43,33 @@ from quantsmind_agent.schema import (
 from quantsmind_agent.session import Session
 from quantsmind_agent.tools import ToolRegistry, ToolResult
 
-__all__ = ["AgentCore", "AgentOutcome", "StreamEmitter"]
+__all__ = ["AgentCore", "AgentOutcome", "StreamEmitter", "TurnEvidence"]
 
 logger = get_logger(__name__)
+
+#: Tools whose success *provably* changed the workspace. A successful call from
+#: this set is what makes a repeated read or re-run legitimate.
+#:
+#: ``run_command`` is deliberately absent: the application cannot know what a
+#: command did, so it cannot claim the workspace changed. Treating an unknown
+#: effect as evidence would let the model re-run the identical failing test
+#: command until the iteration budget ran out, which is the loop this exists to
+#: stop. Editing, then running the same command again, is still allowed.
+_MUTATING_TOOLS = frozenset({"write_file", "edit_file", "delete_file", "undo_file"})
+
+
+def _call_signature(call: ToolCall) -> str:
+    """A stable identity for one tool call, so a repeat can be recognised.
+
+    Arguments are sorted by key, because the same call with the same arguments
+    in a different order is still the same call.
+    """
+
+    try:
+        rendered = json.dumps(call.arguments, sort_keys=True, default=str)
+    except (TypeError, ValueError):  # pragma: no cover - exotic arguments
+        rendered = repr(sorted(call.arguments.items()))
+    return f"{call.name}:{rendered}"
 
 
 class StreamEmitter:
@@ -93,6 +118,45 @@ class AgentOutcome:
     def describe(self) -> str:
         state = "cancelled" if self.cancelled else (self.error or self.stopped_reason)
         return f"{self.iterations} iteration(s), {len(self.tool_results)} tool call(s), {state}"
+
+
+class TurnEvidence:
+    """What the agent has already tried this turn, and what changed since.
+
+    A coding loop is edit -> run -> read the failure -> edit again. Repeating a
+    step without new evidence is the failure mode that burns the iteration budget
+    and the user's patience: the same test command three times in a row, the same
+    file rewritten identically, the same read five times because the model forgot
+    what it already saw.
+
+    So the loop remembers each distinct call and whether anything has changed
+    since it last ran. A repeat is refused *only* while nothing has changed --
+    revalidating after an edit is exactly the workflow working, and blocking that
+    would break the thing this is meant to protect.
+    """
+
+    def __init__(self) -> None:
+        self._seen: dict[str, int] = {}
+        self._epoch = 0
+
+    @property
+    def epoch(self) -> int:
+        """How many changes have landed this turn."""
+
+        return self._epoch
+
+    def record_change(self) -> None:
+        """Note that the workspace changed, which reopens every previous call."""
+
+        self._epoch += 1
+
+    def is_repeat(self, signature: str) -> bool:
+        """Whether this exact call already ran with nothing changed since."""
+
+        return self._seen.get(signature) == self._epoch
+
+    def remember(self, signature: str) -> None:
+        self._seen[signature] = self._epoch
 
 
 class AgentCore:
@@ -285,6 +349,7 @@ class AgentCore:
         prior = self._session.history_for_context()[:-1]
         tools = self._tools.openai_schemas()
         observations: list[Message] = []
+        evidence = TurnEvidence()
 
         for iteration in range(1, self._max_iterations + 1):
             outcome.iterations = iteration
@@ -323,7 +388,7 @@ class AgentCore:
                 self._session.add_message(assistant)
                 observations.append(assistant)
                 for call in response.tool_calls:
-                    observations.append(self._execute_call(call, outcome, emitter))
+                    observations.append(self._execute_call(call, outcome, emitter, evidence))
                 continue
 
             self._finish(outcome, text, response)
@@ -419,17 +484,37 @@ class AgentCore:
         call: ToolCall,
         outcome: AgentOutcome,
         emitter: StreamEmitter,
+        evidence: TurnEvidence,
     ) -> ToolMessage:
         if emitter.on_tool_start:
             emitter.on_tool_start(call.name, _short_args(call.arguments))
-        try:
-            result = self._tools.execute(call.name, call.arguments)
-        except ToolNotFoundError as exc:
-            # The model invented a tool. This is an expected, recoverable
-            # mistake: report it back as an observation instead of failing the
-            # whole turn, so the agent can retry with a tool that exists.
-            logger.info("Agent requested an unknown tool: %s", call.name)
-            result = ToolResult.failure(call.name, call.name, exc.user_message)
+
+        signature = _call_signature(call)
+        if evidence.is_repeat(signature):
+            # No evidence has appeared since this call last ran, so running it
+            # again cannot produce a different result. Refusing it here is what
+            # keeps the loop from spinning; it is an expected, recoverable
+            # outcome, reported to the model rather than raised.
+            result = ToolResult.failure(
+                call.name,
+                call.name,
+                f"'{call.name}' was already called with these exact arguments in this turn "
+                "and nothing has changed since, so it would repeat the same result. "
+                "Change something first, or answer with what you already know.",
+            )
+        else:
+            evidence.remember(signature)
+            try:
+                result = self._tools.execute(call.name, call.arguments)
+            except ToolNotFoundError as exc:
+                # The model invented a tool. This is an expected, recoverable
+                # mistake: report it back as an observation instead of failing the
+                # whole turn, so the agent can retry with a tool that exists.
+                logger.info("Agent requested an unknown tool: %s", call.name)
+                result = ToolResult.failure(call.name, call.name, exc.user_message)
+
+        if result.ok and _MUTATING_TOOLS.intersection({call.name}):
+            evidence.record_change()
 
         outcome.tool_results.append(result)
         self._session.record_tool_result(result)

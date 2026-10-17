@@ -14,11 +14,39 @@ class TestSystemPrompt:
         prompt = ContextEngine().system_prompt()
         assert "QuantsMind-Agent" in prompt
         assert "relative to the workspace root" in prompt
-        assert "cannot run commands" in prompt
+        assert "no network access" in prompt
+
+    def test_does_not_claim_capabilities_the_agent_lacks(self) -> None:
+        # The prompt used to tell the model it could not run commands or modify
+        # files. That was true in v0.1 and is now a lie that makes the agent
+        # refuse work it is perfectly able to do.
+        prompt = DEFAULT_SYSTEM_PROMPT.lower()
+        assert "cannot run commands" not in prompt
+        assert "cannot modify files" not in prompt
+
+    def test_advertises_the_capabilities_the_agent_has(self) -> None:
+        for tool in (
+            "read_file",
+            "write_file",
+            "edit_file",
+            "undo_file",
+            "run_command",
+            "code_outline",
+            "find_references",
+            "project_symbols",
+        ):
+            assert tool in DEFAULT_SYSTEM_PROMPT, tool
 
     def test_mentions_every_v0_1_tool(self) -> None:
         for tool in ("project_structure", "read_file", "search_content", "list_directory"):
             assert tool in DEFAULT_SYSTEM_PROMPT
+
+    def test_explains_the_change_loop(self) -> None:
+        # The workflow the prompt is steering: locate, edit small, verify, and
+        # do not spin when a repeat is refused.
+        prompt = DEFAULT_SYSTEM_PROMPT.lower()
+        assert "re-run the check" in prompt
+        assert "refused repeat" in prompt
 
     def test_workspace_summary_is_included(self, workspace: Workspace) -> None:
         prompt = ContextEngine(workspace).system_prompt()

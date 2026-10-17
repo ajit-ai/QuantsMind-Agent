@@ -9,6 +9,30 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Command output is now bounded from both ends. The cap keeps the head *and* the
+  tail of stdout and stderr, with a visible marker where the middle was dropped.
+  Previously the head alone survived, which silently discarded the traceback and
+  failure summary of a failing test run -- the one output the agent needed in
+  order to fix the failure it had just caused. `stdout_omitted_chars` /
+  `stderr_omitted_chars` now report how much was dropped.
+- The agent refuses to repeat an identical tool call within a turn when nothing
+  has changed since it last ran, and tells the model why. Any successful
+  `write_file`, `edit_file`, `delete_file` or `undo_file` reopens every call, so
+  validating after an edit -- the normal shape of the work -- is untouched.
+  `run_command` deliberately does not count as evidence: the application cannot
+  know what a command changed, so it will not pretend it did.
+
+### Fixed
+
+- The system prompt no longer tells the model it cannot run commands or modify
+  files. That was v0.1 wording, and it fought the agent on every request that
+  involved making a change. It now describes the real tool set, the
+  locate/edit/verify loop, and the approval and refusal rules.
+- The user documentation no longer claims the agent cannot fix a bug or run
+  tests.
+
 ### Added
 
 **Code navigation (v0.3)**
