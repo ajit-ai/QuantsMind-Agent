@@ -137,16 +137,20 @@ Approvals
 =========
 
 By default, any tool that can change the machine or the workspace prompts first.
-The prompt shows the operation, the target, the workspace, the arguments, the
-reason the model gave and the risk classification.
+The prompt shows the operation, the target, the workspace and the arguments.
+Two more fields depend on the tool: ``run_command`` also shows the one-line
+reason the model gave and the risk classification of the command, because those
+exist only for commands -- the other tools have no reason argument to show.
 
-Two settings relax that default, and neither relaxes it completely:
+Two settings relax the default, and neither relaxes it completely:
 
 * **Auto-approve reads** skips the prompt for reading, which cannot change
-  anything. Off by default in a fresh installation.
+  anything. It is on by default; turning it off turns workspace reads into
+  ``ASK`` decisions, which degrade to ``DENY`` without an approver.
 * **Auto-approve writes** skips the prompt for ``write_file`` and ``edit_file``
-  only. ``delete_file``, ``undo_file`` and ``run_command`` keep asking whatever
-  this is set to, and ``NETWORK`` stays denied.
+  only, and is off by default. ``delete_file``, ``undo_file`` and
+  ``run_command`` keep asking whatever this is set to, and ``NETWORK`` stays
+  denied.
 
 A headless run -- the CLI, the tests, a start with no window attached -- has
 nobody to ask, so every prompt resolves to a denial and nothing mutating runs

@@ -9,6 +9,23 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+**Filesystem**
+
+- `undo_file` puts one file back the way it was before the newest change the
+  agent made to it. `write_file` and `edit_file` record a pre-image in a
+  session-scoped undo list — a stack per file, holding the exact bytes and a
+  SHA-256 digest — and one call reverses one step. Restoring absence when the
+  change created the file is supported; `delete_file` remains deliberately
+  irreversible and cannot be undone. An undo that would overwrite a file changed
+  outside the agent is refused rather than applied, and `undo_file` always asks,
+  like `delete_file`.
+- Structured diffs: `write_file` and `edit_file` now report what they changed —
+  a bounded unified diff, the number of lines added and removed, and whether the
+  text was truncated — in `ToolResult.data`. `diff_kind` names the cases with
+  nothing to compare (`created`, `unavailable`); `delete_file` reports no diff.
+
 ### Fixed
 
 - `max_command_output_chars` now reaches the command tool. The setting was
@@ -16,6 +33,10 @@ and the project uses [semantic versioning](https://semver.org/).
   was always the built-in 20000 characters and changing it did nothing. Both
   stdout and stderr are capped by the configured value, and truncation is still
   reported through `stdout_truncated` / `stderr_truncated`.
+- The v0.2 notes no longer overstate the approval guarantees: deleting a file and
+  running a command can be approved once, what they cannot receive is a session
+  grant; auto-approve reads is on by default rather than off; and the reason
+  line and risk classification are shown for commands, not for every tool.
 
 ---
 
