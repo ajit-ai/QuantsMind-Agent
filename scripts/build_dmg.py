@@ -21,8 +21,8 @@ Gatekeeper will therefore warn, and the documentation says so.
 
 Requires macOS (``hdiutil``) and PyInstaller's ``.app`` output::
 
-    python scripts/build_executable.py --distpath artifacts/v0.2.0/macos
-    python scripts/build_dmg.py --app artifacts/v0.2.0/macos/QuantsMindAgent.app
+    python scripts/build_executable.py --distpath artifacts/v0.3.0/macos
+    python scripts/build_dmg.py --app artifacts/v0.3.0/macos/QuantsMindAgent.app
 """
 
 from __future__ import annotations

@@ -24,12 +24,12 @@ Build requirements (native Linux; this cannot run on Windows or macOS)::
 
 Usage::
 
-    python scripts/build_deb.py --onedir artifacts/v0.2.0/ubuntu/onedir
+    python scripts/build_deb.py --onedir artifacts/v0.3.0/ubuntu/onedir
     python scripts/build_deb.py --onedir dist --output dist/deb
 
 Then, on a Debian or Ubuntu machine::
 
-    sudo dpkg -i quantsmind-agent_0.2.0_amd64.deb
+    sudo dpkg -i quantsmind-agent_0.3.0_amd64.deb
     quantsmind-agent --check-config     # exit 1 without an API key is expected
     sudo dpkg -r quantsmind-agent
 """

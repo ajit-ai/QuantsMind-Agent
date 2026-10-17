@@ -9,6 +9,13 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-17
+
+**Project intelligence + conversation continuity.** v0.2 made it safe for the
+agent to change a project; v0.3 makes it able to understand one, and makes it
+possible to come back to the same conversation tomorrow. Windows 11 AMD64 is the
+shipping platform.
+
 ### Added
 
 **Project intelligence (v0.3)**

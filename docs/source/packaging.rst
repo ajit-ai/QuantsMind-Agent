@@ -29,7 +29,7 @@ Model usage is separate, and it is the part that can cost money:
 * **Local models** avoid cloud charges entirely, if you run one and configure the
   application to use it. They need suitable hardware and are not our product.
 
-Version 0.2.0 has no paid licence, no subscription, no telemetry and no
+Version 0.3.0 has no paid licence, no subscription, no telemetry and no
 registration step.
 
 Supported platforms
@@ -45,25 +45,27 @@ Supported platforms
      - Notes
    * - Windows 11
      - AMD64
-     - verified
-     - Executable folder and MSI, both built and launched
+     - **verified**
+     - Executable folder and MSI, both built, installed and launched
    * - Linux (glibc)
      - x86_64
-     - unverified
-     - Build machinery exists; never run on Linux
+     - tooling only
+     - ``.deb`` builder exists; not part of the v0.3.0 platform scope
    * - macOS
-     - not built
-     - not built
-     - No native build machine available
+     - --
+     - tooling only
+     - ``.app``/``.dmg`` builders exist; not part of the v0.3.0 platform scope
    * - FreeBSD
-     - not built
-     - not built
-     - No native build machine available
+     - --
+     - tooling only
+     - ``.pkg`` builder exists; not part of the v0.3.0 platform scope
 
-"Verified" means: built from source on a machine of that OS, installed the way a
-user would, launched, and confirmed to render a window and shut down cleanly.
-"Unverified" means the build machinery exists but nobody has run the result on
-that OS, so no claim is made about it.
+**v0.3.0 ships for Windows 11 AMD64.** That is the whole of its platform scope:
+the executable folder and the MSI below are built and verified. The Linux, macOS
+and FreeBSD builders are in the repository because the packaging work supports
+them, but they were not run for this release and nothing here claims they work.
+"Verified" means built on that OS from this source, installed the way a user
+would, launched, and confirmed to render a window and shut down cleanly.
 
 Building
 ========
@@ -91,19 +93,19 @@ Build commands
 .. code-block:: bash
 
     # Executable folder -- every platform
-    python scripts/build_executable.py --distpath artifacts/v0.2.0/<platform>/onedir
+    python scripts/build_executable.py --distpath artifacts/v0.3.0/<platform>/onedir
 
     # Windows Installer (Windows)
-    python scripts/build_msi.py --onedir artifacts/v0.2.0/windows/onedir
+    python scripts/build_msi.py --onedir artifacts/v0.3.0/windows/onedir
 
     # Debian package (Debian/Ubuntu)
-    python scripts/build_deb.py --onedir artifacts/v0.2.0/ubuntu/onedir
+    python scripts/build_deb.py --onedir artifacts/v0.3.0/ubuntu/onedir
 
     # Disk image (macOS)
-    python scripts/build_dmg.py --app artifacts/v0.2.0/macos/QuantsMindAgent.app
+    python scripts/build_dmg.py --app artifacts/v0.3.0/macos/QuantsMindAgent.app
 
     # FreeBSD package (FreeBSD)
-    python scripts/build_freebsd_pkg.py --onedir artifacts/v0.2.0/freebsd/onedir
+    python scripts/build_freebsd_pkg.py --onedir artifacts/v0.3.0/freebsd/onedir
 
 .. warning::
 
@@ -120,8 +122,8 @@ Collect them into one manifest with checksums:
 
 .. code-block:: bash
 
-    python scripts/record_artifacts.py --artifacts artifacts/v0.2.0 \
-        --commit "$(git rev-parse HEAD)" --version 0.2.0
+    python scripts/record_artifacts.py --artifacts artifacts/v0.3.0 \
+        --commit "$(git rev-parse HEAD)" --version 0.3.0
 
 That writes ``MANIFEST.json`` (the whole matrix, including platforms that were
 **not** built, so an absent platform cannot be mistaken for a forgotten one) and
@@ -143,7 +145,7 @@ Double-click ``QuantsMindAgent-<version>-x64.msi``, or:
 
 .. code-block:: bat
 
-    msiexec /i QuantsMindAgent-0.2.0-x64.msi
+    msiexec /i QuantsMindAgent-0.3.0-x64.msi
 
 The default package is **per-user**: it installs to
 ``%LOCALAPPDATA%\Programs\QuantsMindAgent`` and needs **no elevation**. Build a
@@ -164,7 +166,7 @@ Linux -- Debian package
 
 .. code-block:: bash
 
-    sudo dpkg -i quantsmind-agent_0.2.0_amd64.deb
+    sudo dpkg -i quantsmind-agent_0.3.0_amd64.deb
 
 Removes with ``sudo dpkg -r quantsmind-agent``, or ``dpkg -P`` to purge package
 files. Either way your ``$XDG_CONFIG_HOME`` and ``$XDG_DATA_HOME`` are untouched;
@@ -191,7 +193,7 @@ FreeBSD
 
 .. code-block:: sh
 
-    sudo pkg install -y ./quantsmind-agent-0.2.0.pkg
+    sudo pkg install -y ./quantsmind-agent-0.3.0.pkg
     sudo pkg remove -y quantsmind-agent
 
 Installing into ``/usr/local``, with a menu entry in
@@ -220,31 +222,29 @@ The build system ships the checks that were used, so they can be re-run:
 .. code-block:: bash
 
     # Starts the bundle headlessly and exercises configuration, paths and tools
-    python scripts/smoke_test_executable.py --distpath artifacts/v0.2.0/windows/onedir
+    python scripts/smoke_test_executable.py --distpath artifacts/v0.3.0/windows/onedir
 
     # Launches the real executable on a real display and checks for a window
-    python scripts/gui_acceptance.py --distpath artifacts/v0.2.0/windows/onedir
+    python scripts/gui_acceptance.py --distpath artifacts/v0.3.0/windows/onedir
 
     # Installs, launches, reinstalls and uninstalls the MSI, and proves that the
     # real user profile is byte-identical afterwards
-    powershell -File scripts/verify_msi_install.ps1 -Msi artifacts/v0.2.0/windows/msi/QuantsMindAgent-0.2.0-x64.msi
+    powershell -File scripts/verify_msi_install.ps1 -Msi artifacts/v0.3.0/windows/msi/QuantsMindAgent-0.3.0-x64.msi
 
 Known issues and unverified platforms
 =====================================
 
-* **Linux: built but not launched.** The Windows bundle is smoke-tested, launched
-  and screenshotted here. No Linux build has been run on a Linux machine, so this
-  documentation makes no claim about it beyond "the build machinery exists".
-* **macOS: not built.** No macOS machine was available. The ``.app`` bundle is
-  produced by the existing spec and the ``.dmg`` builder is implemented, but
-  neither has been executed.
-* **FreeBSD: not built.** PyInstaller does not publish a FreeBSD bootloader, so
-  a FreeBSD bundle needs a route that is verified on FreeBSD rather than a
-  cross-compiled Linux build. No claim is made that the Linux artifact runs there.
-* **Nothing is code-signed.** No certificate is available on the build machine, so
-  Windows SmartScreen and macOS Gatekeeper will both warn on first run. Signing
-  needs a real certificate; an invented signature would be worse than none.
-* **No CI evidence.** The packaging workflow exists in
-  ``.github/workflows/package.yml`` for Windows, Linux and both macOS
-  architectures, but it has not been run for this milestone, so nothing here is
-  claimed on its authority.
+* **Windows is what this release ships.** Both Windows artifacts are built from
+  this source and were installed, launched and uninstalled on Windows 11.
+* **Linux, macOS and FreeBSD are tooling only.** ``build_deb.py``,
+  ``build_dmg.py`` and ``build_freebsd_pkg.py`` are implemented and refuse to run
+  on the wrong operating system, but no artifact was produced from them for
+  v0.3.0 and no claim is made about them. They are outside this release's
+  platform scope, not a defect in it.
+* **Nothing is code-signed.** No certificate is available on the build machine,
+  so Windows SmartScreen will warn on first run of the MSI or the executable.
+  Signing needs a real certificate; an invented signature would be worse than
+  none. macOS notarization, were that in scope, is likewise not performed.
+* **No CI evidence.** ``.github/workflows/package.yml`` covers Windows, Linux and
+  both macOS architectures, but it was not run for this release, so nothing here
+  is claimed on its authority.

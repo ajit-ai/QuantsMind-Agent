@@ -169,12 +169,12 @@ class TestArtifactManifest:
     def test_a_built_package_is_described_by_its_metadata(self, tmp_path: Path) -> None:
         target = tmp_path / "windows" / "msi"
         target.mkdir(parents=True)
-        package = target / "QuantsMindAgent-0.2.0-x64.msi"
+        package = target / "QuantsMindAgent-9.7.6-x64.msi"
         package.write_bytes(b"fake msi")
         (target / "BUILD-METADATA.json").write_text(
-            '{"artifact": "msi", "version": "0.2.0", "packaging_tool": "WiX Toolset 5.0.2",'
-            ' "filename": "QuantsMindAgent-0.2.0-x64.msi", "built_on": {"system": "Windows",'
-            ' "release": "11", "machine": "AMD64"}}',
+            '{"artifact": "msi", "version": "9.7.6", "packaging_tool": "WiX Toolset 5.0.2",'
+            ' "filename": "QuantsMindAgent-9.7.6-x64.msi",'
+            ' "built_on": {"system": "Windows", "release": "11", "machine": "AMD64"}}',
             encoding="utf-8",
         )
         entries = {entry.key: entry for entry in record_artifacts.collect(tmp_path)}

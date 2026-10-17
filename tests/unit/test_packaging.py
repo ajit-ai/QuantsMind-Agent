@@ -215,3 +215,40 @@ class TestPlatformMetadata:
     def test_requires_python_matches_the_tested_floor(self) -> None:
         text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
         assert 'requires-python = ">=3.11"' in text
+
+
+class TestVersionConsistency:
+    """One version, reported identically everywhere it can be read.
+
+    The version appears in the source module, the packaging metadata, the window
+    title, the MSI and the build metadata. Those are read by different tools at
+    different times, so a release that reports two different versions is a real
+    and confusing failure rather than a cosmetic one.
+    """
+
+    def test_pyproject_and_the_package_agree(self) -> None:
+        import tomllib
+
+        from quantsmind_agent.version import __version__
+
+        data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+        assert data["project"]["version"] == __version__
+
+    def test_version_info_matches_the_version_string(self) -> None:
+        from quantsmind_agent.version import __version__, version_info
+
+        assert ".".join(str(part) for part in version_info) == __version__
+
+    def test_the_ci_wheel_check_names_the_current_version(self) -> None:
+        """A stale filename there means the CI version gate checks nothing."""
+
+        import re
+
+        from quantsmind_agent.version import __version__
+
+        workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        # Every wheel filename the workflow names must be the current one: a
+        # stale name means the version gate inspects a file that no longer gets
+        # built, so it passes without checking anything.
+        named = set(re.findall(r"quantsmind_agent-(0\.\d+\.\d+)-py3", workflow))
+        assert named == {__version__}

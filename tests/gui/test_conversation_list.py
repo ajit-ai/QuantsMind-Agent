@@ -10,8 +10,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PySide6.QtWidgets import QGridLayout, QPushButton
 
 from quantsmind_agent.gui.main_window import _safe_filename
+from quantsmind_agent.gui.sidebar import Sidebar
 from quantsmind_agent.permissions import ApprovalOutcome
 from quantsmind_agent.schema import UserMessage
 from tests.fakes import FakeModelProvider, text_response, tool_response
@@ -452,3 +454,72 @@ class TestExportFromTheSidebar:
 
         assert gui_harness.context.unavailable_workspace == ""
         assert "not available" not in gui_harness.transcript.rsplit("Reopened", 1)[-1]
+
+
+class TestConversationControlsFit:
+    """The conversation controls have to be readable, not merely present.
+
+    Four buttons in one row did not fit the sidebar's minimum width. Qt keeps the
+    buttons and elides their labels instead, so "Export" rendered as "xpor" and
+    "Rename" as "enarr" -- the controls still worked, which is exactly why
+    nothing failed and nobody noticed. A screenshot of the installed
+    application is what surfaced it.
+    """
+
+    def test_every_control_label_is_shown_in_full(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        gui_harness.open_project(sample_project)
+        window = gui_harness.window
+        window.resize(window.minimumWidth(), 800)
+        window.show()
+        gui_harness.pump(300)
+        sidebar = window.sidebar
+
+        buttons = _conversation_buttons(sidebar)
+        assert buttons, "no conversation controls were found in the sidebar"
+        for button in buttons:
+            # sizeHint is the width the widget needs to draw its full text. Given
+            # less, Qt elides -- which is what turned "Export" into "xpor".
+            needed = button.sizeHint().width()
+            assert button.width() >= needed - 1, (
+                f"'{button.text()}' is {button.width()}px wide but needs {needed}px"
+            )
+
+    def test_the_controls_are_not_in_a_single_row(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        gui_harness.open_project(sample_project)
+        sidebar = gui_harness.window.sidebar
+
+        holding = None
+        for layout in sidebar.findChildren(QGridLayout):
+            buttons = [
+                layout.itemAt(index).widget()
+                for index in range(layout.count())
+                if isinstance(layout.itemAt(index).widget(), QPushButton)
+            ]
+            texts = {button.text() for button in buttons}
+            if "Export" in texts:
+                holding = (layout, texts)
+                break
+
+        assert holding is not None, "the export control is not in a grid layout"
+        layout, texts = holding
+        rows = {
+            layout.getItemPosition(index)[0]
+            for index in range(layout.count())
+            if isinstance(layout.itemAt(index).widget(), QPushButton)
+        }
+        assert len(texts) == 4, f"expected all four conversation controls, found {texts}"
+        assert len(rows) > 1, f"all conversation controls share row {rows} and will be elided"
+
+
+def _conversation_buttons(sidebar: Sidebar) -> list[QPushButton]:
+    """The four conversation controls, whatever layout holds them."""
+
+    return [
+        button
+        for button in sidebar.findChildren(QPushButton)
+        if button.text() in {"New", "Export", "Rename", "Delete"}
+    ]

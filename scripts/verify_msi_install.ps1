@@ -123,7 +123,22 @@ function Get-ArpEntry {
 Write-Host "MSI            : $Msi"
 Write-Host "install dir    : $InstallDir"
 Write-Host "real profile   : $realProfile (read-only fingerprint)"
-Write-Host "isolation      : $work`n"
+Write-Host "isolation      : $work"
+
+# The expected version comes from the package, never from a literal in this
+# script. Hard-coding it meant the check reported a failure the moment the
+# product moved to a new release -- and a version gate that fails on correct
+# output trains people to ignore it.
+$expectedVersion = $null
+$named = [regex]::Match((Split-Path -Leaf $Msi), '(\d+\.\d+\.\d+)')
+if ($named.Success) { $expectedVersion = $named.Groups[1].Value }
+$versionSource = Join-Path $repoRoot 'src\quantsmind_agent\version.py'
+if (Test-Path -LiteralPath $versionSource) {
+    $inTree = [regex]::Match((Get-Content -LiteralPath $versionSource -Raw), '"(\d+\.\d+\.\d+)"')
+    if ($inTree.Success) { $expectedVersion = $inTree.Groups[1].Value }
+}
+Write-Host "version        : $expectedVersion (from the source tree)"
+Write-Host ''
 
 # -- 1. install ------------------------------------------------------------
 Write-Host '--- install ---'
@@ -144,8 +159,9 @@ Check 'Desktop shortcut created' (Test-Path -LiteralPath $desktopLink) $desktopL
 $arp = @(Get-ArpEntry)
 Check 'listed in installed apps (per-user)' ($arp.Count -eq 1) `
     $(if ($arp.Count) { "$($arp[0].DisplayName) $($arp[0].DisplayVersion) at $($arp[0].InstallLocation)" } else { 'no ARP entry' })
-Check 'Add/Remove Programs reports version 0.2.0' ($arp.Count -eq 1 -and $arp[0].DisplayVersion -eq '0.2.0') `
-    $(if ($arp.Count) { $arp[0].DisplayVersion } else { 'n/a' })
+Check 'Add/Remove Programs reports the current version' `
+    ($arp.Count -eq 1 -and $arp[0].DisplayVersion -eq $expectedVersion) `
+    $(if ($arp.Count) { "$($arp[0].DisplayVersion) (expected $expectedVersion)" } else { 'n/a' })
 
 # -- 2. launch the installed application ----------------------------------
 Write-Host "`n--- launch (isolated profile and workspace) ---"

@@ -23,12 +23,12 @@ FreeBSD specifics that make this different from the Linux packaging
 Requires a native FreeBSD host with ``pkg`` and a Python 3.11+ that can run the
 application::
 
-    python scripts/build_executable.py --distpath artifacts/v0.2.0/freebsd
-    python scripts/build_freebsd_pkg.py --onedir artifacts/v0.2.0/freebsd
+    python scripts/build_executable.py --distpath artifacts/v0.3.0/freebsd
+    python scripts/build_freebsd_pkg.py --onedir artifacts/v0.3.0/freebsd
 
 Then on the FreeBSD machine::
 
-    sudo pkg install -y ./quantsmind-agent-0.2.0.pkg
+    sudo pkg install -y ./quantsmind-agent-0.3.0.pkg
     quantsmind-agent --check-config
     sudo pkg remove -y quantsmind-agent
 """

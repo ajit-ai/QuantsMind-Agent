@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QInputDialog,
     QLabel,
     QPushButton,
@@ -47,7 +46,11 @@ class Sidebar(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumWidth(260)
+        # 320px, not 260: the session panel's four controls sit two to a row, and
+        # at 260 each button was about 6px narrower than its own label, so Qt
+        # elided the text -- "Export" rendered as "xpor". Elided labels are worse
+        # than no labels, because the buttons still work and look intentional.
+        self.setMinimumWidth(320)
         self.setMaximumWidth(420)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         #: Directory chosen by the last folder dialog (``""`` when cancelled).
@@ -149,22 +152,28 @@ class Sidebar(QWidget):
         self._conversation_combo.currentIndexChanged.connect(self._on_conversation_chosen)
         grid.addWidget(self._conversation_combo, 1, 0, 1, 2)
 
-        buttons = QHBoxLayout()
+        # Four buttons in one row do not fit the sidebar's minimum width: Qt
+        # keeps the buttons and elides their labels instead ("Export" renders as
+        # "xpor"), which is worse than no label at all. Two rows give each button
+        # enough room for its full text at the narrowest supported width.
+        buttons = QGridLayout()
+        buttons.setHorizontalSpacing(6)
         new_button = QPushButton("New")
+        new_button.setToolTip("Start a new conversation")
         new_button.clicked.connect(self.new_conversation_requested.emit)
-        buttons.addWidget(new_button)
+        buttons.addWidget(new_button, 0, 0)
         export_button = QPushButton("Export")
         export_button.setToolTip("Save the listed conversation to a file")
         export_button.clicked.connect(self._on_export_clicked)
-        buttons.addWidget(export_button)
+        buttons.addWidget(export_button, 0, 1)
         rename_button = QPushButton("Rename")
         rename_button.setToolTip("Give the listed conversation a name you will recognise")
         rename_button.clicked.connect(self._on_rename_clicked)
-        buttons.addWidget(rename_button)
+        buttons.addWidget(rename_button, 1, 0)
         delete_button = QPushButton("Delete")
         delete_button.setToolTip("Delete the listed conversation")
         delete_button.clicked.connect(self._on_delete_clicked)
-        buttons.addWidget(delete_button)
+        buttons.addWidget(delete_button, 1, 1)
         grid.addLayout(buttons, 2, 0, 1, 2)
 
         self._conversation_ids: list[str] = []

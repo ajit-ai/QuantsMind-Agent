@@ -34,6 +34,11 @@ import build_msi  # noqa: E402
 
 WIX_NS = "{http://wixtoolset.org/schemas/v4/wxs}"
 
+#: A fixed version for the generator tests. They check that whatever version is
+#: asked for reaches the package, not that the product is on a particular
+#: release, so they do not have to change whenever the version does.
+SAMPLE_VERSION = "9.7.6"
+
 
 @pytest.fixture
 def bundle(tmp_path: Path) -> Path:
@@ -51,7 +56,7 @@ def bundle(tmp_path: Path) -> Path:
 
 def authoring(bundle: Path, tmp_path: Path, scope: str = "perUser") -> ElementTree.Element:
     path = tmp_path / f"Package-{scope}.wxs"
-    build_msi.generate_wxs(bundle, "QuantsMindAgent.exe", "0.2.0", scope, path)
+    build_msi.generate_wxs(bundle, "QuantsMindAgent.exe", SAMPLE_VERSION, scope, path)
     return ElementTree.parse(path).getroot()
 
 
@@ -146,7 +151,7 @@ class TestDirectoryNesting:
 class TestPackageProperties:
     def test_declares_the_product_version(self, wxs: ElementTree.Element) -> None:
         package = wxs.find(f"{WIX_NS}Package")
-        assert package is not None and package.get("Version") == "0.2.0"
+        assert package is not None and package.get("Version") == SAMPLE_VERSION
 
     def test_product_identity_is_constant_across_versions(self) -> None:
         """An upgrade only works if every version ships the same UpgradeCode."""
@@ -192,8 +197,8 @@ class TestIdentityStability:
 
         first = tmp_path / "a.wxs"
         second = tmp_path / "b.wxs"
-        build_msi.generate_wxs(bundle, "QuantsMindAgent.exe", "0.2.0", "perUser", first)
-        build_msi.generate_wxs(bundle, "QuantsMindAgent.exe", "0.3.0", "perUser", second)
+        build_msi.generate_wxs(bundle, "QuantsMindAgent.exe", "9.7.6", "perUser", first)
+        build_msi.generate_wxs(bundle, "QuantsMindAgent.exe", "9.8.0", "perUser", second)
         assert [
             c.get("Guid") for c in ElementTree.parse(first).getroot().iter(f"{WIX_NS}Component")
         ] == [c.get("Guid") for c in ElementTree.parse(second).getroot().iter(f"{WIX_NS}Component")]
@@ -286,7 +291,7 @@ class TestInstalledAppsEntry:
             )
         }
         assert names.get("DisplayName") == "QuantsMind-Agent"
-        assert names.get("DisplayVersion") == "0.2.0"
+        assert names.get("DisplayVersion") == SAMPLE_VERSION
         assert names.get("UninstallString")
 
 

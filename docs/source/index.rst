@@ -99,6 +99,7 @@ application rather than by the model.
 
    releases/v0.1
    releases/v0.2
+   releases/v0.3
    roadmap/roadmap
    security
 

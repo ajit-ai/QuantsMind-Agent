@@ -1,0 +1,202 @@
+==============
+Version 0.3
+==============
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Field
+     - Value
+   * - Version
+     - 0.3.0
+   * - Codename
+     - Continuity
+   * - Status
+     - Alpha; project intelligence, code navigation and conversation continuity
+   * - Baseline
+     - ``3e4e548`` (v0.2, frozen)
+   * - Platform
+     - Windows 11 AMD64
+
+What v0.3 is
+============
+
+v0.2 made it safe for the agent to *change* a project. v0.3 makes it able to
+*understand* one, and makes it possible to come back to the same conversation
+tomorrow.
+
+Two things were missing after v0.2, and both showed up as wasted effort rather
+than as errors. Every question about the project had to start from the file
+currently open, so "where are the tests?" meant walking the workspace by hand.
+And every application restart threw the conversation away, so a follow-up
+question meant re-explaining the project from scratch.
+
+v0.3 adds the intelligence and the continuity. It adds neither autonomy nor a new
+kind of authority: every tool the agent calls still passes through the same
+permission, approval and command-policy checks as in v0.2, and nothing here can
+reach a file outside the project you opened.
+
+Project intelligence
+====================
+
+The agent now reads the shape of the project before it acts on it.
+
+Discovery
+---------
+
+Opening a project performs one bounded pass that identifies what kind of project
+it is: ``pyproject.toml``, ``setup.py``/``setup.cfg``, ``requirements*.txt``, a
+``src/`` layout, package directories, test and documentation directories,
+``__main__.py``, console scripts declared in packaging metadata, and the usual
+build and CI files. It does not assume a layout. A project it cannot place is
+reported as ``unknown`` with the reason attached, because a confident wrong
+answer about the structure of a codebase is worse than an admitted gap.
+
+The result orients the system prompt on every turn, so the model knows where the
+source and tests live before it asks anything -- and it is re-derived per session
+rather than persisted, because it is a claim about files, and files change while
+the application is closed.
+
+Project context
+---------------
+
+``project_context`` answers, in one bounded call: what kind of project this is,
+where the source and tests live, which files and symbols match a task, which
+tests cover a named file, and which files import it. Matching is lexical rather
+than semantic, and says so in its output. It is bounded on every axis and reports
+truncation rather than quietly returning a short list as though it were complete.
+
+Code navigation
+---------------
+
+* ``code_outline`` -- every class, function, method and property in a Python file
+  with exact line ranges, signatures, decorators and docstring summaries. The
+  line range feeds ``edit_file``'s ``replace_lines``.
+* ``project_symbols`` -- the whole project's definitions in one call, filtered by
+  name or kind, served from a project-scoped map instead of re-walking the
+  workspace.
+* ``find_references`` -- definitions, import sites and call sites, with imports
+  resolved to real files, so an interface change shows exactly which dependent
+  files have to change with it.
+
+Cross-file reasoning
+--------------------
+
+Imports resolve through the discovered package layout, so ``import acme.cart``
+links to ``src/acme/cart.py`` in a ``src/`` project. From that the agent can
+follow ``main.py`` to ``service.py`` to ``repository.py`` to ``models.py``, and
+an edit reports **which files it affects** without being asked.
+
+Two navigation defects were found and fixed while building this, and both were
+confidently wrong rather than obviously broken:
+
+* absolute imports in a ``src/`` layout resolved to nothing, so every file in
+  such a project reported **no callers**;
+* ``from pkg import mod`` resolved to the package's ``__init__`` instead of the
+  submodule it names, so caller edges pointed at the package marker.
+
+Project map and invalidation
+----------------------------
+
+The symbol and import map is reused by the navigation tools and invalidated by
+the agent's own writes. Editing a module invalidates that module. Deleting one
+drops it *and every edge pointing at it*, because reporting a caller that no
+longer exists is worse than reporting none. Opening another project builds a new
+map, so nothing leaks between projects.
+
+Conversation continuity
+=======================
+
+Conversations now survive a restart.
+
+What is stored
+--------------
+
+Two histories are kept apart, and the distinction is deliberate:
+
+* the **model conversation** -- user and assistant messages, supplied to the model
+  as context;
+* **internal tool activity** -- tool calls, their arguments and their results,
+  kept for the interface and for diagnostics.
+
+Tool traffic never becomes model conversation. A model that has been handed its
+own tool output as if the user had typed it behaves differently than one that has
+not, and the reconstruction is where that mistake would be made.
+
+Ordering and restoration
+------------------------
+
+History is ordered deterministically by sequence and timestamp, not by whatever
+order the interface happens to hold messages in. Reopening a conversation
+restores every message, turn and tool result with its original identifiers and
+times; nothing is duplicated, reordered or dropped, and the restored session
+continues rather than starting over.
+
+Durability
+----------
+
+Each conversation is one JSON file, written atomically. A file that cannot be
+parsed is quarantined as ``.json.corrupt`` and skipped -- never silently
+invented, never deleted, and never a reason for the window to fail to open. A
+schema version travels with the data, and older files are migrated on read.
+
+Exports
+-------
+
+A conversation can be exported as Markdown or JSON, which is also the way out of
+the application: storage is a cache of what the model and the user said, not a
+place to keep anything that was never meant to be stored.
+
+Secrets
+-------
+
+Nothing that looks like a credential is persisted. Message and tool-result text
+passes a redaction filter before it is written, so a key pasted into the chat is
+stored as ``[redacted]``.
+
+New and resumed conversations
+-----------------------------
+
+Starting a new conversation leaves every stored conversation untouched and gives
+the new one its own identity. Switching conversations, workspaces or application
+sessions cannot mix their histories.
+
+What did not change
+===================
+
+Everything that made v0.2 safe is unchanged:
+
+* the agent still asks before writing, deleting or running anything, and cannot
+  be granted those permissions for the session;
+* the command policy still refuses dangerous commands before the user is asked,
+  because offering "Allow" for them would turn the dialog into a speed bump;
+* the agent still cannot reach a path outside the project you opened -- project
+  intelligence reads through the same workspace boundary as every other tool, and
+  is not a way around it;
+* credentials still live in the operating system's credential store, not in the
+  application, and certainly not in a conversation file.
+
+Known limitations
+=================
+
+* **Relevance is lexical, not semantic.** ``project_context`` matches the words of
+  a task against file and symbol names. A request that names no file and no
+  symbol ("make this faster") matches nothing and says so. Embeddings are
+  deliberately not used: a cache that can be wrong is worse than a walk that is
+  slow, and the value here is that it is deterministic and free.
+* **Python only, statically parsed.** Non-Python files are counted but not
+  parsed, and a file that does not parse is reported rather than guessed at.
+* **Discovery is bounded.** Roughly 600 files are indexed and 4000 directory
+  entries walked before it reports truncation. A monorepo degrades visibly rather
+  than silently.
+* **Test association is by name**, not by coverage tracing: it finds
+  ``test_cart.py`` for ``cart.py`` and misses anything less conventional.
+* **The undo journal is in-memory only.** It does not survive a restart, and it
+  can only reverse what the agent itself wrote through the tools.
+* **The provider credential in this development profile is expired**, so
+  live-model behaviour has not been re-verified in this cycle. Everything that
+  does not need a model has been.
+
+See :ref:`architecture-security-boundaries` for the security model in full, and
+``docs/source/packaging.rst`` for the Windows 11 packages this release ships.
