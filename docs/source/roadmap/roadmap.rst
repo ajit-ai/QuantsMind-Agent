@@ -67,6 +67,21 @@ prerequisite, not the follow-up.
 v0.3 -- handle real codebases
 =============================
 
+Code navigation
+---------------
+
+* ``code_outline``: every class, function, method and property in a Python file
+  with its exact line range, signature, decorators and docstring summary. The
+  line range feeds ``edit_file``'s ``replace_lines``, so a change to one
+  function no longer requires the whole module in the context window.
+* ``find_references``: definitions with ranges and call sites across the
+  project, so a rename or behaviour change can be scoped first.
+* Both are read-only, deterministic, offline -- no index, no embedding service,
+  no background process -- so they work with every provider including a local
+  one. Non-Python files and unparsable files are refused by name rather than
+  guessed at.
+* Implemented; see ``docs/source/user/tools.rst``.
+
 Retrieval-based context
 -----------------------
 

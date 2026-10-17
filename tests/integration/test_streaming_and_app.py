@@ -187,10 +187,13 @@ class TestApplicationContext:
         # Exact equality, not a subset: a tool appearing or disappearing without
         # a decision is a security-relevant change, so it must fail here. v0.2
         # adds the write/edit/delete tools, undo_file, run_command and the
-        # read-only Git tools to the four v0.1 readers.
+        # read-only Git tools to the four v0.1 readers; v0.3 adds the two
+        # read-only code-navigation tools.
         assert context.tools.names == [
+            "code_outline",
             "delete_file",
             "edit_file",
+            "find_references",
             "git_diff",
             "git_log",
             "git_status",

@@ -22,6 +22,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from quantsmind_agent.code_tools import build_code_tools
 from quantsmind_agent.command_tools import build_command_tools
 from quantsmind_agent.config import ConfigManager
 from quantsmind_agent.context import ContextEngine
@@ -257,6 +258,11 @@ class ApplicationContext:
             agent_settings = config.agent
             registry.register_all(
                 build_default_tools(self.workspace, max_read_bytes=agent_settings.max_file_bytes)
+            )
+            # Read-only navigation: outlines and call sites, so the model can aim
+            # an edit at a line range instead of reading whole modules.
+            registry.register_all(
+                build_code_tools(self.workspace, max_file_bytes=agent_settings.max_file_bytes)
             )
             # The journal lives on the session, not on the tools: every tool is
             # rebuilt here, and a write from the previous turn must still be

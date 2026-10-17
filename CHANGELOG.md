@@ -11,6 +11,21 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ### Added
 
+**Code navigation (v0.3)**
+
+- `code_outline` lists every class, function, method and property in a Python
+  file with its exact line range, signature, decorators and docstring summary.
+  Because `edit_file`'s `replace_lines` addresses line ranges, the model can now
+  aim a precise edit at one function without reading the whole module.
+- `find_references` reports where a symbol is defined and where it is used,
+  including import lines and attribute access, so a rename or behaviour change
+  can be scoped before it is made.
+- Both tools are read-only, deterministic and offline: no index, no embedding
+  service and no background process, so they work with every provider including
+  a local one. Non-Python files, unparsable files and unreadable files are
+  refused or counted rather than guessed at, and reference matching
+  over-reports by design so a call site is never missed.
+
 **Filesystem**
 
 - `undo_file` puts one file back the way it was before the newest change the
