@@ -9,7 +9,74 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-17
+
+**Controlled autonomous coding.** v0.4 lets the agent carry out a bounded piece
+of work end to end -- propose a plan, execute only the approved steps, verify,
+repair within a budget, and report what actually happened. Windows 11 AMD64 is the
+shipping platform. The model still proposes; the application decides.
+
+### Added
+
+- **Tasks.** `tasks.py` provides validated, versioned models for a task: identity,
+  objective, workspace, a structured plan with ordered steps and dependencies,
+  acceptance criteria, risk per step, an approval bound to a plan digest and
+  workspace and scope, execution records, file-change evidence, check results,
+  repair attempts, recovery decisions and a completion report.
+- **Plan validation for untrusted input.** `validate_plan` rejects unknown tools,
+  duplicate or malformed step ids, dependencies on steps that do not exist,
+  dependency cycles, unknown risk levels, path arguments that escape the
+  workspace, and plans larger than the step budget -- reporting every reason at
+  once. A plan that parses is not a plan that is allowed.
+- **One policy layer.** `task_policy.TaskPolicy` decides whether an operation may
+  run right now, weighing the workspace boundary (resolved through the real
+  `Workspace`), the approved plan, the approval's scope, risk, and the task's
+  lifecycle. The GUI, a retry, a recovery path and a model all go through it, and
+  every check that cannot answer yes answers no.
+- **An orchestrator that owns the state machine.** `orchestrator.Orchestrator`
+  schedules steps in dependency order, enforces budgets, records file-change
+  evidence by comparing the filesystem before and after, produces the completion
+  report from recorded evidence only, and advances one action per call so a GUI
+  worker or a test can drive it step by step.
+- **Bounded repair.** A failing step may be repaired up to a configurable limit
+  (three by default), may not add steps that were not in the approved plan, and
+  ends the task as failed rather than widening the scope when the budget is spent.
+- **Verification that reports what ran.** `verification.py` discovers checks from
+  `pyproject.toml`, `setup.cfg` and a `Makefile`, and records each as passed,
+  failed, skipped, blocked or not-run. Nothing that could not run is counted as a
+  pass; a timing-out check is inconclusive rather than failed.
+- **Durable task storage.** `task_store.py` keeps one atomically written JSON
+  file per task, separate from conversations, with corruption quarantined rather
+  than deleted and newer schema versions refused.
+- **Recovery that asks.** `recovery.py` compares a stored task against the
+  filesystem and produces explicit decisions for an interrupted step, a changed
+  or missing file, an uncertain command outcome, a missing workspace, or an
+  approval that no longer matches. It never replays a side effect.
+- **A task panel.** `gui/task_panel.py` shows the plan for review, step statuses,
+  changed files, check outcomes and the report, runs the orchestrator on a worker
+  thread, and disables controls that are not valid for the task's real state.
+- **`docs/source/releases/v0.4.rst`** documents the lifecycle, the policy
+  semantics, budgets, recovery, and what this milestone deliberately is not.
+
+### Fixed
+
+- **A failed step stayed eligible for execution**, so it would re-run until the
+  step budget was exhausted -- unbounded retry wearing a budget's clothes.
+  Retrying is now the repair controller's decision, made with the failure
+  evidence in hand.
+- **The task policy treated every string argument as a filesystem path**, so a
+  write step's `content` payload failed its own scope check.
+- **An approved scope of `src` covered `src/../../etc/passwd`**, because the
+  containment comparison was textual and did not collapse `..` segments.
+- **`git status` was classified as a network operation**, because `git` was
+  matched as a program name rather than by its subcommand. Reading the
+  repository's own history would have demanded an approval every time.
+- The MSI verifier asserted the installed-apps version equalled a literal, so it
+  reported a failure against a correct installer at every version bump.
+
 ## [0.3.0] - 2026-10-17
+
+**Project intelligence + conversation continuity.**
 
 **Project intelligence + conversation continuity.** v0.2 made it safe for the
 agent to change a project; v0.3 makes it able to understand one, and makes it

@@ -101,6 +101,10 @@ class TaskWorkerBridge(QObject):
         self._worker.failed.connect(self.failed.emit)
         self._worker.finished.connect(self.finished.emit)
         self._worker.finished.connect(self._thread.quit)
+        # Started from the thread, not from here. Calling worker.run() directly
+        # would execute the whole task on the calling thread -- the UI thread --
+        # which is precisely the freeze this class exists to avoid.
+        self._thread.started.connect(self._worker.run)
 
     @property
     def running(self) -> bool:
@@ -110,7 +114,6 @@ class TaskWorkerBridge(QObject):
         if self._thread.isRunning():
             return
         self._thread.start()
-        self._worker.run()
 
     def cancel(self) -> None:
         self._worker.cancel()

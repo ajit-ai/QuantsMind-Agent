@@ -79,7 +79,7 @@ def _wait_for_terminal(qapp: object, task: Task, limit_ms: int = 5000) -> None:
 
     deadline = time.monotonic() + limit_ms / 1000
     while not task.terminal and time.monotonic() < deadline:
-        _wait_for_terminal(qapp, task)
+        qapp.processEvents()  # type: ignore[attr-defined]
         time.sleep(0.01)
     qapp.processEvents()  # type: ignore[attr-defined]
 
