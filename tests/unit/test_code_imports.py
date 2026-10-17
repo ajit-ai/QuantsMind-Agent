@@ -110,9 +110,26 @@ class TestResolution:
         assert bindings[0].imported_name == "Store"
 
     def test_a_package_import_resolves_to_its_init(self, workspace: Workspace) -> None:
-        bindings = self._resolve(workspace, "from pkg import Store\n", "top.py")
+        # ``from pkg import Registry`` where no submodule of that name exists --
+        # deliberately a name that cannot collide with ``store`` by case, which on
+        # a case-insensitive filesystem would otherwise find ``pkg/store.py``. The
+        # name has to come from the package marker, the only file that can bind it.
+        bindings = self._resolve(workspace, "from pkg import Registry\n", "top.py")
 
         assert bindings[0].path == "pkg/__init__.py"
+
+    def test_a_package_import_prefers_the_submodule_it_names(self, workspace: Workspace) -> None:
+        # ``from pkg import store`` names a submodule. Python imports it, and the
+        # agent needs that file rather than the package marker.
+        bindings = self._resolve(workspace, "from pkg import store\n", "top.py")
+
+        assert bindings[0].path == "pkg/store.py"
+        assert bindings[0].kind == "submodule"
+
+    def test_a_relative_package_import_prefers_the_submodule(self, workspace: Workspace) -> None:
+        bindings = self._resolve(workspace, "from . import store\n", "pkg/app.py")
+
+        assert bindings[0].path == "pkg/store.py"
 
     def test_a_plain_import_resolves_the_module_file(self, workspace: Workspace) -> None:
         bindings = self._resolve(workspace, "import pkg.store\n", "top.py")

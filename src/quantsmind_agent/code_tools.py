@@ -43,6 +43,7 @@ from quantsmind_agent.code_index import (
 from quantsmind_agent.errors import InvalidPathError
 from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.permissions import Permission
+from quantsmind_agent.project_intel import ProjectIntelligence, task_context
 from quantsmind_agent.tools import ToolResult, ToolSpec
 from quantsmind_agent.workspace import Workspace
 
@@ -394,9 +395,9 @@ class ProjectSymbolsTool:
     index view: every definition in the project, filtered by a name fragment or a
     kind, so the model can go straight to the file that matters.
 
-    The result is deliberately a *map*, not an index: there is no cache, nothing
-    is persisted, and nothing survives the call. A stale index is worse than no
-    index when the model acts on it.
+    Uncached, this walks and parses the project on every call. When a shared
+    :class:`ProjectIntelligence` is supplied it answers from that instead, and
+    a file the agent has just written is re-read rather than reported stale.
     """
 
     def __init__(
@@ -405,10 +406,12 @@ class ProjectSymbolsTool:
         *,
         max_bytes: int = 2_000_000,
         max_files: int = _MAX_SCANNED_FILES,
+        intelligence: ProjectIntelligence | None = None,
     ) -> None:
         self._workspace = workspace
         self._max_bytes = max_bytes
         self._max_files = max_files
+        self._intelligence = intelligence
         self.spec = ToolSpec(
             name="project_symbols",
             description=(
@@ -458,6 +461,17 @@ class ProjectSymbolsTool:
         )
 
     def run(self, arguments: dict[str, Any]) -> ToolResult:
+        """Answer from the shared index when there is one, else by scanning.
+
+        Both paths return the same shape, so nothing downstream -- a test, the
+        model, the GUI -- has to care which one ran.
+        """
+
+        if self._intelligence is not None:
+            return self.run_indexed(arguments)
+        return self.scan(arguments)
+
+    def scan(self, arguments: dict[str, Any]) -> ToolResult:
         root = str(arguments.get("path") or ".")
         query = str(arguments.get("query") or "").strip().lower()
         kind = str(arguments.get("kind") or "").strip()
@@ -529,12 +543,235 @@ class ProjectSymbolsTool:
             },
         )
 
+    def run_indexed(self, arguments: dict[str, Any]) -> ToolResult:
+        """Answer from the shared project map instead of walking the project.
 
-def build_code_tools(workspace: Workspace, *, max_file_bytes: int = 2_000_000) -> list[Any]:
-    """Instantiate the v0.3 code-navigation tools bound to ``workspace``."""
+        Same contract as :meth:`run`: a filtered list of symbols with their file
+        and line range, bounded, and ``truncated`` set when the cap was hit. The
+        difference is cost -- one walk for the whole session rather than one per
+        call.
+        """
 
-    return [
+        intel = self._intelligence
+        if intel is None:  # pragma: no cover - guarded by build_code_tools
+            return self.run(arguments)
+        root = str(arguments.get("path") or ".")
+        query = str(arguments.get("query") or "").strip().lower()
+        kind = str(arguments.get("kind") or "").strip()
+        limit = _as_int(arguments, "max_results", 200, low=1, high=500)
+
+        if not intel.is_indexed:
+            intel.index()
+        # ``path`` may name a directory to map, or one file to report on. Treating
+        # a file as a directory prefix silently returned nothing at all, which reads
+        # as "this file defines no symbols" rather than "you asked the wrong way".
+        target = "" if root in (".", "") else root.rstrip("/")
+        exact_file = bool(target) and self._workspace.is_file(target)
+
+        symbols: list[dict[str, object]] = []
+        total = 0
+        truncated = False
+        unparsable: list[str] = []
+        considered = 0
+        for path in intel.map.known_paths():
+            if exact_file:
+                if path != target:
+                    continue
+            elif target and not path.startswith(f"{target}/"):
+                continue
+            considered += 1
+            facts = intel.map.facts(path)
+            if facts.unparsable:
+                unparsable.append(path)
+                continue
+            for symbol in facts.symbols:
+                if kind and symbol.kind != kind:
+                    continue
+                if query and query not in symbol.qualified.lower():
+                    continue
+                total += 1
+                if len(symbols) < limit:
+                    symbols.append({"path": path, **symbol.to_dict()})
+                else:
+                    truncated = True
+                    break
+            if truncated:
+                break
+
+        described = "".join(
+            part
+            for part in (
+                f" matching '{query}'" if query else "",
+                f" of kind {kind}" if kind else "",
+            )
+        )
+        return ToolResult.success(
+            self.spec.name,
+            f"{total} symbols{described} across {intel.indexed_files} indexed files",
+            {
+                "root": root,
+                # Same keys as the scanning path: a caller must not have to know
+                # which one answered.
+                "source": "project index",
+                "files_scanned": considered,
+                "files_skipped": 0,
+                "files_indexed": intel.indexed_files,
+                "unparsable_files": unparsable[:20],
+                "symbol_count": total,
+                "returned": len(symbols),
+                "truncated": truncated,
+                "symbols": symbols,
+            },
+        )
+
+
+class ProjectContextTool:
+    """Bounded, task-oriented context for the project the agent is working in.
+
+    The gap this fills: ``project_symbols`` answers "where is X defined" but
+    nothing answers "what *is* this project" or "what should I read before I touch
+    this file". Without it the agent walks the workspace a directory at a time,
+    which is slow on a large project and unbounded in what it puts in the context.
+
+    Deliberately *bounded and lexical*. It matches the words of a task against
+    paths and symbol names -- the same evidence ``search_content`` uses, gathered
+    once -- and says so in ``relevance`` rather than pretending to semantic
+    understanding. Output is capped on every axis and ``truncated`` says when a
+    cap was hit, because a model told "12 related files" when there were 300 will
+    work with 12 and call it thorough.
+    """
+
+    def __init__(
+        self,
+        workspace: Workspace,
+        intelligence: ProjectIntelligence,
+        *,
+        max_bytes: int = 2_000_000,
+    ) -> None:
+        self._workspace = workspace
+        self._intelligence = intelligence
+        self._max_bytes = max_bytes
+        self.spec = ToolSpec(
+            name="project_context",
+            description=(
+                "Describe this project and return the bounded context relevant to a task: "
+                "what kind of project it is, where the source and tests live, the files "
+                "and symbols that match, the tests covering them, and who imports the "
+                "file you named. Use it first, before outlining files one by one, to "
+                "understand the project. Results are capped and say so; ask again with a "
+                "path or symbol to narrow down. Python projects only."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": (
+                            "What you are about to do, in your own words. Matched against "
+                            "file and symbol names to pick the most relevant files."
+                        ),
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "A file you are about to change. Its importers and the tests "
+                            "around it are reported, which is what an edit needs."
+                        ),
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "A symbol name to centre the context on.",
+                    },
+                    "max_files": {
+                        "type": "integer",
+                        "description": "Maximum files to return (1-100, default 20).",
+                    },
+                    "max_symbols": {
+                        "type": "integer",
+                        "description": "Maximum symbols to return (1-400, default 40).",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+            permission=Permission.READ_WORKSPACE,
+            summary_template="project context",
+        )
+
+    def run(self, arguments: dict[str, Any]) -> ToolResult:
+        task = str(arguments.get("task") or "")
+        path = str(arguments.get("path") or "")
+        symbol = str(arguments.get("symbol") or "")
+        if not (task or path or symbol):
+            return ToolResult.failure(
+                self.spec.name,
+                self.spec.summarize(arguments),
+                "Give a task, a path or a symbol so the context has something to aim at.",
+            )
+
+        profile = self._intelligence.profile
+        if not self._intelligence.is_indexed:
+            # One bounded walk for the whole session, paid for by the first call
+            # rather than by every one of them.
+            self._intelligence.index()
+        context = task_context(
+            self._intelligence,
+            task=task,
+            path=path,
+            symbol=symbol,
+            max_files=_as_int(arguments, "max_files", 20, low=1, high=100),
+            max_symbols=_as_int(arguments, "max_symbols", 40, low=1, high=400),
+        )
+        data = context.to_dict()
+        data["relevance"] = (
+            "lexical: task words matched against file and symbol names, plus import edges"
+        )
+        if not self._intelligence.is_indexed:
+            data["index"] = {
+                "state": "not indexed",
+                "hint": "call again after a change for symbol-level detail",
+            }
+        else:
+            data["index"] = {
+                "state": "indexed",
+                "files": self._intelligence.indexed_files,
+                "pending_refresh": list(self._intelligence.stale_files)[:10],
+            }
+        return ToolResult.success(
+            self.spec.name,
+            f"{profile.kind} project, {len(context.files)} files and {len(context.symbols)} "
+            f"symbols relevant{'' if not context.truncated else ' (truncated)'}",
+            data,
+        )
+
+
+def build_code_tools(
+    workspace: Workspace,
+    *,
+    max_file_bytes: int = 2_000_000,
+    intelligence: ProjectIntelligence | None = None,
+) -> list[Any]:
+    """Instantiate the v0.3 code-navigation tools bound to ``workspace``.
+
+    ``intelligence`` is the shared, session-scoped project map. Passing it is what
+    makes repeated navigation cheap; when it is absent the tools keep working
+    uncached, which is what an embedding caller gets by default.
+    """
+
+    tools: list[Any] = [
         CodeOutlineTool(workspace, max_bytes=max_file_bytes),
         FindReferencesTool(workspace, max_bytes=max_file_bytes),
-        ProjectSymbolsTool(workspace, max_bytes=max_file_bytes),
     ]
+    if intelligence is not None:
+        tools.append(
+            ProjectSymbolsTool(
+                workspace,
+                max_bytes=max_file_bytes,
+                max_files=_MAX_SCANNED_FILES,
+                intelligence=intelligence,
+            )
+        )
+        tools.append(ProjectContextTool(workspace, intelligence, max_bytes=max_file_bytes))
+    else:
+        tools.append(ProjectSymbolsTool(workspace, max_bytes=max_file_bytes))
+    return tools

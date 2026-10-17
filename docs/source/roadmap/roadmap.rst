@@ -79,12 +79,31 @@ Code navigation
   exactly which dependent files have to change with it, aliases included.
   One level of import expansion from those dependents, bounded.
 * ``project_symbols``: the whole project's definitions in one call, filtered by
-  name or kind, so locating code does not cost one outline per file. A map, not
-  a cache: nothing persists between calls.
-* Both are read-only, deterministic, offline -- no index, no embedding service,
-  no background process -- so they work with every provider including a local
-  one. Non-Python files and unparsable files are refused by name rather than
-  guessed at.
+  name or kind, so locating code does not cost one outline per file.
+* Both are read-only, deterministic, offline -- no embedding service, no
+  background process -- so they work with every provider including a local one.
+  Non-Python files and unparsable files are refused by name rather than guessed
+  at.
+* Implemented; see ``docs/source/user/tools.rst``.
+
+Project intelligence
+--------------------
+
+* ``project_context``: what kind of project this is, where the source, tests and
+  docs live, which files and symbols match the task, which tests cover a named
+  file, and which files import it. Bounded on every axis, with an explicit
+  truncation flag, because a model told "12 relevant files" when there were 300
+  will call 12 thorough.
+* One bounded discovery pass recognises the usual Python signals and reports its
+  confidence and what it could not determine, rather than assuming one layout.
+* A project-scoped symbol and import map replaces the repeated full walk, reusing
+  the existing parsers. It is invalidated per file by the agent's own writes,
+  created files, deletes and undos, and rebuilt wholesale when the project
+  changes. Never persisted: it is a claim about files, and files change while the
+  application is closed.
+* Deliberately still out of scope: embeddings, an index service, and a background
+  daemon. The value here is deterministic and free, and a cache that can be wrong
+  is worse than a walk that is slow.
 * Implemented; see ``docs/source/user/tools.rst``.
 
 Retrieval-based context
@@ -92,6 +111,9 @@ Retrieval-based context
 
 * Index files on open (incremental, watching the filesystem).
 * Rank candidates against the question; inject the top matches with citations.
+* Partly superseded by ``project_context`` and the project map above, which cover
+  the structure-aware case deterministically. What remains genuinely open is
+  *ranking by meaning* rather than by name, which is the embedding question.
 * Implemented behind ``ContextProvider``, so the Agent Core does not change.
 
 Conversation persistence

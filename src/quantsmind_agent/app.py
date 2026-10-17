@@ -48,6 +48,7 @@ from quantsmind_agent.permissions import (
     PermissionRule,
     StaticPermissionProvider,
 )
+from quantsmind_agent.project_intel import ProjectIntelligence
 from quantsmind_agent.providers import build_provider
 from quantsmind_agent.session import Session
 from quantsmind_agent.tools import ToolRegistry
@@ -87,6 +88,8 @@ class ApplicationContext:
         self.session = Session()
         self.context_engine = ContextEngine()
         self.workspace: Workspace | None = None
+        #: Bounded orientation for the system prompt, replaced per workspace.
+        self.context_engine.set_project_intel(None)
         self.bridge: Any | None = None
         #: GUI approval bridge, attached by the main window. While it is absent
         #: (CLI, tests, startup) every ASK resolves to DENY.
@@ -95,6 +98,11 @@ class ApplicationContext:
         self._cancel = threading.Event()
         #: Durable conversation storage; ``None`` when persistence is switched off.
         self.conversations: ConversationStore | None = None
+        #: Project-scoped discovery and symbol/import map. Owned here rather than by
+        #: a tool because the tools are rebuilt on every workspace or settings
+        #: change, which is exactly when a cache would be thrown away. Session-scoped
+        #: and deliberately not persisted: it is a claim about files on disk.
+        self.project_intel: ProjectIntelligence | None = None
         #: Per-conversation storage bounds, rebuilt with the store.
         self._storage_limits = StorageLimits()
         #: Title of the conversation in progress, derived from the first request.
@@ -329,7 +337,11 @@ class ApplicationContext:
             # Read-only navigation: outlines and call sites, so the model can aim
             # an edit at a line range instead of reading whole modules.
             registry.register_all(
-                build_code_tools(self.workspace, max_file_bytes=agent_settings.max_file_bytes)
+                build_code_tools(
+                    self.workspace,
+                    max_file_bytes=agent_settings.max_file_bytes,
+                    intelligence=self.project_intel,
+                )
             )
             # The journal lives on the session, not on the tools: every tool is
             # rebuilt here, and a write from the previous turn must still be
@@ -339,9 +351,18 @@ class ApplicationContext:
                     self.workspace,
                     max_file_bytes=agent_settings.max_file_bytes,
                     journal=session.revisions,
+                    intelligence=self.project_intel,
                 )
             )
-            registry.register_all([build_undo_tool(self.workspace, session.revisions)])
+            registry.register_all(
+                [
+                    build_undo_tool(
+                        self.workspace,
+                        session.revisions,
+                        intelligence=self.project_intel,
+                    )
+                ]
+            )
             registry.register_all(
                 build_command_tools(
                     self.workspace,
@@ -395,6 +416,11 @@ class ApplicationContext:
         """Point the whole application at ``path``."""
 
         workspace = Workspace(path)
+        # A different project is a different question, so this is a new instance
+        # rather than a reset: nothing from the previous project can leak into the
+        # new one's answers.
+        self.project_intel = ProjectIntelligence(workspace)
+        self.context_engine.set_project_intel(self.project_intel)
         self.workspace = workspace
         self.session.set_workspace(workspace)
         self.context_engine.set_workspace(workspace)
@@ -410,6 +436,8 @@ class ApplicationContext:
 
     def close_workspace(self) -> None:
         self.workspace = None
+        self.project_intel = None
+        self.context_engine.set_project_intel(None)
         self.session.set_workspace(None)
         self.context_engine.set_workspace(None)
         self._rebuild()

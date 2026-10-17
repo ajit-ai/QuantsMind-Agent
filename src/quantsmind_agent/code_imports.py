@@ -34,6 +34,7 @@ def importers_of(
     target_path: str,
     *,
     max_files: int = 400,
+    aliases: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, object]], bool]:
     """Files that import ``target_path``, and whether the scan was cut short.
 
@@ -69,7 +70,7 @@ def importers_of(
         except SyntaxError:
             continue
         for record in records:
-            for binding in resolve_import(workspace, record, entry.path):
+            for binding in resolve_import(workspace, record, entry.path, aliases):
                 if binding.path == target_path:
                     importers.append(
                         {
@@ -232,10 +233,35 @@ def _candidate_paths(dotted: str) -> list[str]:
     return ["/".join([*parts, "__init__.py"]), "/".join(parts) + ".py"]
 
 
-def resolve_absolute(workspace: Workspace, dotted: str) -> str | None:
-    """Resolve a dotted module against the workspace root, or ``None``."""
+def resolve_absolute(
+    workspace: Workspace,
+    dotted: str,
+    aliases: dict[str, str] | None = None,
+) -> str | None:
+    """Resolve a dotted module against the workspace root, or ``None``.
+
+    ``aliases`` maps an importable package name onto the directory it actually
+    occupies, e.g. ``{"quantsmind_agent": "src/quantsmind_agent"}``. It is needed
+    for any project with a ``src/`` layout, where ``import quantsmind_agent.app``
+    names ``src/quantsmind_agent/app.py`` and the two spellings share no prefix.
+    Without it such an import resolves to nothing -- and a caller that reports
+    "nothing imports this" on that basis is confidently wrong, which is worse than
+    admitting the gap.
+    """
 
     for candidate in _candidate_paths(dotted):
+        if workspace.is_file(candidate):
+            return candidate
+    if not aliases:
+        return None
+    head, _, tail = dotted.partition(".")
+    prefix = aliases.get(head)
+    if not prefix:
+        return None
+    redirected = f"{prefix}.{tail}" if tail else prefix
+    if redirected == dotted:
+        return None
+    for candidate in _candidate_paths(redirected):
         if workspace.is_file(candidate):
             return candidate
     return None
@@ -245,6 +271,7 @@ def resolve_import(
     workspace: Workspace,
     record: ImportRecord,
     importer_path: str,
+    aliases: dict[str, str] | None = None,
 ) -> list[ResolvedImport]:
     """Map one import statement onto workspace files.
 
@@ -252,6 +279,8 @@ def resolve_import(
     more than one for ``import a, b``. A statement that cannot be resolved
     returns an empty list, which is how the tool reports it honestly instead of
     guessing at a target.
+
+    ``aliases`` is forwarded to :func:`resolve_absolute`; see its docstring.
     """
 
     if record.level:
@@ -264,6 +293,30 @@ def resolve_import(
             return []
         prefix = ".".join(parts)
         target = f"{prefix}.{record.module}" if record.module else prefix
+
+        if not record.module and record.is_from:
+            # ``from . import store`` has no module of its own: each imported name
+            # is a submodule of the current package. Resolving it to the package
+            # ``__init__`` instead is wrong in a way that matters -- the file the
+            # agent needs to open is ``store.py``, not the package marker -- and it
+            # is one of the most common import forms there is.
+            bindings: list[ResolvedImport] = []
+            for name, asname in record.names:
+                if name == "*":
+                    continue
+                submodule = resolve_absolute(workspace, f"{prefix}.{name}", aliases)
+                if submodule is not None:
+                    bindings.append(
+                        ResolvedImport(
+                            path=submodule,
+                            bound_name=asname or name,
+                            imported_name=name,
+                            kind="submodule",
+                            line=record.line,
+                        )
+                    )
+            if bindings:
+                return bindings
     else:
         target = record.bare_module
 
@@ -273,7 +326,7 @@ def resolve_import(
     if not record.is_from:
         # ``import pkg.store`` binds the top-level name ``pkg`` in the importer,
         # but the module it names lives in a file the agent wants to see.
-        resolved = resolve_absolute(workspace, target)
+        resolved = resolve_absolute(workspace, target, aliases)
         if resolved is None:
             return []
         return [
@@ -286,7 +339,31 @@ def resolve_import(
             )
         ]
 
-    resolved = resolve_absolute(workspace, target)
+    resolved = resolve_absolute(workspace, target, aliases)
+
+    # ``from pkg import mod`` where ``mod`` is a submodule. Python imports the
+    # submodule in that case, and the package's ``__init__`` is not the file the
+    # agent needs to open -- but ``pkg`` on its own resolves to the package marker,
+    # so without this the caller edge points at ``__init__.py`` instead.
+    if record.is_from:
+        submodule_bindings: list[ResolvedImport] = []
+        for name, asname in record.names:
+            if name == "*":
+                continue
+            candidate = resolve_absolute(workspace, f"{target}.{name}", aliases)
+            if candidate is not None and not candidate.endswith("__init__.py"):
+                submodule_bindings.append(
+                    ResolvedImport(
+                        path=candidate,
+                        bound_name=asname or name,
+                        imported_name=name,
+                        kind="submodule",
+                        line=record.line,
+                    )
+                )
+        if submodule_bindings:
+            return submodule_bindings
+
     if resolved is None:
         # ``from pkg.store import name`` may still point at a symbol inside the
         # module even when the module is a package that re-exports it.

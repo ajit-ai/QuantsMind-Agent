@@ -11,6 +11,56 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ### Added
 
+**Project intelligence (v0.3)**
+
+- The agent now understands the project before it changes it. A new
+  `project_context` tool answers, in one bounded call: what kind of project this
+  is, where the source and tests live, which files and symbols match the task,
+  which tests cover the file you named, and which files import it. The system
+  prompt is oriented from the same profile every turn, so the model knows the
+  layout before it asks.
+- Discovery recognises `pyproject.toml`, `setup.py`/`setup.cfg`,
+  `requirements*.txt`, `src/` layouts, package directories, test and documentation
+  directories, `__main__.py`, console scripts declared in `pyproject.toml` or
+  `setup.cfg`, and the usual build and CI files -- in one bounded pass, without
+  assuming any particular layout. It reports what it could not determine and how
+  confident it is rather than guessing, so a project it cannot place reads as
+  `unknown` rather than as a confident mistake.
+- A project-scoped symbol and import map, so the navigation tools stop walking
+  the whole workspace on every call. It reuses the existing parsers: there is no
+  second Python parser in this product, and no embeddings, index service, daemon
+  or network dependency.
+- Invalidation is per file and driven by the agent's own writes. Editing a module
+  invalidates that module; creating one adds it; deleting one drops it *and every
+  edge that pointed at it*; undo re-invalidates what it restored. Opening another
+  project builds a new map, so nothing leaks between projects. A file that has
+  been invalidated is re-read rather than answered from the previous record.
+- Project intelligence is not written into conversations. It is a claim about
+  files on disk, and files change while the application is closed, so it is
+  rebuilt per session rather than persisted as though it were still true.
+
+### Fixed
+
+- **An edit whose `old_text` ended with a newline could be refused on the last
+  line of a file**, with "the text you asked to replace is not in the file any
+  more" -- which was not true. The trailing newline was kept out of the text the
+  needle was matched against, and a model naturally copies the line it read
+  including the newline.
+- **Absolute imports in a `src/` layout resolved to nothing.** `import acme.cart`
+  names `src/acme/cart.py` and the two spellings share no prefix, so the importer
+  scan reported *no callers* for every file in such a project -- a confident,
+  specific, wrong answer, and the dangerous kind. Imports now resolve through the
+  discovered package layout.
+- **`from pkg import mod` resolved to the package's `__init__.py`** rather than to
+  the submodule it names, so a caller edge pointed at the package marker instead of
+  the file an agent needs to open. The submodule is preferred when it exists, and
+  the package marker remains the answer when it does not.
+- `project_symbols` returned nothing when `path` named a single file, because the
+  file was treated as a directory prefix -- and reading that as "this file defines
+  nothing" is worse than an error.
+- `python -m pkg` was reported as `python -m pkg.__main__` or
+  `python -m src.pkg.__main__`; neither command runs.
+
 **Conversation resumption (v0.3)**
 
 - A reopened conversation now shows what actually happened: user requests,

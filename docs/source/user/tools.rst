@@ -205,8 +205,89 @@ read yet does not cost one outline per file.
 finds ``load_settings``; ``symbol_count`` counts everything that matched even
 when ``truncated`` cut the list short.
 
-It is a map, not an index: nothing is cached and nothing persists. A stale index
-would be worse than none, because the model would act on it.
+It answers from a shared, session-scoped index rather than re-walking the project
+on every call -- the first call pays for the walk, the rest are free. A file the
+agent writes, creates, deletes or undoes is re-read before anything is reported
+about it, so the index is never the stale one. See :ref:`project-intelligence`.
+The output says which path answered (``source: project index``) and what is
+waiting to be re-read (``pending_refresh``).
+
+``project_context``
+-------------------
+
+The project-level question: *what is this project, and what do I need to look at
+for this task?* Ask it before outlining files one at a time.
+
+.. code-block:: text
+
+    input:  task (what you are about to do),
+            path (a file you are about to change),
+            symbol (a symbol to centre on),
+            max_files (1-100, default 20),
+            max_symbols (1-400, default 40)
+    output: project (the layout and classification), files[], symbols[],
+            tests[], callers[], notes[], scanned, truncated, relevance, index
+
+It answers the questions that otherwise cost a walk each: what kind of project
+this is, where the source and tests live, which files and symbols match the task,
+which tests cover the file you named, and which files import it.
+
+.. code-block:: json
+
+    {
+      "project": {"kind": "python-package", "confidence": 0.88,
+                  "layout": "src", "source_roots": ["src"],
+                  "test_roots": ["tests"], "packages": ["src/acme"]},
+      "files":   [{"path": "src/acme/cart.py", "module": "src.acme.cart",
+                   "symbols": 3, "imports": 1}],
+      "tests":   ["tests/test_cart.py"],
+      "callers": ["src/acme/cli/app.py"],
+      "truncated": false,
+      "relevance": "lexical: task words matched against file and symbol names, plus import edges"
+    }
+
+Two things worth knowing before you rely on it. **Matching is lexical**, not
+semantic -- it compares the words of your task against file and symbol names, and
+says so in ``relevance`` rather than pretending otherwise. And it is **bounded**:
+``max_files`` and ``max_symbols`` are caps, and when one bites, ``truncated`` is
+true and ``notes`` explains. A model told "12 related files" when there were 300
+will work with 12 and call it thorough, so the flag is the honest part.
+
+Tool calls overlap: name a ``path`` and you get its tests and importers; name
+nothing meaningful and it will say so rather than dumping the project.
+
+.. _project-intelligence:
+
+How the project is understood
+=============================
+
+Behind ``project_context`` and ``project_symbols`` is a project-scoped layer that
+answers project-level questions once per project and reuses the answer.
+
+**Discovery** reads the layout in one bounded pass and classifies the project:
+``pyproject.toml``/``setup.py``/``setup.cfg``, ``requirements*.txt``, ``src/``,
+package directories, test directories, ``__main__.py``, console scripts declared
+in ``pyproject.toml`` or ``setup.cfg``, documentation roots, build and CI files.
+It does not assume one layout, and it does not guess: a project it cannot place is
+reported as ``unknown`` with the reason in ``unknowns``, and the confidence comes
+from how many independent signals agree.
+
+**The map** holds the symbols and import edges per file, reusing the same
+parsers the navigation tools use -- there is no second Python parser in this
+product. Absolute imports resolve through the discovered package layout, so a
+``src/`` project links ``import acme.cart`` to the file that exists.
+
+**Invalidation is per file, and it is driven by the agent's own writes.** Editing
+a module invalidates that module. Deleting one drops it *and every edge pointing
+at it*, because reporting a caller that no longer exists is worse than reporting
+none. Opening a different project creates a new map, so nothing can leak between
+projects.
+
+Nothing about this is written into a conversation. A project map is a claim about
+files on disk, and files change while the application is closed, so caching it
+across restarts would mean caching a claim that is probably false. The system
+prompt is oriented from the profile on every turn instead, which costs one bounded
+walk and cannot go stale within a session.
 
 Affected files, reported by the edit
 ------------------------------------

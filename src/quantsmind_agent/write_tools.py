@@ -56,6 +56,7 @@ from quantsmind_agent.errors import (
 )
 from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.permissions import Permission
+from quantsmind_agent.project_intel import ProjectIntelligence
 from quantsmind_agent.revisions import FileRevision, RevisionJournal, capture_revision
 from quantsmind_agent.tools import ToolResult, ToolSpec
 from quantsmind_agent.workspace import FileFingerprint, Workspace
@@ -188,10 +189,14 @@ class WriteFileTool:
         *,
         max_bytes: int = 2_000_000,
         journal: RevisionJournal | None = None,
+        intelligence: ProjectIntelligence | None = None,
     ) -> None:
         self._workspace = workspace
         self._max_bytes = max_bytes
         self._journal = journal
+        #: Told about the write so a cached symbol or import record for this file
+        #: is never answered after the file has changed.
+        self._intelligence = intelligence
         self.spec = ToolSpec(
             name="write_file",
             description=(
@@ -264,6 +269,13 @@ class WriteFileTool:
             create_parents=bool(arguments.get("create_parents", False)),
         )
         undoable = _record_revision(self._journal, before.path, "write_file", pre_image, after)
+        # A created file can add a package or an entry point; a replaced one cannot
+        # change the project layout, only its own contents.
+        if self._intelligence is not None:
+            if before.exists:
+                self._intelligence.note_written(after.path)
+            else:
+                self._intelligence.note_created(after.path)
         affected = {} if not before.exists else _affected_files(self._workspace, after.path)
         return ToolResult.success(
             self.spec.name,
@@ -298,10 +310,12 @@ class EditFileTool:
         *,
         max_bytes: int = 2_000_000,
         journal: RevisionJournal | None = None,
+        intelligence: ProjectIntelligence | None = None,
     ) -> None:
         self._workspace = workspace
         self._max_bytes = max_bytes
         self._journal = journal
+        self._intelligence = intelligence
         self.spec = ToolSpec(
             name="edit_file",
             description=(
@@ -407,6 +421,8 @@ class EditFileTool:
         )
         after = self._workspace.write_text(path, outcome.content)
         undoable = _record_revision(self._journal, before.path, "edit_file", pre_image, after)
+        if self._intelligence is not None:
+            self._intelligence.note_written(after.path)
         affected = _affected_files(self._workspace, after.path)
         logger.info("edit_file applied %s to %s", outcome.description, path)
         return ToolResult.success(
@@ -438,8 +454,14 @@ class EditFileTool:
 class DeleteFileTool:
     """Delete a single file from the workspace, after an explicit approval."""
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(
+        self,
+        workspace: Workspace,
+        *,
+        intelligence: ProjectIntelligence | None = None,
+    ) -> None:
         self._workspace = workspace
+        self._intelligence = intelligence
         self.spec = ToolSpec(
             name="delete_file",
             description=(
@@ -481,6 +503,11 @@ class DeleteFileTool:
         before = self._workspace.fingerprint(path)
         _check_expected_hash(path, before, arguments.get("expected_sha256"))
         removed = self._workspace.delete_file(path)
+        if self._intelligence is not None:
+            # Both directions matter: the file's own record goes, and so does every
+            # edge that pointed at it, so no caller is reported for a module that is
+            # no longer there.
+            self._intelligence.note_deleted(removed.path)
         return ToolResult.success(
             self.spec.name,
             f"deleted {removed.path} ({removed.size} bytes)",
@@ -499,6 +526,7 @@ def build_mutating_tools(
     *,
     max_file_bytes: int = 2_000_000,
     journal: RevisionJournal | None = None,
+    intelligence: ProjectIntelligence | None = None,
 ) -> list[Any]:
     """Instantiate the v0.2 write/edit/delete tools bound to ``workspace``.
 
@@ -508,9 +536,13 @@ def build_mutating_tools(
     """
 
     return [
-        WriteFileTool(workspace, max_bytes=max_file_bytes, journal=journal),
-        EditFileTool(workspace, max_bytes=max_file_bytes, journal=journal),
-        DeleteFileTool(workspace),
+        WriteFileTool(
+            workspace, max_bytes=max_file_bytes, journal=journal, intelligence=intelligence
+        ),
+        EditFileTool(
+            workspace, max_bytes=max_file_bytes, journal=journal, intelligence=intelligence
+        ),
+        DeleteFileTool(workspace, intelligence=intelligence),
     ]
 
 
@@ -524,9 +556,19 @@ class UndoFileTool:
     refuses rather than overwriting a file that changed outside the journal.
     """
 
-    def __init__(self, workspace: Workspace, journal: RevisionJournal) -> None:
+    def __init__(
+        self,
+        workspace: Workspace,
+        journal: RevisionJournal,
+        *,
+        intelligence: ProjectIntelligence | None = None,
+    ) -> None:
         self._workspace = workspace
         self._journal = journal
+        #: An undo changes file contents just as a write does, so the project map
+        #: has to hear about it too -- otherwise the agent undoes an edit and keeps
+        #: answering questions from the version it just discarded.
+        self._intelligence = intelligence
         self.spec = ToolSpec(
             name="undo_file",
             description=(
@@ -604,6 +646,12 @@ class UndoFileTool:
                     details={"path": rel, "expected_sha256": revision.previous_sha256},
                 )
 
+        if self._intelligence is not None:
+            if restored == "removed":
+                self._intelligence.note_deleted(rel)
+            else:
+                self._intelligence.note_written(rel)
+
         self._journal.consume(path, revision)
         logger.info("undo_file reverted %s (%s) recorded by %s", rel, restored, revision.tool)
         return ToolResult.success(
@@ -652,10 +700,15 @@ class UndoFileTool:
             )
 
 
-def build_undo_tool(workspace: Workspace, journal: RevisionJournal) -> UndoFileTool:
+def build_undo_tool(
+    workspace: Workspace,
+    journal: RevisionJournal,
+    *,
+    intelligence: ProjectIntelligence | None = None,
+) -> UndoFileTool:
     """Instantiate the undo tool bound to ``workspace`` and ``journal``."""
 
-    return UndoFileTool(workspace, journal)
+    return UndoFileTool(workspace, journal, intelligence=intelligence)
 
 
 def describe_eol(text: str) -> str:
