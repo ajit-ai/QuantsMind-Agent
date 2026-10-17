@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=QuantsMind-Agent
+GenericName=Coding Agent
+Comment=A local coding agent that works inside a project folder you choose
+Exec=quantsmind-agent %f
+Terminal=false
+Categories=Development;IDE;
+Keywords=agent;code;assistant;ai;
+StartupWMClass=QuantsMind-Agent

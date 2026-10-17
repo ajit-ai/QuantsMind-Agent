@@ -1,0 +1,11 @@
+#!/bin/sh
+# QuantsMind-Agent pre-removal.
+#
+# Removes only what this package installed. User configuration, credentials,
+# logs and projects under $XDG_CONFIG_HOME and $XDG_DATA_HOME are left exactly
+# as they are: a user who removes the application to reinstall it should not lose
+# their API key or their history, and a user who wants those gone can delete
+# them deliberately.
+set -e
+
+exit 0

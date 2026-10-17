@@ -11,6 +11,50 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ### Added
 
+**Cross-platform packaging (v0.2)**
+
+- **A real Windows Installer.** `scripts/build_msi.py` turns the PyInstaller
+  onedir folder into a genuine `.msi`: Start Menu and desktop shortcuts, an
+  Add/Remove Programs entry, a stable product identity so a later version
+  upgrades rather than stacking, and no elevation required in the default
+  per-user scope. `scripts/verify_msi_install.ps1` then installs it, launches the
+  installed application, reinstalls it, uninstalls it, and proves the user's own
+  configuration directory is byte-identical afterwards — because "removes
+  cleanly" and "does not eat the user's data" are different claims, and only one
+  of them is checked by a file table.
+- **Debian, disk image and FreeBSD package builders.**
+  `scripts/build_deb.py` produces a `.deb` with real metadata, dependencies,
+  maintainer scripts, a desktop entry and a launcher. `scripts/build_dmg.py`
+  produces a macOS disk image with an `/Applications` link, and mounts it to
+  prove the application copies out and starts. `scripts/build_freebsd_pkg.py`
+  produces a native FreeBSD package via `pkg create` — not a renamed `.deb`,
+  which `pkg` rejects. Each refuses to run on the wrong operating system instead
+  of producing an artifact that cannot work.
+- **`scripts/record_artifacts.py`** collects every artifact into `MANIFEST.json`
+  and `SHA256SUMS`, recording version, commit, OS, architecture, Python, tooling
+  and checksums — and listing platforms that were *not* built, so an absent
+  platform cannot be mistaken for a forgotten one. Folder artifacts get a
+  deterministic tree digest, because one file's checksum cannot describe a
+  160 MB folder.
+- **`docs/source/packaging.rst`** documents what is built and what is not,
+  including per-user versus per-machine installer scope, the API-key and billing
+  position, and signing and notarization status.
+
+### Fixed
+
+- **A Windows MSI built from the PyInstaller folder installed the wrong file
+  layout, and the application would not start.** Nested directories were emitted
+  as siblings rather than nested, so `_internal/PySide6/plugins` installed as a
+  top-level `plugins` directory. The installer reported success, installed 909 of
+  914 files, and the failure surfaced at runtime as `No module named
+  'pydantic_core._pydantic_core'` — a missing dependency rather than a broken
+  package. Both defects are now covered by tests that parse the generated
+  authoring.
+- **The MSI was invisible in installed applications.** The Add/Remove Programs
+  key used `{ProductCode}`, which Windows Installer treats as literal text, so
+  the entry was written under a key literally named `{ProductCode}` and there was
+  nothing in installed apps to uninstall.
+
 **Filesystem**
 
 - `undo_file` puts one file back the way it was before the newest change the

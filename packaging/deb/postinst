@@ -1,0 +1,17 @@
+#!/bin/sh
+# QuantsMind-Agent post-installation.
+#
+# Refreshes the desktop database so the launcher appears, and deliberately does
+# nothing else: the application's own configuration, credentials and projects
+# live in the user's home directory and must never be created, moved or deleted
+# by a package script.
+set -e
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications || true
+fi
+if command -v update-mime-database >/dev/null 2>&1; then
+    update-mime-database /usr/share/mime || true
+fi
+
+exit 0
