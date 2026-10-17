@@ -8,9 +8,10 @@ conversation, New saves what was open, and Delete removes it.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
-from PySide6.QtWidgets import QGridLayout, QPushButton
+from PySide6.QtWidgets import QGridLayout, QPushButton, QWidget
 
 from quantsmind_agent.gui.main_window import _safe_filename
 from quantsmind_agent.gui.sidebar import Sidebar
@@ -492,13 +493,9 @@ class TestConversationControlsFit:
         gui_harness.open_project(sample_project)
         sidebar = gui_harness.window.sidebar
 
-        holding = None
+        holding: tuple[QGridLayout, set[str]] | None = None
         for layout in sidebar.findChildren(QGridLayout):
-            buttons = [
-                layout.itemAt(index).widget()
-                for index in range(layout.count())
-                if isinstance(layout.itemAt(index).widget(), QPushButton)
-            ]
+            buttons = _grid_buttons(layout)
             texts = {button.text() for button in buttons}
             if "Export" in texts:
                 holding = (layout, texts)
@@ -506,13 +503,41 @@ class TestConversationControlsFit:
 
         assert holding is not None, "the export control is not in a grid layout"
         layout, texts = holding
-        rows = {
-            layout.getItemPosition(index)[0]
-            for index in range(layout.count())
-            if isinstance(layout.itemAt(index).widget(), QPushButton)
-        }
+        rows = _grid_rows(layout)
         assert len(texts) == 4, f"expected all four conversation controls, found {texts}"
         assert len(rows) > 1, f"all conversation controls share row {rows} and will be elided"
+
+
+def _grid_entries(layout: QGridLayout) -> list[tuple[int, QWidget]]:
+    """(row, widget) for every occupied cell, skipping cells with no widget."""
+
+    entries: list[tuple[int, QWidget]] = []
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        widget = item.widget() if item is not None else None
+        if widget is not None:
+            entries.append((index, widget))
+    return entries
+
+
+def _grid_buttons(layout: QGridLayout) -> list[QPushButton]:
+    return [widget for _index, widget in _grid_entries(layout) if isinstance(widget, QPushButton)]
+
+
+def _grid_rows(layout: QGridLayout) -> set[int]:
+    """Which grid rows hold the controls, read through the layout's own API.
+
+    ``getItemPosition`` is typed as returning an opaque object in the PySide6
+    stubs, so the tuple is cast rather than indexed blind.
+    """
+
+    rows: set[int] = set()
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        if item is not None and item.widget() is not None:
+            position = cast("tuple[int, int, int, int]", layout.getItemPosition(index))
+            rows.add(position[0])
+    return rows
 
 
 def _conversation_buttons(sidebar: Sidebar) -> list[QPushButton]:
