@@ -52,19 +52,19 @@ class ConversationView(QTextBrowser):
         self._insert_placeholder()
 
     # -- rendering ---------------------------------------------------------
-    def append_user(self, text: str) -> None:
+    def append_user(self, text: str, *, stamp: str = "") -> None:
         self._ensure_placeholder()
-        self._append_block("You", text, "user")
+        self._append_block("You", text, "user", stamp=stamp)
         self._has_content = True
 
-    def append_assistant(self, text: str, *, meta: str = "") -> None:
+    def append_assistant(self, text: str, *, meta: str = "", stamp: str = "") -> None:
         self._ensure_placeholder()
         suffix = (
             f"<br/><span style='color:#6a7280;font-size:11px'>{html.escape(meta)}</span>"
             if meta
             else ""
         )
-        self._append_block("Assistant", text, "assistant", extra=suffix)
+        self._append_block("Assistant", text, "assistant", extra=suffix, stamp=stamp)
         self._has_content = True
 
     def begin_stream(self) -> None:
@@ -98,7 +98,7 @@ class ConversationView(QTextBrowser):
             )
             self.ensureCursorVisible()
 
-    def append_tool_notice(self, name: str, summary: str, state: str) -> None:
+    def append_tool_notice(self, name: str, summary: str, state: str, *, stamp: str = "") -> None:
         """Show one line of tool activity inside the transcript."""
 
         self._ensure_placeholder()
@@ -109,7 +109,7 @@ class ConversationView(QTextBrowser):
         }.get(state, ROLE_COLORS["tool"])
         icon = {"started": "→", "completed": "✓", "failed": "✗"}.get(state, "•")
         body = html.escape(f"{icon} {name} — {summary}" if summary else f"{icon} {name}")
-        self._append_block("Tool", body, "tool", accent=colour)
+        self._append_block("Tool", body, "tool", accent=colour, stamp=stamp)
         self._has_content = True
 
     def append_notice(self, text: str, *, kind: str = "info") -> None:
@@ -132,14 +132,49 @@ class ConversationView(QTextBrowser):
                 meta=message.model or "",
             )
 
-    def append_tool_result(self, result: ToolResult) -> None:
-        """Render a persisted tool result."""
+    def append_tool_result(self, result: ToolResult, *, stamp: str = "") -> None:
+        """Render a persisted tool result.
 
+        One line: the tool, its outcome and how long it took. The structured
+        payload is deliberately left out -- it can hold whole file contents or
+        command output, which is not what someone reopening a conversation is
+        reading. The full value stays in the record and in the JSON export.
+        """
+
+        if result.ok:
+            summary = result.summary
+        else:
+            summary = result.error or result.summary
+        if result.duration_ms:
+            summary = f"{summary} ({result.duration_ms:.0f} ms)"
         self.append_tool_notice(
             result.tool,
-            result.summary if result.ok else (result.error or result.summary),
+            summary,
             "completed" if result.ok else "failed",
+            stamp=stamp,
         )
+
+    def append_interrupted_notice(self, outcome: str, *, detail: str = "") -> None:
+        """Say how the last stored turn actually ended.
+
+        A reopened conversation whose last turn never finished says so, rather than
+        ending on the last thing that did succeed and leaving the reader to assume
+        the request was answered.
+        """
+
+        text = {
+            "cancelled": "You stopped this turn before it finished. It was interrupted, "
+            "not completed, and nothing from it was replayed.",
+            "failed": "This turn ended in an error. It is shown as it happened, not "
+            "as a successful result.",
+            "interrupted": "The application closed while this turn was running, so it "
+            "was interrupted and never finished. Nothing from it was replayed.",
+        }.get(outcome, "")
+        if not text:
+            return
+        if detail:
+            text = f"{text} {detail}"
+        self.append_notice(text, kind="info")
 
     # -- internals ---------------------------------------------------------
     def _insert_placeholder(self) -> None:
@@ -164,14 +199,16 @@ class ConversationView(QTextBrowser):
         *,
         extra: str = "",
         accent: str | None = None,
+        stamp: str = "",
     ) -> None:
         colour = accent or ROLE_COLORS.get(role, ROLE_COLORS["system"])
-        stamp = time.strftime("%H:%M:%S")
+        shown_stamp = stamp or time.strftime("%H:%M:%S")
         html_block = (
             f"<table width='100%' cellspacing='0' cellpadding='4' "
             f"style='margin-top:10px'>"
             f"<tr><td style='color:{colour};font-weight:600;font-size:12px'>"
-            f"{html.escape(label)} <span style='color:#9aa0a9;font-weight:400'>{stamp}</span>"
+            f"{html.escape(label)} <span style='color:#9aa0a9;font-weight:400'>"
+            f"{html.escape(shown_stamp)}</span>"
             f"</td></tr>"
             f"<tr><td style='color:#1c1f24'>{body_html}{extra}</td></tr></table>"
         )

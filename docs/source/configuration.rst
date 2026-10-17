@@ -102,6 +102,14 @@ Agent settings
        transcript comes back; approval grants and undo history never do.
    * - ``max_stored_conversations``
      - How many conversations to keep. The oldest are pruned beyond the cap.
+   * - ``max_stored_messages``
+     - Messages kept per conversation. The oldest go and the newest stay; the
+       opening request always survives the trim.
+   * - ``max_stored_tool_results``
+     - Tool results kept per conversation, oldest pruned first. ``0`` keeps none.
+   * - ``max_stored_item_chars``
+     - Length cap on any single stored value. Long tool output is shortened in
+       place with a note; the model still sees the whole value in the session.
    * - ``git_enabled``
      - Registers the read-only Git tools. ``false`` removes them entirely
        rather than denying them, so a model cannot even name them.

@@ -11,6 +11,53 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ### Added
 
+**Conversation resumption (v0.3)**
+
+- A reopened conversation now shows what actually happened: user requests,
+  assistant answers and the tool calls in between, in the order they occurred, each
+  line carrying the time it happened rather than the time you reopened it. Tool
+  results gained a timestamp, because tool traffic is deliberately kept out of the
+  message list and a restored transcript had no way to say where a call sat among
+  the messages around it.
+- A restored transcript states what it is not showing. A turn that was interrupted,
+  cancelled or failed says so instead of ending on the last thing that happened to
+  succeed, and a transcript stored under a size limit admits that its older history
+  is gone.
+- Per-conversation storage limits (`agent.max_stored_messages`,
+  `agent.max_stored_tool_results`, `agent.max_stored_item_chars`). The oldest
+  messages are dropped, the newest kept, and the opening request always survives
+  the trim because it is what the conversation is named after. Any over-long value
+  is shortened in place with a note saying how much was left out. What a record
+  lost is recorded in the record.
+- Conversation export, from the sidebar or the command line, as Markdown for
+  reading and sharing or as JSON for scripting. Markdown carries no tool payloads
+  and no internal metadata.
+- The console entry point honours `resume_last_conversation` like the window does,
+  and gained `--conversation`, `--no-resume`, `--list-conversations` and
+  `--export`. Resumption happens once, before the window is built, so a resumed
+  transcript is never replayed into the view twice.
+- `QM_CONFIG_DIR` now moves the whole profile, cache and data included, and
+  `QM_DATA_DIR` / `QM_CACHE_DIR` move those two specifically. Previously only the
+  settings file moved, so the same application kept two profiles depending on
+  whether it was started by flag or by environment variable, and a redirected run
+  still wrote conversation records into the real user profile.
+
+### Fixed
+
+- **A clean shutdown no longer marks its conversation as interrupted.**
+  `shutdown()` cancelled and then asked whether a turn was in flight, so the answer
+  was always yes: every conversation was recorded as unfinished when the
+  application quit normally, and reopened as if it had been cut short.
+- Message ids and timestamps survive a restore. Without them the next autosave
+  rewrote the real history as "this just happened", so a conversation slowly lost
+  its own age.
+- A tool result restored from disk that cannot be rebuilt is dropped rather than
+  shown as an empty line, and a turn whose recorded finish precedes its start
+  reports no duration instead of a large negative one.
+- Refreshing the conversation list no longer emits a selection, which could reopen
+  the conversation already open and stack a second copy of its transcript.
+- Switching conversations clears tool results and turn history, not just messages.
+
 **Conversations (v0.3)**
 
 - Conversations are stored on disk, one JSON file each under the application data

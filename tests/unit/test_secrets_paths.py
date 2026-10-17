@@ -150,6 +150,47 @@ class TestPaths:
         monkeypatch.setenv("QM_LOG_DIR", str(tmp_path / "custom-logs"))
         assert default_paths().log_dir == tmp_path / "custom-logs"
 
+    def test_redirecting_the_config_dir_redirects_the_data_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # The conversation store lives in the data directory. If QM_CONFIG_DIR moved
+        # only the config, a redirected run would still write transcripts into the
+        # real user profile -- which is what happened, and what a portable install
+        # or a test must never do.
+        monkeypatch.setenv("QM_CONFIG_DIR", str(tmp_path / "portable" / "config"))
+
+        paths = default_paths()
+
+        assert paths.data_dir == tmp_path / "portable" / "data"
+        assert paths.cache_dir == tmp_path / "portable" / "cache"
+
+    def test_the_environment_and_the_flag_produce_the_same_layout(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from quantsmind_agent.app import _build_parser, _paths_from_args
+
+        monkeypatch.setenv("QM_CONFIG_DIR", str(tmp_path / "portable" / "config"))
+        by_env = default_paths()
+
+        by_flag = _paths_from_args(
+            _build_parser().parse_args(["--config-dir", str(tmp_path / "portable")])
+        )
+
+        assert by_flag.data_dir == by_env.data_dir
+        assert by_flag.cache_dir == by_env.cache_dir
+
+    def test_data_and_cache_can_be_redirected_independently(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("QM_CONFIG_DIR", str(tmp_path / "portable" / "config"))
+        monkeypatch.setenv("QM_DATA_DIR", str(tmp_path / "elsewhere" / "data"))
+        monkeypatch.setenv("QM_CACHE_DIR", str(tmp_path / "elsewhere" / "cache"))
+
+        paths = default_paths()
+
+        assert paths.data_dir == tmp_path / "elsewhere" / "data"
+        assert paths.cache_dir == tmp_path / "elsewhere" / "cache"
+
     def test_fspath(self, tmp_path: Path) -> None:
         paths = AppPaths(tmp_path, tmp_path, tmp_path, tmp_path)
         assert str(paths) == str(tmp_path)

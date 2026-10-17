@@ -29,6 +29,8 @@ __all__ = ["AppPaths", "default_paths"]
 
 _ENV_CONFIG_DIR = "QM_CONFIG_DIR"
 _ENV_LOG_DIR = "QM_LOG_DIR"
+_ENV_CACHE_DIR = "QM_CACHE_DIR"
+_ENV_DATA_DIR = "QM_DATA_DIR"
 
 
 def _resolve(base: Path) -> Path:
@@ -75,23 +77,42 @@ class AppPaths:
 def default_paths() -> AppPaths:
     """Return the standard per-user paths, honouring QM_* environment overrides.
 
-    On Windows 11 this yields
+    On Windows 11 with nothing set this yields
     ``%LOCALAPPDATA%\\QuantsMind-Agent\\{config.toml,secrets.json,Logs\\...}``.
+
+    Redirecting ``QM_CONFIG_DIR`` moves the *whole* profile -- cache and data
+    included -- not just the config file. It used to move only the config, which
+    meant the same application kept two profiles depending on whether it was
+    started by flag or by environment variable, and a portable or test run still
+    wrote conversation records into the real user directory. ``QM_DATA_DIR`` and
+    ``QM_CACHE_DIR`` override the derived locations when a caller needs them
+    somewhere else entirely.
     """
 
     dirs = PlatformDirs(appname=APP_NAME, appauthor=False, roaming=False)
 
     config_override = os.environ.get(_ENV_CONFIG_DIR)
     log_override = os.environ.get(_ENV_LOG_DIR)
+    cache_override = os.environ.get(_ENV_CACHE_DIR)
+    data_override = os.environ.get(_ENV_DATA_DIR)
 
-    config_dir = _resolve(Path(config_override)) if config_override else Path(dirs.user_config_dir)
-    log_dir = _resolve(Path(log_override)) if log_override else Path(dirs.user_log_dir)
+    if config_override:
+        config_dir = _resolve(Path(config_override))
+        # Same shape as ``--config-dir``: a profile root with config/ and data/
+        # beneath it, so both ways of redirecting agree.
+        base = config_dir.parent
+        cache_dir = _resolve(Path(cache_override)) if cache_override else base / "cache"
+        data_dir = _resolve(Path(data_override)) if data_override else base / "data"
+    else:
+        config_dir = Path(dirs.user_config_dir)
+        cache_dir = _resolve(Path(cache_override)) if cache_override else Path(dirs.user_cache_dir)
+        data_dir = _resolve(Path(data_override)) if data_override else Path(dirs.user_data_dir)
 
     return AppPaths(
         config_dir=config_dir,
-        log_dir=log_dir,
-        cache_dir=Path(dirs.user_cache_dir),
-        data_dir=Path(dirs.user_data_dir),
+        log_dir=_resolve(Path(log_override)) if log_override else Path(dirs.user_log_dir),
+        cache_dir=cache_dir,
+        data_dir=data_dir,
     )
 
 

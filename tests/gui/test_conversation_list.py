@@ -9,8 +9,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from quantsmind_agent.gui.main_window import _safe_filename
 from quantsmind_agent.permissions import ApprovalOutcome
-from tests.fakes import FakeModelProvider, text_response
+from quantsmind_agent.schema import UserMessage
+from tests.fakes import FakeModelProvider, text_response, tool_response
 from tests.gui.harness import GuiHarness
 
 
@@ -112,6 +116,255 @@ class TestConversationList:
 
         assert gui_harness.context.session.id == conversation_id
         assert "Reopened" not in gui_harness.transcript
+
+
+class TestRestoredHistoryIsVisible:
+    def test_a_reopened_conversation_shows_its_whole_transcript(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("the first answer")]))
+        gui_harness.ask("the first question")
+        gui_harness.use_provider(FakeModelProvider([text_response("the second answer")]))
+        gui_harness.ask("the second question")
+        conversation_id = gui_harness.context.session.id
+
+        gui_harness.window._on_new_conversation()
+        gui_harness.window._on_conversation_selected(conversation_id)
+
+        transcript = gui_harness.transcript
+        assert "the first question" in transcript
+        assert "the first answer" in transcript
+        assert "the second question" in transcript
+        assert "the second answer" in transcript
+
+    def test_the_restored_transcript_shows_each_thing_once(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("only once")]))
+        gui_harness.ask("a question")
+        conversation_id = gui_harness.context.session.id
+
+        gui_harness.window._on_new_conversation()
+        gui_harness.window._on_conversation_selected(conversation_id)
+        first_pass = gui_harness.transcript.count("a question")
+
+        # Re-opening the same conversation twice must not stack another copy.
+        gui_harness.window._on_new_conversation()
+        gui_harness.window._on_conversation_selected(conversation_id)
+        second_pass = gui_harness.transcript.count("a question")
+
+        assert first_pass == 1
+        assert second_pass == 1
+
+    def test_tool_activity_is_shown_in_the_restored_transcript(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(
+            FakeModelProvider(
+                [
+                    tool_response([("read_file", {"path": "mod.py"})]),
+                    text_response("it returns one"),
+                ]
+            )
+        )
+        gui_harness.ask("what does mod.py do?")
+        conversation_id = gui_harness.context.session.id
+
+        gui_harness.window._on_new_conversation()
+        gui_harness.window._on_conversation_selected(conversation_id)
+
+        transcript = gui_harness.transcript
+        assert "read_file" in transcript
+        assert transcript.index("what does mod.py do?") < transcript.index("read_file")
+        assert transcript.index("read_file") < transcript.index("it returns one")
+
+    def test_a_failed_tool_call_is_shown_as_failed(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(
+            FakeModelProvider(
+                [
+                    tool_response(
+                        [("edit_file", {"path": "mod.py", "old_text": "nope", "new_text": "x"})]
+                    ),
+                    text_response("that did not match"),
+                ]
+            )
+        )
+        gui_harness.ask("change something")
+        conversation_id = gui_harness.context.session.id
+
+        gui_harness.window._on_new_conversation()
+        gui_harness.window._on_conversation_selected(conversation_id)
+
+        assert "edit_file" in gui_harness.transcript
+
+    def test_tool_payloads_are_not_shown_in_the_transcript(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(
+            FakeModelProvider(
+                [
+                    tool_response([("read_file", {"path": "mod.py"})]),
+                    text_response("read it"),
+                ]
+            )
+        )
+        gui_harness.ask("read mod.py")
+        conversation_id = gui_harness.context.session.id
+
+        gui_harness.window._on_new_conversation()
+        gui_harness.window._on_conversation_selected(conversation_id)
+
+        # The file's contents are what the model saw, not what a person reopening the
+        # conversation is reading.
+        assert "def value" not in gui_harness.transcript
+
+    def test_an_interrupted_turn_is_admitted_not_glossed_over(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("all done")]))
+        gui_harness.ask("a question")
+        conversation_id = gui_harness.context.session.id
+        gui_harness.context._last_turn_finished = False
+        gui_harness.context.save_conversation()
+
+        gui_harness.window._on_new_conversation()
+        gui_harness.window._on_conversation_selected(conversation_id)
+
+        assert "interrupted" in gui_harness.transcript.lower()
+
+    def test_a_clean_turn_is_not_labelled_interrupted(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("all done")]))
+        gui_harness.ask("a question")
+        conversation_id = gui_harness.context.session.id
+
+        gui_harness.window._on_new_conversation()
+        gui_harness.window._on_conversation_selected(conversation_id)
+
+        assert "interrupted" not in gui_harness.transcript.lower()
+
+    def test_a_truncated_history_is_admitted(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.context.config_manager.config.agent.max_stored_messages = 2
+        gui_harness.context._build_store()
+        for index in range(6):
+            gui_harness.context.session.add_message(UserMessage(content=f"question {index}"))
+        gui_harness.context.save_conversation()
+        conversation_id = gui_harness.context.session.id
+
+        gui_harness.window._on_new_conversation()
+        gui_harness.window._on_conversation_selected(conversation_id)
+
+        assert "size limit" in gui_harness.transcript.lower()
+
+    def test_refreshing_the_list_does_not_reopen_the_open_conversation(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("done")]))
+        gui_harness.ask("a question")
+
+        # _refresh_conversations moves the highlighted row. That must not emit a
+        # selection, or the transcript is replayed on top of itself.
+        gui_harness.window._refresh_conversations()
+        gui_harness.window._refresh_conversations()
+
+        assert gui_harness.transcript.count("a question") == 1
+
+
+class TestExportFromTheSidebar:
+    def test_exporting_the_open_conversation_writes_a_file(
+        self,
+        gui_harness: GuiHarness,
+        sample_project: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("an answer")]))
+        gui_harness.ask("a question worth keeping")
+        target = tmp_path / "export.md"
+        monkeypatch.setattr(
+            gui_harness.window.sidebar,
+            "choose_export_destination",
+            lambda suggested: (str(target), "md"),
+        )
+
+        gui_harness.window._on_conversation_export_requested(gui_harness.context.session.id)
+
+        assert target.is_file()
+        assert "a question worth keeping" in target.read_text(encoding="utf-8")
+        assert "Exported to" in gui_harness.transcript
+
+    def test_a_cancelled_export_writes_nothing(
+        self,
+        gui_harness: GuiHarness,
+        sample_project: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("an answer")]))
+        gui_harness.ask("a question")
+        monkeypatch.setattr(
+            gui_harness.window.sidebar,
+            "choose_export_destination",
+            lambda suggested: ("", ""),
+        )
+
+        gui_harness.window._on_conversation_export_requested(gui_harness.context.session.id)
+
+        assert not list(tmp_path.glob("*.md"))
+
+    def test_exporting_a_deleted_conversation_is_reported(
+        self,
+        gui_harness: GuiHarness,
+        sample_project: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("an answer")]))
+        gui_harness.ask("a question")
+        conversation_id = gui_harness.context.session.id
+        gui_harness.context.delete_conversation(conversation_id)
+        monkeypatch.setattr(
+            gui_harness.window.sidebar,
+            "choose_export_destination",
+            lambda suggested: (str(tmp_path / "out.md"), "md"),
+        )
+
+        gui_harness.window._on_conversation_export_requested(conversation_id)
+
+        assert "could not be exported" in gui_harness.transcript.lower()
+
+    def test_a_suggested_export_name_is_usable_as_a_filename(self, gui_harness: GuiHarness) -> None:
+        assert _safe_filename("Refactor: parser/tests?") == "Refactor-parsertests"
+        assert _safe_filename("***") == "conversation"
 
     def test_renaming_shows_the_new_name_in_the_list(
         self, gui_harness: GuiHarness, sample_project: Path

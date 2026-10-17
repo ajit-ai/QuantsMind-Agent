@@ -162,6 +162,25 @@ class AgentSettings(BaseModel):
     max_stored_conversations: int = Field(default=50, ge=1, le=500)
     """How many conversations to keep, oldest pruned first."""
 
+    max_stored_messages: int = Field(default=400, ge=2, le=10_000)
+    """Messages kept per conversation.
+
+    Past this, the oldest messages go and the newest stay, with one exception: the
+    opening request always survives, because it is what the conversation is named
+    after and what tells a reopened transcript what it was for.
+    """
+
+    max_stored_tool_results: int = Field(default=400, ge=0, le=10_000)
+    """Tool results kept per conversation, oldest pruned first. ``0`` keeps none."""
+
+    max_stored_item_chars: int = Field(default=8_000, ge=200, le=100_000)
+    """Length cap on any single stored message or tool value.
+
+    Long tool output is the thing that makes a record enormous, so it is shortened
+    in place with a note saying how much was left out. The model still sees the
+    whole value in this session; only what is kept on disk is shortened.
+    """
+
     git_enabled: bool = True
 
 

@@ -46,7 +46,10 @@ __all__ = [
     "SCHEMA_VERSION",
     "ConversationStore",
     "ConversationSummary",
+    "StorageLimits",
     "derive_title",
+    "render_json",
+    "render_markdown",
     "scrub",
     "snapshot_session",
 ]
@@ -54,12 +57,23 @@ __all__ = [
 logger = get_logger(__name__)
 
 #: Bumped when the on-disk shape changes; see :func:`ConversationStore._migrate`.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: Default cap on stored conversations, oldest pruned first.
 DEFAULT_MAX_CONVERSATIONS = 50
 
+#: Default cap on messages kept per conversation.
+DEFAULT_MAX_MESSAGES = 400
+
+#: Default cap on stored tool results per conversation.
+DEFAULT_MAX_TOOL_RESULTS = 400
+
+#: Default cap on the length of any single stored text value.
+DEFAULT_MAX_ITEM_CHARS = 8000
+
 _TITLE_LIMIT = 60
+
+_TRUNCATION_NOTE = "\n\n[... {dropped} more characters not stored ...]"
 
 #: Strings that look like credentials are masked before anything is written.
 #: Deliberately narrow: a scrubber that eats ordinary text makes the transcript
@@ -92,6 +106,83 @@ def _scrub_deep(value: Any) -> Any:
     if isinstance(value, list):
         return [_scrub_deep(item) for item in value]
     return value
+
+
+def truncate(text: str, limit: int) -> str:
+    """Shorten one stored text value, saying that it was shortened."""
+
+    if limit <= 0 or len(text) <= limit:
+        return text
+    dropped = len(text) - limit
+    return text[:limit].rstrip() + _TRUNCATION_NOTE.format(dropped=dropped)
+
+
+def _truncate_deep(value: Any, limit: int) -> Any:
+    if isinstance(value, str):
+        return truncate(value, limit)
+    if isinstance(value, dict):
+        return {key: _truncate_deep(item, limit) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_truncate_deep(item, limit) for item in value]
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class StorageLimits:
+    """How much of a conversation is kept on disk.
+
+    Every value is a bound, not a target: a conversation that stays inside them is
+    stored whole, and one that outgrows them loses its oldest history and its
+    longest values rather than growing without limit. What was dropped is recorded
+    in the record itself, so a reopened conversation can admit it rather than
+    quietly pretending to be complete.
+    """
+
+    max_messages: int = DEFAULT_MAX_MESSAGES
+    max_tool_results: int = DEFAULT_MAX_TOOL_RESULTS
+    max_chars_per_item: int = DEFAULT_MAX_ITEM_CHARS
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "max_messages": self.max_messages,
+            "max_tool_results": self.max_tool_results,
+            "max_chars_per_item": self.max_chars_per_item,
+        }
+
+
+def _trim_messages(messages: list[Any], limit: int) -> tuple[list[Any], int]:
+    """Keep the newest messages, but never the opening request.
+
+    A negative ``limit`` means no limit. ``0`` is not a sensible message count --
+    a conversation with no opening request cannot be titled or resumed -- so it is
+    raised to the first request plus nothing.
+
+    The first user message is what a conversation is named after and what tells a
+    reopened transcript what it was for, so it survives the trim even when the rest
+    of the oldest history does not.
+    """
+
+    if limit < 0 or len(messages) <= limit:
+        return messages, 0
+    if limit == 0:
+        return [], len(messages)
+    dropped = len(messages) - limit
+    for index, item in enumerate(messages):
+        if isinstance(item, dict) and item.get("role") == MessageRole.USER.value:
+            head = [item]
+            tail = messages[index + 1 :]
+            return head + tail[-(limit - 1) :], dropped
+    return messages[-limit:], dropped
+
+
+def _trim_items(items: list[Any], limit: int) -> tuple[list[Any], int]:
+    """Keep the newest items. ``0`` keeps none, which is a supported setting."""
+
+    if limit < 0 or len(items) <= limit:
+        return items, 0
+    if limit == 0:
+        return [], len(items)
+    return items[-limit:], len(items) - limit
 
 
 def derive_title(messages: list[dict[str, Any]], fallback: str = "Conversation") -> str:
@@ -152,16 +243,28 @@ def snapshot_session(
     title: str = "",
     provider: dict[str, Any] | None = None,
     finished: bool = True,
+    limits: StorageLimits | None = None,
 ) -> dict[str, Any]:
     """Build the durable record for ``session``.
 
     ``finished`` marks whether the last turn ended cleanly. A conversation
     interrupted mid-turn is stored as unfinished so a resume can say so instead of
     pretending the tool call ran.
+
+    ``limits`` bounds the result. The visible transcript survives a long
+    conversation by losing its oldest turns rather than its newest, and any single
+    over-long value is shortened with a note in place of the missing text.
     """
 
+    bounds = limits or StorageLimits()
     payload = session.to_dict()
-    messages = _scrub_deep(payload.get("messages", []))
+    messages = _truncate_deep(_scrub_deep(payload.get("messages", [])), bounds.max_chars_per_item)
+    turns = _truncate_deep(_scrub_deep(payload.get("turns", [])), bounds.max_chars_per_item)
+    tool_results = _truncate_deep(
+        _scrub_deep(payload.get("tool_results", [])), bounds.max_chars_per_item
+    )
+    messages, dropped_messages = _trim_messages(messages, bounds.max_messages)
+    tool_results, dropped_results = _trim_items(tool_results, bounds.max_tool_results)
     now = time.time()
     return {
         "schema_version": SCHEMA_VERSION,
@@ -177,8 +280,15 @@ def snapshot_session(
             "base_url": str((provider or {}).get("base_url") or ""),
         },
         "messages": messages,
-        "turns": _scrub_deep(payload.get("turns", [])),
-        "tool_results": _scrub_deep(payload.get("tool_results", [])),
+        "turns": turns,
+        "tool_results": tool_results,
+        # What the limits cost, recorded rather than implied: a transcript that has
+        # lost its oldest turns says so instead of looking like the whole thing.
+        "truncated": {
+            "dropped_messages": dropped_messages,
+            "dropped_tool_results": dropped_results,
+            "limits": bounds.to_dict(),
+        },
         # Stated rather than implied, so a reader of the record knows exactly what
         # did not travel with it.
         "not_restored": {
@@ -249,7 +359,13 @@ class ConversationStore:
         return True
 
     def delete(self, conversation_id: str) -> bool:
-        """Remove a record. Returns ``False`` if there was nothing to remove."""
+        """Remove a record. Returns ``False`` if there was nothing to remove.
+
+        Deletion is immediate and total: the file is gone, so the conversation is
+        no longer listed, no longer restorable and no longer resumable. There is no
+        soft-delete state to fall back on -- a user who asked for it to be deleted
+        should not be able to find it again by reopening the application.
+        """
 
         target = self.path_for(conversation_id)
         if not target.is_file():
@@ -304,6 +420,31 @@ class ConversationStore:
         summaries = self.list()
         return summaries[0] if summaries else None
 
+    def export(self, conversation_id: str, target: Path, *, fmt: str = "md") -> Path:
+        """Write a conversation out as Markdown or JSON.
+
+        Export is how a conversation outlives the application: the record format
+        carries internals a person does not want to read, so Markdown is for
+        reading and sharing and JSON is for re-importing elsewhere. Either way the
+        content is exactly what was stored, with the same redaction applied.
+        """
+
+        payload = self.load(conversation_id)
+        if payload is None:
+            raise FileNotFoundError(f"no stored conversation with id {conversation_id!r}")
+        if fmt == "json":
+            text = render_json(payload)
+            target = target.with_suffix(".json")
+        elif fmt in ("md", "markdown"):
+            text = render_markdown(payload)
+            target = target.with_suffix(".md")
+        else:
+            raise ValueError(f"unsupported export format: {fmt!r} (use 'md' or 'json')")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        logger.info("Exported conversation %s to %s", conversation_id, target)
+        return target
+
     def _read(self, conversation_id: str) -> dict[str, Any] | None:
         path = self.path_for(conversation_id)
         if not path.is_file():
@@ -356,8 +497,139 @@ class ConversationStore:
             payload.setdefault("title", derive_title(messages))
             payload.setdefault("updated_at", payload.get("created_at") or time.time())
             payload.setdefault("finished", True)
+            payload["schema_version"] = 2
+        if version < 3:
+            # v2 stored tool results with no timestamp, which makes it impossible
+            # to say where a tool call sat among the assistant messages. Records
+            # written before tool results carried a time are back-filled from the
+            # conversation's own creation point, so they stay readable and in order
+            # rather than being rejected; the back-fill is marked so the difference
+            # is not hidden.
+            back_filled = False
+            for item in payload.get("tool_results", []) or []:
+                if isinstance(item, dict) and "created_at" not in item:
+                    item["created_at"] = float(payload.get("created_at") or time.time())
+                    back_filled = True
+            payload.setdefault(
+                "truncated",
+                {
+                    "dropped_messages": 0,
+                    "dropped_tool_results": 0,
+                    "limits": StorageLimits().to_dict(),
+                },
+            )
+            if back_filled:
+                logger.info("Back-filled missing tool timestamps in an older record")
             payload["schema_version"] = SCHEMA_VERSION
         return payload
+
+
+def _stamp(epoch: Any) -> str:
+    if not isinstance(epoch, (int, float)) or epoch <= 0:
+        return "unknown time"
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch))
+
+
+def _tool_line(result: dict[str, Any]) -> str:
+    """One readable line per tool call, with no payloads."""
+
+    tool = str(result.get("tool") or "tool")
+    ok = bool(result.get("ok", False))
+    text = str(result.get("summary") or "")
+    if not ok:
+        text = str(result.get("error") or text or "failed")
+    duration = result.get("duration_ms")
+    suffix = (
+        f" ({float(duration):.0f} ms)" if isinstance(duration, (int, float)) and duration else ""
+    )
+    return f"{'OK' if ok else 'FAILED'} {tool}: {text}{suffix}"
+
+
+def _ordered_lines(payload: dict[str, Any]) -> list[tuple[str, str, float]]:
+    """The conversation as ``(kind, text, when)`` in the order it happened.
+
+    The same merge the reopened transcript uses: messages and tool results sorted
+    by when they were produced, messages first when the clock cannot separate them.
+    """
+
+    entries: list[tuple[float, int, int, str, str]] = []
+    for index, message in enumerate(payload.get("messages", []) or []):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        content = str(message.get("content") or "")
+        when = message.get("created_at")
+        when = float(when) if isinstance(when, (int, float)) else 0.0
+        if role == MessageRole.USER.value:
+            entries.append((when, 0, index, "user", content))
+        elif role == MessageRole.ASSISTANT.value and content.strip():
+            entries.append((when, 0, index, "assistant", content))
+    for index, result in enumerate(payload.get("tool_results", []) or []):
+        if not isinstance(result, dict):
+            continue
+        when = result.get("created_at")
+        when = float(when) if isinstance(when, (int, float)) else 0.0
+        entries.append((when, 1, index, "tool", _tool_line(result)))
+    entries.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [(kind, text, stamp) for stamp, _, _, kind, text in entries]
+
+
+def render_markdown(payload: dict[str, Any]) -> str:
+    """A conversation as a readable Markdown document.
+
+    This is the format to read, diff and paste into an issue. It carries the
+    transcript and the tool outcomes, states plainly that the last turn was
+    interrupted when it was, and does not carry tool payloads or internal metadata.
+    """
+
+    provider = payload.get("provider", {})
+    provider = provider if isinstance(provider, dict) else {}
+    title = str(payload.get("title") or "Conversation")
+    finished = bool(payload.get("finished", True))
+    lines = [f"# {title}", ""]
+    lines.append(f"- **Conversation**: `{payload.get('id', '')}`")
+    lines.append(f"- **Started**: {_stamp(payload.get('created_at'))}")
+    lines.append(f"- **Last activity**: {_stamp(payload.get('updated_at'))}")
+    if payload.get("workspace"):
+        lines.append(f"- **Project**: `{payload['workspace']}`")
+    if provider.get("model"):
+        provider_name = provider.get("name") or "provider"
+        lines.append(f"- **Model**: {provider_name} / {provider['model']}")
+    lines.append("")
+    if not finished:
+        lines += [
+            "> The last turn in this conversation was **interrupted** and did not "
+            "finish. Nothing from it was replayed, and no answer below should be "
+            "read as its result.",
+            "",
+        ]
+    truncated = payload.get("truncated", {})
+    if isinstance(truncated, dict) and (
+        truncated.get("dropped_messages") or truncated.get("dropped_tool_results")
+    ):
+        lines += [
+            f"> This record was stored under size limits and is **partial**: "
+            f"{truncated.get('dropped_messages', 0)} older messages and "
+            f"{truncated.get('dropped_tool_results', 0)} older tool results were "
+            "dropped, and long values were shortened in place.",
+            "",
+        ]
+    lines += ["## Transcript", ""]
+    for kind, text, when in _ordered_lines(payload):
+        label = {"user": "You", "assistant": "Assistant", "tool": "Tool"}.get(kind, kind)
+        lines += [f"### {label} · {_stamp(when)}", "", text.strip() or "_(no text)_", ""]
+    not_restored = payload.get("not_restored")
+    if isinstance(not_restored, dict):
+        lines += ["## Not restored", ""]
+        lines += [f"- **{key}**: {value}" for key, value in not_restored.items()]
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_json(payload: dict[str, Any]) -> str:
+    """A conversation as JSON: the whole record, for tooling and re-import."""
+
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n"
 
 
 def _safe_name(conversation_id: str) -> str:

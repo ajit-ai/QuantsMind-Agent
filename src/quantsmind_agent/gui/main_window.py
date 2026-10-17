@@ -7,6 +7,8 @@ services. It contains no provider or agent logic of its own.
 from __future__ import annotations
 
 import queue
+import re
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +42,21 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = ["MainWindow"]
 
 logger = get_logger(__name__)
+
+
+def _safe_filename(title: str) -> str:
+    """A title usable as a filename, for a suggested export name."""
+
+    cleaned = re.sub(r"[^\w \-]+", "", title, flags=re.UNICODE).strip()
+    return re.sub(r"\s+", "-", cleaned)[:60] or "conversation"
+
+
+def _clock(epoch: float) -> str:
+    """The time something happened, for a replayed transcript line."""
+
+    if not epoch or epoch <= 0:
+        return ""
+    return time.strftime("%H:%M:%S", time.localtime(epoch))
 
 
 class MainWindow(QMainWindow):
@@ -79,9 +96,9 @@ class MainWindow(QMainWindow):
         """
 
         self._refresh_conversations()
-        if not self._context.config_manager.config.agent.resume_last_conversation:
-            return
-        if not self._context.resume_latest_conversation():
+        already = self._context.resumed_conversation_id
+        resumed = True if already else self._context.resume_on_startup(honour_setting=True)
+        if not resumed:
             return
         self._restore_transcript()
         unavailable = self._context.unavailable_workspace
@@ -92,7 +109,11 @@ class MainWindow(QMainWindow):
                 kind="error",
             )
         self._refresh_conversations()
-        self.conversation.append_notice("Reopened your last conversation.")
+        self.conversation.append_notice(
+            "Reopened your last conversation."
+            if not already
+            else "Continuing the conversation you were last working in."
+        )
 
     @property
     def is_busy(self) -> bool:
@@ -232,6 +253,7 @@ class MainWindow(QMainWindow):
         self.sidebar.conversation_selected.connect(self._on_conversation_selected)
         self.sidebar.conversation_delete_requested.connect(self._on_conversation_delete_requested)
         self.sidebar.conversation_rename_requested.connect(self._on_conversation_rename_requested)
+        self.sidebar.conversation_export_requested.connect(self._on_conversation_export_requested)
 
         events = self._context.events
         # Keep the unsubscribe callable. ``subscribe_all`` stores a strong
@@ -349,17 +371,46 @@ class MainWindow(QMainWindow):
     def _restore_transcript(self) -> None:
         """Replay the restored conversation into the view.
 
-        Replayed from the messages, not from turn records: the transcript is what
-        is durable, and it is what the user recognises. Tool notices are not
-        re-rendered -- the full record stays on disk for that.
+        Replayed from the ordered history: user requests, assistant answers and the
+        tool calls in between, in the order they actually happened, each with the
+        time it happened rather than the time the window was opened. An assistant
+        message that only asked for tools is skipped, because the tool lines it
+        leads to already say what it did.
         """
 
-        for message in self._context.session.messages:
+        for entry in self._context.session.ordered_history():
+            stamp = _clock(entry.created_at)
+            if entry.tool_result is not None:
+                self.conversation.append_tool_result(entry.tool_result, stamp=stamp)
+                continue
+            message = entry.message
+            if message is None:
+                continue
             role = getattr(message.role, "value", "")
             if role == "user":
-                self.conversation.append_user(message.content)
+                self.conversation.append_user(message.content, stamp=stamp)
             elif role == "assistant" and message.content.strip():
-                self.conversation.append_assistant(message.content)
+                self.conversation.append_assistant(
+                    message.content,
+                    meta=getattr(message, "model", "") or "",
+                    stamp=stamp,
+                )
+        self._explain_restored_state()
+
+    def _explain_restored_state(self) -> None:
+        """Admit anything the stored record cannot honestly show as complete."""
+
+        outcome = self._context.resumed_outcome
+        if outcome in ("cancelled", "failed", "interrupted"):
+            self.conversation.append_interrupted_notice(outcome)
+        dropped = self._context.resumed_dropped_items
+        if dropped:
+            self.conversation.append_notice(
+                f"Older history was dropped when this conversation was stored to stay "
+                f"within its size limit ({dropped} items). What is shown is the recent "
+                "part, not the whole conversation.",
+                kind="info",
+            )
 
     @Slot(str, str)
     def _on_conversation_rename_requested(self, conversation_id: str, title: str) -> None:
@@ -382,6 +433,30 @@ class MainWindow(QMainWindow):
                 "That conversation could not be renamed; it may have been deleted.",
                 kind="error",
             )
+
+    @Slot(str)
+    def _on_conversation_export_requested(self, conversation_id: str) -> None:
+        """Write a conversation out as Markdown or JSON."""
+
+        title = ""
+        summary = next(
+            (item for item in self._context.list_conversations() if item.id == conversation_id),
+            None,
+        )
+        if summary is not None:
+            title = summary.title
+        path, fmt = self.sidebar.choose_export_destination(f"{_safe_filename(title)}.md")
+        if not path:
+            return
+        written = self._context.export_conversation(path, conversation_id=conversation_id, fmt=fmt)
+        if written is None:
+            self.conversation.append_notice(
+                "That conversation could not be exported; it may have been deleted.",
+                kind="error",
+            )
+            return
+        self.activity.notice("conversation exported")
+        self.conversation.append_notice(f"Exported to {written}")
 
     @Slot(str)
     def _on_conversation_delete_requested(self, conversation_id: str) -> None:

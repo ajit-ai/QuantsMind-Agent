@@ -15,7 +15,9 @@ import pytest
 from quantsmind_agent import config as config_module
 from quantsmind_agent.app import ApplicationContext, _build_parser, _paths_from_args, main
 from quantsmind_agent.config import ConfigManager
+from quantsmind_agent.conversations import snapshot_session
 from quantsmind_agent.secrets import FileSecretStore
+from quantsmind_agent.tools import ToolResult
 
 pytestmark = pytest.mark.integration
 
@@ -67,6 +69,10 @@ class TestArgumentParsing:
         assert args.debug is False
         assert args.no_log_file is False
         assert args.check_config is False
+        assert args.no_resume is False
+        assert args.conversation is None
+        assert args.export is None
+        assert args.export_format == "md"
 
     def test_flags(self) -> None:
         args = _build_parser().parse_args(
@@ -76,6 +82,18 @@ class TestArgumentParsing:
         assert args.debug is True
         assert args.no_log_file is True
         assert args.check_config is True
+
+    def test_conversation_flags(self) -> None:
+        args = _build_parser().parse_args(
+            ["--conversation", "conv-1", "--no-resume", "--export", "out.json"]
+        )
+        assert args.conversation == "conv-1"
+        assert args.no_resume is True
+        assert args.export == "out.json"
+
+    def test_an_unknown_export_format_is_refused_by_the_parser(self) -> None:
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args(["--export", "out.pdf", "--export-format", "pdf"])
 
     def test_config_dir_redirects_every_location(self, tmp_path: Path) -> None:
         args = _build_parser().parse_args(["--config-dir", str(tmp_path / "portable")])
@@ -152,6 +170,157 @@ class TestCheckConfig:
         code = main(["--check-config", "--no-log-file", "--workspace", str(tmp_path / "nope")])
         assert code == 2
         assert "could not be opened" in capsys.readouterr().err
+
+
+def _store_a_conversation(
+    title: str,
+    *,
+    conversation_id: str = "conv-seeded",
+    finished: bool = True,
+) -> None:
+    """Write one stored conversation straight through the store.
+
+    Built here rather than by running the agent so the console commands are tested
+    against a known record, with no provider, project or network involved. It goes
+    where the CLI looks -- :func:`default_paths`, i.e. the directories the
+    environment redirects to -- rather than into a fixture's, which is a different
+    set of paths.
+    """
+
+    from quantsmind_agent.conversations import ConversationStore
+    from quantsmind_agent.paths import default_paths
+    from quantsmind_agent.schema import AssistantMessage, UserMessage
+    from quantsmind_agent.session import Session
+
+    session = Session()
+    session.add_message(UserMessage(content=title))
+    session.record_tool_result(ToolResult.success("read_file", "read mod.py"))
+    session.add_message(AssistantMessage(content="the answer to the question"))
+    turn = session.begin_turn(title)
+    turn.finished_at = turn.started_at + 1.0
+    store = ConversationStore(default_paths().data_dir / "conversations")
+    payload = snapshot_session(
+        session,
+        provider={"name": "openai", "model": "gpt", "base_url": "https://api.test/v1"},
+        finished=finished,
+    )
+    payload["id"] = conversation_id
+    store.save(payload)
+
+
+class TestConversationCommands:
+    def test_listing_reports_an_empty_store(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert main(["--list-conversations", "--no-log-file"]) == 0
+        assert "No stored conversations." in capsys.readouterr().out
+
+    def test_listing_shows_a_stored_conversation(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _store_a_conversation("Explain the parser")
+
+        assert main(["--list-conversations", "--no-log-file"]) == 0
+        out = capsys.readouterr().out
+        assert "Explain the parser" in out
+        assert "conv-seeded" in out
+
+    def test_an_interrupted_conversation_is_flagged_in_the_listing(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _store_a_conversation("Cut short", finished=False)
+
+        main(["--list-conversations", "--no-log-file"])
+
+        assert "interrupted" in capsys.readouterr().out
+
+    def test_export_writes_markdown(self, tmp_path: Path) -> None:
+        _store_a_conversation("Explain the parser")
+        target = tmp_path / "dossier"
+
+        assert (
+            main(["--export", str(target), "--no-log-file", "--conversation", "conv-seeded"]) == 0
+        )
+        text = target.with_suffix(".md").read_text(encoding="utf-8")
+        assert "Explain the parser" in text
+        assert "the answer to the question" in text
+
+    def test_the_filename_suffix_decides_the_format(self, tmp_path: Path) -> None:
+        import json as json_module
+
+        _store_a_conversation("Explain the parser")
+        target = tmp_path / "dossier.json"
+
+        assert (
+            main(["--export", str(target), "--no-log-file", "--conversation", "conv-seeded"]) == 0
+        )
+        assert json_module.loads(target.read_text(encoding="utf-8"))["id"] == "conv-seeded"
+
+    def test_exporting_a_conversation_that_does_not_exist_exits_one(
+        self, capsys: pytest.CaptureFixture[str], tmp_path: Path
+    ) -> None:
+        _store_a_conversation("Explain the parser")
+
+        code = main(
+            ["--export", str(tmp_path / "out.md"), "--no-log-file", "--conversation", "gone"]
+        )
+
+        assert code == 1
+        assert "may not be stored" in capsys.readouterr().err
+
+    def test_the_cli_resumes_the_last_conversation(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _store_a_conversation("Explain the parser")
+
+        assert main(["--check-config", "--no-log-file"]) in (0, 1)
+        out = capsys.readouterr().out
+        assert "resumed" in out
+        assert "Explain the parser" in out
+        assert "conv-seeded" in out
+
+    def test_no_resume_leaves_the_console_start_blank(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _store_a_conversation("Explain the parser")
+
+        main(["--check-config", "--no-log-file", "--no-resume"])
+
+        assert "resumed" not in capsys.readouterr().out
+
+    def test_resumption_switched_off_in_config_is_honoured_by_the_cli(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _store_a_conversation("Explain the parser")
+        config_dir = Path(os.environ["QM_CONFIG_DIR"])
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "config.toml").write_text(
+            "[agent]\nresume_last_conversation = false\n", encoding="utf-8"
+        )
+
+        main(["--check-config", "--no-log-file"])
+
+        assert "resumed" not in capsys.readouterr().out
+
+    def test_a_named_conversation_is_resumed_by_the_cli(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _store_a_conversation("Explain the parser", conversation_id="conv-named")
+
+        main(["--check-config", "--no-log-file", "--conversation", "conv-named"])
+
+        assert "conv-named" in capsys.readouterr().out
+
+    def test_a_deleted_conversation_is_not_listed_or_resumed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from quantsmind_agent.paths import default_paths
+
+        _store_a_conversation("Explain the parser")
+        store = default_paths().data_dir / "conversations"
+        (store / "conv-seeded.json").unlink()
+
+        main(["--list-conversations", "--no-log-file"])
+        assert "Explain the parser" not in capsys.readouterr().out
+
+        main(["--check-config", "--no-log-file"])
+        assert "resumed" not in capsys.readouterr().out
 
 
 class TestStartup:

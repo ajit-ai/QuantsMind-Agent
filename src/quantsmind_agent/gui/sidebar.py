@@ -42,6 +42,8 @@ class Sidebar(QWidget):
     conversation_delete_requested = Signal(str)
     #: The rename button asked for a new title for a conversation id.
     conversation_rename_requested = Signal(str, str)
+    #: The export button asked for the listed conversation id and a destination.
+    conversation_export_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -151,6 +153,10 @@ class Sidebar(QWidget):
         new_button = QPushButton("New")
         new_button.clicked.connect(self.new_conversation_requested.emit)
         buttons.addWidget(new_button)
+        export_button = QPushButton("Export")
+        export_button.setToolTip("Save the listed conversation to a file")
+        export_button.clicked.connect(self._on_export_clicked)
+        buttons.addWidget(export_button)
         rename_button = QPushButton("Rename")
         rename_button.setToolTip("Give the listed conversation a name you will recognise")
         rename_button.clicked.connect(self._on_rename_clicked)
@@ -188,6 +194,37 @@ class Sidebar(QWidget):
         index = self._conversation_combo.currentIndex()
         if 0 <= index < len(self._conversation_ids):
             self.conversation_delete_requested.emit(self._conversation_ids[index])
+
+    def _on_export_clicked(self) -> None:
+        index = self._conversation_combo.currentIndex()
+        if 0 <= index < len(self._conversation_ids):
+            self.conversation_export_requested.emit(self._conversation_ids[index])
+
+    def choose_export_destination(self, suggested: str) -> tuple[str, str]:
+        """Ask where to write an export. Returns ``(path, format)``.
+
+        ``format`` is ``"md"`` or ``"json"``, taken from the filter the user picked
+        rather than a second dialog, because that filter also decides the suffix.
+        """
+
+        dialog = QFileDialog(self)
+        dialog.setWindowTitle("Export conversation")
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setNameFilters(["Markdown (*.md)", "JSON (*.json)"])
+        dialog.setDefaultSuffix(".md")
+        if suggested:
+            dialog.selectFile(suggested)
+        if not dialog.exec():
+            return "", ""
+        chosen = dialog.selectedFiles()
+        if not chosen or not chosen[0]:
+            return "", ""
+        path = chosen[0]
+        fmt = "json" if "json" in dialog.selectedNameFilter().lower() else "md"
+        expected = ".json" if fmt == "json" else ".md"
+        if not path.lower().endswith(expected):
+            path = f"{path}{expected}"
+        return path, fmt
 
     # -- conversations -----------------------------------------------------
     def set_conversations(self, entries: list[tuple[str, str]], *, active_id: str = "") -> None:
@@ -227,8 +264,22 @@ class Sidebar(QWidget):
         self._conversation_labels = labels
 
     def _mark_active(self, active_id: str) -> None:
-        if active_id and active_id in self._conversation_ids:
-            self._conversation_combo.setCurrentIndex(self._conversation_ids.index(active_id))
+        """Show which conversation is open, without asking to reopen anything.
+
+        Signals are blocked because this moves the selection: a refresh that
+        changes the highlighted row would otherwise emit ``conversation_selected``
+        and reopen the conversation that was already open, replaying its
+        transcript a second time.
+        """
+
+        if not active_id or active_id not in self._conversation_ids:
+            return
+        index = self._conversation_ids.index(active_id)
+        if self._conversation_combo.currentIndex() == index:
+            return
+        blocked = self._conversation_combo.blockSignals(True)
+        self._conversation_combo.setCurrentIndex(index)
+        self._conversation_combo.blockSignals(blocked)
 
     def conversations_available(self) -> bool:
         return bool(self._conversation_ids)

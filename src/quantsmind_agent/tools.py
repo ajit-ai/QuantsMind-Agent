@@ -106,7 +106,7 @@ class ToolSpec:
 class ToolResult:
     """Structured outcome of a tool invocation."""
 
-    __slots__ = ("data", "duration_ms", "error", "ok", "summary", "tool")
+    __slots__ = ("created_at", "data", "duration_ms", "error", "ok", "summary", "tool")
 
     def __init__(
         self,
@@ -116,6 +116,8 @@ class ToolResult:
         data: dict[str, Any] | None = None,
         error: str | None = None,
         duration_ms: float = 0.0,
+        *,
+        created_at: float | None = None,
     ) -> None:
         self.tool = tool
         self.ok = ok
@@ -123,6 +125,10 @@ class ToolResult:
         self.data: dict[str, Any] = dict(data or {})
         self.error = error
         self.duration_ms = duration_ms
+        # When the result was produced. Tool traffic is not kept in the message
+        # list, so without this a restored transcript cannot say where a tool call
+        # sat relative to the assistant messages around it.
+        self.created_at = time.time() if created_at is None else created_at
 
     def __repr__(self) -> str:  # pragma: no cover - trivial
         state = "ok" if self.ok else f"error={self.error!r}"
@@ -136,8 +142,9 @@ class ToolResult:
         data: dict[str, Any] | None = None,
         *,
         duration_ms: float = 0.0,
+        created_at: float | None = None,
     ) -> ToolResult:
-        return cls(tool, True, summary, data, None, duration_ms)
+        return cls(tool, True, summary, data, None, duration_ms, created_at=created_at)
 
     @classmethod
     def failure(
@@ -147,16 +154,47 @@ class ToolResult:
         error: str,
         *,
         duration_ms: float = 0.0,
+        created_at: float | None = None,
     ) -> ToolResult:
-        return cls(tool, False, summary, None, error, duration_ms)
+        return cls(tool, False, summary, None, error, duration_ms, created_at=created_at)
 
     def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"tool": self.tool, "ok": self.ok, "summary": self.summary}
+        payload: dict[str, Any] = {
+            "tool": self.tool,
+            "ok": self.ok,
+            "summary": self.summary,
+            "created_at": self.created_at,
+        }
         if self.data:
             payload["data"] = self.data
         if self.error:
             payload["error"] = self.error
         return payload
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ToolResult | None:
+        """Rebuild a stored result, or ``None`` when it is not one.
+
+        Used when a conversation is reopened: a result that cannot be rebuilt is
+        dropped rather than shown as an empty line in the transcript.
+        """
+
+        if not isinstance(payload, dict):
+            return None
+        tool = str(payload.get("tool") or "")
+        if not tool:
+            return None
+        data = payload.get("data")
+        created_at = payload.get("created_at")
+        return cls(
+            tool,
+            bool(payload.get("ok", False)),
+            str(payload.get("summary") or ""),
+            data if isinstance(data, dict) else None,
+            str(payload["error"]) if payload.get("error") else None,
+            float(payload.get("duration_ms") or 0.0),
+            created_at=float(created_at) if isinstance(created_at, (int, float)) else None,
+        )
 
     def to_observation(self, max_chars: int = 8000) -> str:
         """Render the result as text fed back to the model."""

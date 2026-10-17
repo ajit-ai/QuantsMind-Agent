@@ -82,13 +82,31 @@ Conversations are kept
 ======================
 
 Conversations are stored on disk, one JSON file each, under the application data
-directory. They survive closing the application, and the last one is reopened
-when you start again -- with its transcript, and with the project it was working
-in if that folder is still there.
+directory. They survive closing the application, and the last one is reopened when
+you start again -- with its transcript, the tools it used, and the project it was
+working in if that folder is still there.
 
-The Session panel in the sidebar lists them: pick one to reopen it, rename one
-so you will recognise it later, or delete one you no longer want. ``New
-conversation`` keeps the one you were in; it does not throw it away.
+The Session panel in the sidebar lists them: pick one to reopen it, rename one so
+you will recognise it later, export one to a file, or delete one you no longer
+want. ``New conversation`` keeps the one you were in; it does not throw it away.
+
+What you see when you come back
+-------------------------------
+
+A reopened conversation is replayed in the order it actually happened: your
+requests, the answers, and the tool calls in between, each line carrying the time
+it happened rather than the time you reopened it.
+
+* A tool call is shown by name and outcome -- a read that worked, an edit that
+  did not match, a command that failed. What the tool *returned* is not shown:
+  that can be a whole file or a screenful of build output, which is not what
+  reopening a conversation is for. The full record is still on disk and in the
+  JSON export.
+* **A turn that did not finish says so.** If the application closed while a turn
+  was running, the transcript says it was interrupted and that nothing from it
+  was replayed. It is never presented as a completed answer.
+* **A transcript stored under a size limit says so too**, rather than looking
+  like the whole conversation.
 
 What comes back, and what does not
 ----------------------------------
@@ -107,11 +125,82 @@ conversation restores the **transcript** and nothing else:
 
 If the project a conversation was working in has been moved or deleted, the
 transcript still opens and the sidebar says so, rather than quietly opening a
-different folder.
+different folder. A record written by a newer version of the application is
+skipped rather than misread, and a corrupt one is set aside as ``.json.corrupt``
+instead of deleted, so it can still be recovered by hand.
 
 Credentials are never written into a conversation. API keys stay in the OS
 credential store; a record holds the provider, endpoint and model, and anything
 in your messages that looks like a key is masked before it is written.
+
+Exporting
+---------
+
+**Export** beside the conversation list writes it to a file, in one of two
+formats:
+
+* **Markdown (``.md``)** -- to read, diff and paste into an issue. A title, the
+  project and model it used, then the transcript with each tool call as one line.
+  No tool payloads, no internal metadata. If the last turn was interrupted, the
+  export says so at the top.
+* **JSON (``.json``)** -- the complete record as stored, for scripting or moving
+  the transcript somewhere else.
+
+The filename you choose decides the format. Both are written wherever you point
+them, and neither is changed afterwards by the application.
+
+Deleting
+--------
+
+**Delete** is immediate and total. The record is gone: it is no longer listed,
+cannot be reopened, cannot be exported, and will not be resumed at the next
+start. Export first if you want to keep a copy -- there is no undo for a deleted
+conversation.
+
+From the command line
+---------------------
+
+The same conversations can be reached without starting the window::
+
+    python -m quantsmind_agent --list-conversations
+    python -m quantsmind_agent --export notes.md --conversation conv-abc123
+    python -m quantsmind_agent --conversation conv-abc123 --workspace ./my-project
+
+``--conversation`` picks a specific one; ``--no-resume`` starts blank regardless
+of ``resume_last_conversation``. ``--check-config`` reports which conversation
+would be resumed and how its last turn ended.
+
+Storage
+-------
+
+Conversations are bounded so a long session cannot grow without limit:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 38 14 48
+
+   * - Setting
+     - Default
+     - Effect
+   * - ``max_stored_conversations``
+     - ``50``
+     - How many conversations are kept, oldest pruned
+   * - ``max_stored_messages``
+     - ``400``
+     - Messages per conversation; the oldest go, the newest stay
+   * - ``max_stored_tool_results``
+     - ``400``
+     - Tool results per conversation, oldest pruned
+   * - ``max_stored_item_chars``
+     - ``8000``
+     - Length of any single stored value
+
+Two details worth knowing. The **opening request always survives** the trim, even
+when everything older around it is dropped, because it is what the conversation is
+named after and what tells a reopened transcript what it was for. And a long value
+is shortened **in place**, with a note saying how much was left out -- the model
+still sees the whole thing in the live session; only what is kept on disk is
+shortened. How much a given record lost is recorded in the record itself.
 
 Settings
 --------
@@ -129,13 +218,22 @@ Settings
    * - ``resume_last_conversation``
      - ``true``
      - Reopen the newest one at startup
-   * - ``max_stored_conversations``
-     - ``50``
-     - Cap on stored records, oldest pruned
 
 These live under ``[agent]`` in ``config.toml`` -- see :doc:`settings`. Turning
 ``persist_conversations`` off returns the application to its v0.2 behaviour,
 where a conversation lives only until you close the window.
+
+Where they are stored
+---------------------
+
+``QM_CONFIG_DIR`` moves the whole profile, not just the settings file, so
+conversations follow it::
+
+    set QM_CONFIG_DIR=C:\portable\config
+
+``QM_DATA_DIR`` and ``QM_CACHE_DIR`` move those two specifically. The
+``--config-dir`` flag produces the same layout as the environment variable, so a
+portable copy and a redirected run agree on where the transcripts are.
 
 Asking for a change
 ===================

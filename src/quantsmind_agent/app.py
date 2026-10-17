@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,7 +27,12 @@ from quantsmind_agent.code_tools import build_code_tools
 from quantsmind_agent.command_tools import build_command_tools
 from quantsmind_agent.config import ConfigManager
 from quantsmind_agent.context import ContextEngine
-from quantsmind_agent.conversations import ConversationStore, ConversationSummary, snapshot_session
+from quantsmind_agent.conversations import (
+    ConversationStore,
+    ConversationSummary,
+    StorageLimits,
+    snapshot_session,
+)
 from quantsmind_agent.errors import QuantsMindError
 from quantsmind_agent.events import AgentEvent, AgentEventType, EventBus
 from quantsmind_agent.git_tools import build_git_tools
@@ -89,12 +95,20 @@ class ApplicationContext:
         self._cancel = threading.Event()
         #: Durable conversation storage; ``None`` when persistence is switched off.
         self.conversations: ConversationStore | None = None
+        #: Per-conversation storage bounds, rebuilt with the store.
+        self._storage_limits = StorageLimits()
         #: Title of the conversation in progress, derived from the first request.
         self._conversation_title = ""
         #: Whether the last turn ended cleanly, as it will be recorded on disk.
         self._last_turn_finished = True
         #: A stored project that could not be reopened, for the UI to explain.
         self._unavailable_workspace = ""
+        #: Set when a conversation was reopened at startup.
+        self._resumed_id = ""
+        #: Whether the conversation being resumed ended cleanly, as stored.
+        self._resumed_finished = True
+        #: Older items a resumed record no longer holds, so the UI can say so.
+        self._resumed_truncated = 0
         self.events.subscribe_all(self._record_event)
         self._rebuild()
 
@@ -142,6 +156,11 @@ class ApplicationContext:
             return
         self.conversations = ConversationStore(
             root, max_conversations=agent.max_stored_conversations
+        )
+        self._storage_limits = StorageLimits(
+            max_messages=agent.max_stored_messages,
+            max_tool_results=agent.max_stored_tool_results,
+            max_chars_per_item=agent.max_stored_item_chars,
         )
 
     # -- event plumbing ----------------------------------------------------
@@ -426,6 +445,7 @@ class ApplicationContext:
                 "base_url": provider.base_url,
             },
             finished=self._last_turn_finished,
+            limits=self._storage_limits,
         )
         self._conversation_title = payload["title"]
         try:
@@ -446,6 +466,36 @@ class ApplicationContext:
         if summary is None:
             return False
         return self.open_conversation(summary.id)
+
+    def resume_on_startup(self, *, conversation_id: str = "", honour_setting: bool = True) -> bool:
+        """Resume at startup, honouring ``resume_last_conversation``.
+
+        ``conversation_id`` names a specific conversation, which overrides the
+        "most recent" choice but not the setting: turning resumption off means off
+        whether the newest conversation or a named one was asked for. Used by both
+        the window and the console entry point so they cannot disagree about what
+        "start up and pick up where you left off" means.
+        """
+
+        if self.conversations is None:
+            return False
+        setting = self.config_manager.config.agent.resume_last_conversation
+        if honour_setting and not setting:
+            logger.info("Conversation resumption is switched off")
+            return False
+        target = conversation_id
+        if not target:
+            summary = self.conversations.latest()
+            if summary is None:
+                return False
+            target = summary.id
+        return self.open_conversation(target)
+
+    @property
+    def resumed_conversation_id(self) -> str:
+        """The conversation reopened at startup, so the UI does not reopen it twice."""
+
+        return self._resumed_id
 
     def open_conversation(self, conversation_id: str) -> bool:
         """Switch to a stored conversation.
@@ -477,6 +527,17 @@ class ApplicationContext:
             return False
         self._conversation_title = str(payload.get("title") or "")
         self._last_turn_finished = bool(payload.get("finished", True))
+        self._resumed_finished = self._last_turn_finished
+        self._resumed_id = conversation_id
+        # Recorded so the UI can admit it when the stored transcript is partial
+        # rather than presenting a shortened history as the whole thing.
+        truncated = payload.get("truncated")
+        self._resumed_truncated = (
+            int(truncated.get("dropped_messages", 0))
+            + int(truncated.get("dropped_tool_results", 0))
+            if isinstance(truncated, dict)
+            else 0
+        )
 
         stored_workspace = str(payload.get("workspace") or "")
         if stored_workspace:
@@ -517,11 +578,40 @@ class ApplicationContext:
         return renamed
 
     def delete_conversation(self, conversation_id: str) -> bool:
-        """Delete a stored conversation. The open one is left running."""
+        """Delete a stored conversation. The open one is left running.
+
+        Deletion is total and immediate. A record deleted here is gone from the
+        list, cannot be reopened, and will not be resumed at the next start.
+        """
 
         if self.conversations is None:
             return False
         return self.conversations.delete(conversation_id)
+
+    def export_conversation(
+        self,
+        target: str | Path,
+        *,
+        conversation_id: str = "",
+        fmt: str = "md",
+    ) -> Path | None:
+        """Export a conversation as Markdown or JSON.
+
+        Defaults to the open conversation. Returns ``None`` when there is nothing
+        to export, so the caller can tell the user rather than writing an empty
+        file.
+        """
+
+        if self.conversations is None:
+            return None
+        wanted = conversation_id or self.session.id
+        if self.conversations.load(wanted) is None:
+            return None
+        try:
+            return self.conversations.export(wanted, Path(target), fmt=fmt)
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not export conversation %s: %s", wanted, exc)
+            return None
 
     @property
     def conversation_title(self) -> str:
@@ -532,6 +622,27 @@ class ApplicationContext:
         """A stored project that could not be reopened, for the UI to explain."""
 
         return self._unavailable_workspace
+
+    @property
+    def resumed_outcome(self) -> str:
+        """How the resumed conversation's last turn actually ended.
+
+        ``ok``, ``cancelled``, ``failed`` or ``interrupted``. Read from the stored
+        record rather than guessed, so a reopened conversation can say its last
+        turn never finished instead of implying it did.
+        """
+
+        if not self._resumed_id:
+            return ""
+        if not self._resumed_finished:
+            return "interrupted"
+        return self.session.last_turn_outcome()
+
+    @property
+    def resumed_dropped_items(self) -> int:
+        """Older items the resumed record had already dropped under its limits."""
+
+        return self._resumed_truncated
 
     @property
     def last_turn_finished(self) -> bool:
@@ -630,15 +741,20 @@ class ApplicationContext:
 
     # -- lifecycle ---------------------------------------------------------
     def shutdown(self) -> None:
+        # Whether a turn was in flight has to be read *before* cancelling: the cancel
+        # below sets the flag unconditionally, so checking afterwards reported every
+        # clean shutdown as an interrupted turn and marked good conversations as
+        # unfinished forever.
+        turn_was_running = self.bridge is not None and bool(getattr(self.bridge, "is_busy", False))
         self.deny_pending_approval()
-        if self.bridge is not None and getattr(self.bridge, "is_busy", False):
+        if turn_was_running and self.bridge is not None:
             self.bridge.cancel()
         else:
             self.cancel()
-        # The transcript is worth keeping even on the way out; a turn cancelled by
-        # closing the window is recorded as unfinished rather than as complete.
+        # The transcript is worth keeping even on the way out; a turn that was still
+        # running when the user quit is recorded as unfinished rather than complete.
         if self.session.messages or self.session.turns:
-            self._last_turn_finished = self._last_turn_finished and not self._cancel.is_set()
+            self._last_turn_finished = self._last_turn_finished and not turn_was_running
             self.save_conversation()
 
 
@@ -675,6 +791,32 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Load the configuration, print a redacted summary and exit.",
     )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Start with a blank conversation even if resume_last_conversation is on.",
+    )
+    parser.add_argument(
+        "--conversation",
+        metavar="ID",
+        help="Resume this stored conversation instead of the most recent one.",
+    )
+    parser.add_argument(
+        "--list-conversations",
+        action="store_true",
+        help="Print the stored conversations and exit.",
+    )
+    parser.add_argument(
+        "--export",
+        metavar="PATH",
+        help="Export a conversation to PATH and exit (.md or .json).",
+    )
+    parser.add_argument(
+        "--export-format",
+        choices=("md", "json"),
+        default="md",
+        help="Format for --export when the filename does not say (default: md).",
+    )
     return parser
 
 
@@ -701,8 +843,61 @@ def _run_check_config(context: ApplicationContext) -> int:
     print(f"api key     : {context.config_manager.masked_api_key()}")
     print(f"workspace   : {context.workspace.root if context.workspace else '(none)'}")
     print(f"tools       : {', '.join(context.tools.names) if context.tools else '(none)'}")
+    print(f"conversations: {len(context.list_conversations())} stored")
+    if context.resumed_conversation_id:
+        title = context.conversation_title or context.resumed_conversation_id
+        print(f"resumed     : {title} ({context.resumed_conversation_id})")
+        print(f"last turn   : {context.resumed_outcome}")
     print(f"ready       : {'yes' if ready else 'no'} ({reason})")
     return 0 if ready else 1
+
+
+def _run_list_conversations(context: ApplicationContext) -> int:
+    """Print the stored conversations. Plain text, so it pipes into anything."""
+
+    summaries = context.list_conversations()
+    if not summaries:
+        print("No stored conversations.")
+        return 0
+    print(f"{'ID':<20} {'UPDATED':<17} {'TURNS':>5}  TITLE")
+    for summary in summaries:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(summary.updated_at))
+        flag = "" if summary.finished else "  (interrupted)"
+        print(f"{summary.id:<20} {when:<17} {summary.turn_count:>5}  {summary.title}{flag}")
+    return 0
+
+
+def _run_export(context: ApplicationContext, args: argparse.Namespace) -> int:
+    fmt = args.export_format
+    if Path(args.export).suffix.lower() in (".md", ".markdown"):
+        fmt = "md"
+    elif Path(args.export).suffix.lower() == ".json":
+        fmt = "json"
+    written = context.export_conversation(
+        args.export, conversation_id=args.conversation or "", fmt=fmt
+    )
+    if written is None:
+        target = args.conversation or "the open conversation"
+        print(f"Could not export {target}; it may not be stored.", file=sys.stderr)
+        return 1
+    print(f"Exported to {written}")
+    return 0
+
+
+def _resume_for_startup(context: ApplicationContext, args: argparse.Namespace) -> None:
+    """Honour ``resume_last_conversation`` once, for both front ends.
+
+    Done here rather than in the window so the console path resumes too, and done
+    before the window is built so the window does not resume a second time.
+    """
+
+    if args.no_resume:
+        logger.info("Resumption declined on the command line")
+        return
+    if context.resume_on_startup(conversation_id=args.conversation):
+        logger.info("Resumed conversation %s", context.resumed_conversation_id)
+    elif args.conversation:
+        print(f"No stored conversation with id {args.conversation}.", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -745,6 +940,14 @@ def main(argv: list[str] | None = None) -> int:
             except QuantsMindError as exc:
                 print(exc.user_message, file=sys.stderr)
                 return 2
+
+        if args.list_conversations:
+            return _run_list_conversations(context)
+
+        if args.export:
+            return _run_export(context, args)
+
+        _resume_for_startup(context, args)
 
         if args.check_config:
             return _run_check_config(context)
