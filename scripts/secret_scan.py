@@ -59,9 +59,31 @@ def candidates(staged: bool) -> list[Path]:
     return existing
 
 
+def looks_binary(path: Path, probe: int = 8192) -> bool:
+    """Whether a file is a compiled binary rather than text.
+
+    Packaging output puts Qt's DLLs and other compiled libraries in the working
+    tree, and those embed readable ASCII such as ``private key block``. Decoding
+    them with ``errors="ignore"`` produces text a credential pattern matches, so
+    a build directory turns the scanner into a machine that always complains.
+    A scanner that cries wolf on every build is a scanner people stop running.
+
+    A NUL byte in the first few kilobytes is the standard heuristic, and no text
+    file this project cares about contains one.
+    """
+
+    try:
+        with path.open("rb") as handle:
+            return b"\0" in handle.read(probe)
+    except OSError:
+        return True
+
+
 def scan(paths: list[Path]) -> list[str]:
     findings: list[str] = []
     for path in paths:
+        if looks_binary(path):
+            continue
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:

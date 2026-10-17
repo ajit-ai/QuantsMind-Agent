@@ -1,0 +1,20 @@
+Package: quantsmind-agent
+Version: @VERSION@
+Section: devel
+Priority: optional
+Architecture: @ARCH@
+Depends: libc6, libegl1, libxkbcommon0, libdbus-1-3, libfontconfig1, libglib2.0-0
+Installed-Size: @SIZE@
+Maintainer: QuantsMind <support@quantsmind.invalid>
+Homepage: https://github.com/quantsmind-ai/QuantsMind-Agent
+Description: A local coding agent for your own project folders
+ QuantsMind-Agent is a desktop application that reads, explains and edits code in
+ a project folder you open, and runs commands there when you approve it. It runs
+ entirely on your machine. The application itself carries no licence fee and
+ embeds no API key: cloud model usage is billed by your own provider against
+ your own account, and a local model can be used instead where one is available.
+ .
+ This package installs the application under /opt/quantsmind-agent. Your
+ configuration, credentials, logs and conversation history are kept in
+ $XDG_DATA_HOME and $XDG_CONFIG_HOME and are never touched by installation,
+ upgrade or removal.

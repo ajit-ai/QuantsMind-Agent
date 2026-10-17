@@ -39,6 +39,7 @@ application rather than by the model.
 
    getting-started
    installation
+   packaging
    configuration
    windows
 
