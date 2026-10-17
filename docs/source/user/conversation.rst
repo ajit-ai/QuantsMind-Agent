@@ -81,10 +81,15 @@ switch projects as well, close the project first.
 Asking for a change
 ===================
 
-The agent can carry out a change end to end. It locates the code with the
-navigation tools, makes the smallest edit that solves the problem, and runs the
-check you named to confirm it. Every write, delete, undo and command asks you
-first; a denial is final and the agent moves on rather than asking again.
+The agent can carry out a change end to end, across files. It locates the code
+with the navigation tools, finds every file that depends on it by following the
+imports, makes the smallest edits that solve the problem, and runs the check you
+named to confirm it. Every write, delete, undo and command asks you first; a
+denial is final and the agent moves on rather than asking again.
+
+When one edit in a multi-file change is declined, the others stand and the agent
+reports the change as incomplete -- each file is separately undoable, so you can
+keep what worked and revert what did not.
 
 Two behaviours are worth knowing, because both save you time:
 

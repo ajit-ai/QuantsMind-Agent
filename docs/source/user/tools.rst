@@ -115,25 +115,67 @@ Each entry in ``symbols`` carries ``name``, ``qualified`` (``Store.save``),
 ``find_references``
 -------------------
 
-Where a symbol is defined and where it is used, across the project. Use it before
-a rename or a behaviour change to see the blast radius.
+Where a symbol is defined, where it is imported, and where it is used, across
+the project. Imports are resolved to real files, so this answers the question
+that matters before changing an interface: *which files have to change with it?*
 
 .. code-block:: text
 
-    input:  symbol, path (default "."), max_results (1-200, default 50)
+    input:  symbol, path (default "."), max_results (1-200, default 50),
+            expand (default true)
     output: symbol, root, files_scanned, files_skipped, unparsable_files,
-            definition_count, reference_count, truncated,
-            definitions[], references[]
+            unresolved_imports, definition_count, reference_count,
+            dependent_files[], related[], truncated, expanded, ambiguous,
+            resolution, definitions[], references[]
 
 .. code-block:: json
 
     {
       "definitions": [
-        {"path": "pkg/store.py", "qualified": "Store", "kind": "class",
-         "line": 12, "end_line": 20}
+        {"path": "geometry.py", "qualified": "distance", "kind": "function",
+         "line": 4, "end_line": 6}
       ],
-      "references": [{"path": "pkg/reader.py", "line": 5}]
+      "dependent_files": ["plotter.py", "test_geometry.py"],
+      "references": [
+        {"path": "plotter.py", "line": 6, "kind": "import"},
+        {"path": "plotter.py", "line": 10, "kind": "use"}
+      ],
+      "related": [
+        {"importer": "plotter.py", "source_module": "geometry.py",
+         "imported_name": "distance", "bound_name": "distance", "line": 6}
+      ],
+      "ambiguous": false,
+      "resolution": "name and import matching, one import level, no type inference"
     }
+
+What it resolves
+~~~~~~~~~~~~~~~~
+
+* ``from pkg.store import Store`` -> ``pkg/store.py``, and ``pkg/store/__init__.py``
+  if the module is a package.
+* Relative imports, anchored on the importing file's own package: ``from .x``
+  inside ``pkg/app.py`` means ``pkg.x``; ``from ..x`` inside ``pkg/sub/app.py``
+  means ``pkg.x``.
+* Aliases: ``from pkg.store import Store as Repository`` makes
+  ``pkg/reader.py`` a dependent file, which a plain name search would miss.
+
+What it does not do
+~~~~~~~~~~~~~~~~~~~
+
+It does not do type resolution, and it says so in the ``resolution`` field rather
+than letting the model infer more certainty than exists. Concretely:
+
+* ``ambiguous`` is ``true`` when more than one file defines the name. The
+  definitions are all returned; none is picked for you.
+* An import the workspace cannot map to a file -- a third-party package, a
+  relative import above the root -- is counted in ``unresolved_imports`` and not
+  guessed at.
+* ``related`` follows exactly one import level, and only within the dependent
+  files. It does not walk transitively.
+* ``from x import *`` binds no name it can report, so it yields nothing.
+* Matching is by name, so ``json.load`` also matches a search for ``load``.
+  Over-reporting is deliberate: a missed call site costs a broken refactor, while
+  a spurious one costs a single look.
 
 ``project_symbols``
 -------------------
@@ -177,10 +219,6 @@ They read Python, and they say so instead of guessing:
 * files that could not be read are counted in ``files_skipped``, and files that
   could not be parsed are listed in ``unparsable_files``, so a partial answer is
   never mistaken for a complete one.
-
-Matching in ``find_references`` is by name, so ``json.load`` also matches a
-search for ``load``. That over-reporting is deliberate: a missed call site costs
-a broken refactor, while a spurious one costs a single look.
 
 All three require ``READ_WORKSPACE`` and are read-only, exactly like the v0.1
 tools, and reading records nothing in the undo list.

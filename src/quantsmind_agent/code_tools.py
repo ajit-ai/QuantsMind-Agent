@@ -33,10 +33,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from quantsmind_agent.code_imports import ResolvedImport, parse_imports, resolve_import
 from quantsmind_agent.code_index import (
     MAX_SYMBOLS_PER_FILE,
     Symbol,
-    find_symbols,
     find_uses,
     parse_symbols,
 )
@@ -184,10 +184,12 @@ class FindReferencesTool:
         self.spec = ToolSpec(
             name="find_references",
             description=(
-                "Find where a Python symbol is defined and where it is used, across the "
-                "project. Returns definitions with line ranges and a list of call sites, "
-                "so you can see the blast radius before renaming or changing behaviour. "
-                "Python files only; other file types are not scanned."
+                "Find where a Python symbol is defined, where it is imported, and where "
+                "it is used, across the project. Imports are resolved to real files, so "
+                "dependent_files tells you exactly which modules a change to this symbol "
+                "reaches, and related adds one level of import expansion for those files. "
+                "Use it before changing an interface so you update its callers. Python "
+                "files only; matching is by name and import, with no type inference."
             ),
             input_schema={
                 "type": "object",
@@ -206,6 +208,14 @@ class FindReferencesTool:
                         "description": "Maximum number of references to return (1-200).",
                         "default": 50,
                     },
+                    "expand": {
+                        "type": "boolean",
+                        "description": (
+                            "Follow one import level from the dependent files to show what "
+                            "else they pull in. Default true."
+                        ),
+                        "default": True,
+                    },
                 },
                 "required": ["symbol"],
                 "additionalProperties": False,
@@ -222,6 +232,7 @@ class FindReferencesTool:
             )
         root = str(arguments.get("path") or ".")
         limit = _as_int(arguments, "max_results", 50, low=1, high=_MAX_REFERENCES)
+        expand = arguments.get("expand", True) is not False
 
         try:
             entries = list(self._workspace.walk(root, max_entries=self._max_files))
@@ -232,6 +243,10 @@ class FindReferencesTool:
 
         definitions: list[dict[str, object]] = []
         references: list[dict[str, object]] = []
+        defined_in: dict[str, set[str]] = {}
+        dependents: list[str] = []
+        per_file_imports: dict[str, list[ResolvedImport]] = {}
+        unresolved = 0
         scanned = 0
         skipped = 0
         unparsable: list[str] = []
@@ -250,13 +265,21 @@ class FindReferencesTool:
 
             scanned += 1
             try:
-                found = find_symbols(source, symbol)
+                all_symbols = parse_symbols(source)
                 used = find_uses(source, symbol)
+                records = parse_imports(source)
             except SyntaxError:
                 unparsable.append(entry.path)
                 continue
 
+            found = [
+                item for item in all_symbols if item.name == symbol or item.qualified == symbol
+            ]
             definition_lines = {item.line for item in found}
+            if found:
+                # Every name this file defines, not just the one searched for:
+                # expansion needs to see what a dependent file shares with it.
+                defined_in[entry.path] = {item.name for item in all_symbols}
             for item in found:
                 definitions.append(
                     {
@@ -267,33 +290,100 @@ class FindReferencesTool:
                         "end_line": item.end_line,
                     }
                 )
+
+            resolved_here: list[ResolvedImport] = []
+            import_lines: set[int] = set()
+            for record in records:
+                bound = resolve_import(self._workspace, record, entry.path)
+                if not bound:
+                    # An import the workspace cannot map to a file. Counted, never
+                    # guessed at: pretending to know the target is worse than
+                    # saying it could not be resolved.
+                    unresolved += 1
+                    continue
+                for binding in bound:
+                    resolved_here.append(binding)
+                    if binding.bound_name == symbol or binding.imported_name == symbol:
+                        import_lines.add(binding.line)
+                        if entry.path not in dependents:
+                            dependents.append(entry.path)
+            if resolved_here:
+                per_file_imports[entry.path] = resolved_here
+
             for line in used:
                 if line in definition_lines:
                     continue
                 if len(references) >= limit:
                     truncated = True
                     break
-                references.append({"path": entry.path, "line": line})
+                # Where a name appears decides what it means: on an import line
+                # it is a dependency, anywhere else it is a use.
+                kind = "import" if line in import_lines else "use"
+                references.append({"path": entry.path, "line": line, "kind": kind})
 
-        if len(references) >= limit and not truncated:
-            truncated = False
+        related = (
+            _related_symbols(per_file_imports, defined_in, dependents, limit=limit)
+            if expand
+            else []
+        )
 
         return ToolResult.success(
             self.spec.name,
-            f"{len(definitions)} definitions and {len(references)} references of {symbol}",
+            f"{len(definitions)} definitions and {len(references)} references of {symbol}"
+            + (f" across {len(dependents)} importing files" if dependents else ""),
             {
                 "symbol": symbol,
                 "root": root,
                 "files_scanned": scanned,
                 "files_skipped": skipped,
                 "unparsable_files": unparsable[:20],
+                "unresolved_imports": unresolved,
                 "definition_count": len(definitions),
                 "reference_count": len(references),
+                "dependent_files": dependents[:limit],
+                "related": related,
                 "truncated": truncated,
+                "expanded": expand,
+                # Two files defining one name is a real ambiguity, and the agent
+                # has to see it rather than pick one silently.
+                "ambiguous": len(defined_in) > 1,
+                "resolution": "name and import matching, one import level, no type inference",
                 "definitions": definitions[:limit],
                 "references": references,
             },
         )
+
+
+def _related_symbols(
+    per_file_imports: dict[str, list[ResolvedImport]],
+    defined_in: dict[str, set[str]],
+    dependents: list[str],
+    *,
+    limit: int,
+) -> list[dict[str, object]]:
+    """One level of import expansion: what else the dependent files pull in.
+
+    When ``symbol`` is defined in ``pkg/store.py`` and ``pkg/reader.py`` imports
+    from it, the change is not only in ``reader.py``'s call sites -- it touches
+    whatever else ``reader.py`` binds from that same module. That is one level
+    of import following: enough to scope a cross-file change, and bounded by
+    construction so it cannot walk the whole project.
+    """
+
+    related: list[dict[str, object]] = []
+    for path in dependents:
+        for item in per_file_imports.get(path, []):
+            if item.bound_name in defined_in.get(item.path, set()) and len(related) < limit:
+                related.append(
+                    {
+                        "importer": path,
+                        "source_module": item.path,
+                        "imported_name": item.imported_name,
+                        "bound_name": item.bound_name,
+                        "line": item.line,
+                    }
+                )
+    return related
 
 
 class ProjectSymbolsTool:

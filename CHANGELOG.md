@@ -41,9 +41,17 @@ and the project uses [semantic versioning](https://semver.org/).
   file with its exact line range, signature, decorators and docstring summary.
   Because `edit_file`'s `replace_lines` addresses line ranges, the model can now
   aim a precise edit at one function without reading the whole module.
-- `find_references` reports where a symbol is defined and where it is used,
-  including import lines and attribute access, so a rename or behaviour change
-  can be scoped before it is made.
+- `find_references` reports where a symbol is defined, where it is imported and
+  where it is used, including import lines and attribute access, so a rename or
+  behaviour change can be scoped before it is made.
+- `find_references` now resolves imports to real workspace files: absolute
+  (`pkg.store`), relative (`from . import x` anchored on the importing file's
+  own package) and aliased (`Store as Repository`) forms. It reports
+  `dependent_files` -- the modules a change actually reaches, tests included --
+  and one level of import expansion from them (`related`, switchable with
+  `expand`). Results carry `unresolved_imports`, `ambiguous` and an explicit
+  `resolution` string, because this is name and import matching with no type
+  inference and the model must not read it as more.
 - `project_symbols` maps every definition in the project in one call, filterable
   by name fragment or by kind, so locating code the agent has not read does not
   cost one outline per file. It is a map, not an index: nothing is cached or

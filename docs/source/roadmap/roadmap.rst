@@ -74,8 +74,10 @@ Code navigation
   with its exact line range, signature, decorators and docstring summary. The
   line range feeds ``edit_file``'s ``replace_lines``, so a change to one
   function no longer requires the whole module in the context window.
-* ``find_references``: definitions with ranges and call sites across the
-  project, so a rename or behaviour change can be scoped first.
+* ``find_references``: definitions, import sites and call sites across the
+  project, with imports resolved to real files -- so an interface change shows
+  exactly which dependent files have to change with it, aliases included.
+  One level of import expansion from those dependents, bounded.
 * ``project_symbols``: the whole project's definitions in one call, filtered by
   name or kind, so locating code does not cost one outline per file. A map, not
   a cache: nothing persists between calls.
