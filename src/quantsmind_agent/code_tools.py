@@ -5,6 +5,9 @@
     exact line range, signature, decorators and docstring summary.
 ``find_references``
     Where a symbol is defined and where it is used, across the project.
+``project_symbols``
+    Every definition in the project, or the ones matching a name or a kind, in
+    one call -- so locating code does not cost one outline per file.
 
 Both are read-only and require :attr:`Permission.READ_WORKSPACE`, so they
 inherit the same containment rule as every other read: paths go through
@@ -46,6 +49,7 @@ from quantsmind_agent.workspace import Workspace
 __all__ = [
     "CodeOutlineTool",
     "FindReferencesTool",
+    "ProjectSymbolsTool",
     "build_code_tools",
 ]
 
@@ -292,10 +296,155 @@ class FindReferencesTool:
         )
 
 
+class ProjectSymbolsTool:
+    """Project-wide map of classes and functions, in one call.
+
+    ``code_outline`` answers "what is in this file", but locating one symbol in
+    an unfamiliar project otherwise costs one outline per file. This is the
+    index view: every definition in the project, filtered by a name fragment or a
+    kind, so the model can go straight to the file that matters.
+
+    The result is deliberately a *map*, not an index: there is no cache, nothing
+    is persisted, and nothing survives the call. A stale index is worse than no
+    index when the model acts on it.
+    """
+
+    def __init__(
+        self,
+        workspace: Workspace,
+        *,
+        max_bytes: int = 2_000_000,
+        max_files: int = _MAX_SCANNED_FILES,
+    ) -> None:
+        self._workspace = workspace
+        self._max_bytes = max_bytes
+        self._max_files = max_files
+        self.spec = ToolSpec(
+            name="project_symbols",
+            description=(
+                "List the classes and functions defined anywhere in the project, each with "
+                "its file and line range. Use it to locate code you have not read yet: "
+                "filter by name to find one definition, or by kind to map a package. "
+                "Cheaper than outlining files one at a time. Python files only."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative directory to index.",
+                        "default": ".",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Only report symbols whose qualified name contains this text "
+                            "(case-insensitive). Omit for everything."
+                        ),
+                    },
+                    "kind": {
+                        "type": "string",
+                        "description": "Only report symbols of this kind.",
+                        "enum": [
+                            "class",
+                            "function",
+                            "method",
+                            "property",
+                            "async function",
+                            "async method",
+                        ],
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of symbols to return (1-500).",
+                        "default": 200,
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+            permission=Permission.READ_WORKSPACE,
+            summary_template="project symbols",
+        )
+
+    def run(self, arguments: dict[str, Any]) -> ToolResult:
+        root = str(arguments.get("path") or ".")
+        query = str(arguments.get("query") or "").strip().lower()
+        kind = str(arguments.get("kind") or "").strip()
+        limit = _as_int(arguments, "max_results", 200, low=1, high=500)
+
+        try:
+            entries = list(self._workspace.walk(root, max_entries=self._max_files))
+        except InvalidPathError as exc:
+            return ToolResult.failure(
+                self.spec.name, self.spec.summarize(arguments), exc.user_message
+            )
+
+        symbols: list[dict[str, object]] = []
+        scanned = 0
+        skipped = 0
+        unparsable: list[str] = []
+        total = 0
+        truncated = False
+
+        for entry in entries:
+            if truncated:
+                break
+            if not entry.path.endswith(PYTHON_SUFFIX):
+                continue
+            try:
+                source = self._workspace.read_text(entry.path, max_bytes=self._max_bytes)
+            except InvalidPathError:
+                skipped += 1
+                continue
+
+            scanned += 1
+            try:
+                found = parse_symbols(source)
+            except SyntaxError:
+                unparsable.append(entry.path)
+                continue
+
+            for symbol in found:
+                if kind and symbol.kind != kind:
+                    continue
+                if query and query not in symbol.qualified.lower():
+                    continue
+                total += 1
+                if len(symbols) < limit:
+                    symbols.append({"path": entry.path, **symbol.to_dict()})
+                else:
+                    truncated = True
+                    break
+
+        filters = []
+        if query:
+            filters.append(f" matching '{query}'")
+        if kind:
+            filters.append(f" of kind {kind}")
+        described = "".join(filters) if filters else ""
+
+        return ToolResult.success(
+            self.spec.name,
+            f"{total} symbols{described} in {scanned} files",
+            {
+                "root": root,
+                "files_scanned": scanned,
+                "files_skipped": skipped,
+                "unparsable_files": unparsable[:20],
+                "symbol_count": total,
+                "returned": len(symbols),
+                "truncated": truncated,
+                "symbols": symbols,
+            },
+        )
+
+
 def build_code_tools(workspace: Workspace, *, max_file_bytes: int = 2_000_000) -> list[Any]:
     """Instantiate the v0.3 code-navigation tools bound to ``workspace``."""
 
     return [
         CodeOutlineTool(workspace, max_bytes=max_file_bytes),
         FindReferencesTool(workspace, max_bytes=max_file_bytes),
+        ProjectSymbolsTool(workspace, max_bytes=max_file_bytes),
     ]

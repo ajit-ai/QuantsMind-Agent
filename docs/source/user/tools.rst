@@ -1,4 +1,4 @@
-.. _user-tools:
+﻿.. _user-tools:
 
 
 =====
@@ -135,8 +135,39 @@ a rename or a behaviour change to see the blast radius.
       "references": [{"path": "pkg/reader.py", "line": 5}]
     }
 
-What these two refuse to do
----------------------------
+``project_symbols``
+-------------------
+
+Every definition in the project, in one call -- so locating code you have not
+read yet does not cost one outline per file.
+
+.. code-block:: text
+
+    input:  path (default "."), query (name fragment),
+            kind (class | function | method | property |
+                  async function | async method),
+            max_results (1-500, default 200)
+    output: root, files_scanned, files_skipped, unparsable_files,
+            symbol_count, returned, truncated, symbols[]
+
+.. code-block:: json
+
+    {
+      "symbols": [
+        {"path": "settings.py", "qualified": "load_settings",
+         "kind": "function", "line": 5, "end_line": 7, "doc": "Read settings."}
+      ]
+    }
+
+``query`` matches the *qualified* name case-insensitively, so ``settings``
+finds ``load_settings``; ``symbol_count`` counts everything that matched even
+when ``truncated`` cut the list short.
+
+It is a map, not an index: nothing is cached and nothing persists. A stale index
+would be worse than none, because the model would act on it.
+
+What the navigation tools refuse to do
+--------------------------------------
 
 They read Python, and they say so instead of guessing:
 
@@ -147,11 +178,12 @@ They read Python, and they say so instead of guessing:
   could not be parsed are listed in ``unparsable_files``, so a partial answer is
   never mistaken for a complete one.
 
-Matching is by name, so ``json.load`` also matches a search for ``load``. That
-over-reporting is deliberate: a missed call site costs a broken refactor, while a
-spurious one costs a single look.
+Matching in ``find_references`` is by name, so ``json.load`` also matches a
+search for ``load``. That over-reporting is deliberate: a missed call site costs
+a broken refactor, while a spurious one costs a single look.
 
-Both require ``READ_WORKSPACE`` and are read-only, exactly like the v0.1 tools.
+All three require ``READ_WORKSPACE`` and are read-only, exactly like the v0.1
+tools, and reading records nothing in the undo list.
 
 Every tool
 ==========

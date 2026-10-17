@@ -180,21 +180,73 @@ class TestNavigationInALoop:
         assert calls[0].data["definition_count"] == 0
         assert calls[1].data["definition_count"] == 1
 
-    def test_a_non_python_file_is_a_tool_error_the_model_can_recover_from(
+
+def test_a_non_python_file_is_a_tool_error_the_model_can_recover_from(
+    app_paths: Any, project: Path
+) -> None:
+    (project / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    provider = FakeModelProvider(
+        [
+            tool_response([("code_outline", {"path": "notes.md"})]),
+            text_response("That is a Markdown file, so I read it instead."),
+        ]
+    )
+    context = _context(app_paths, project, provider)
+
+    result = context.agent.run("Outline notes.md")
+
+    assert result.error is None, "a refused tool must not end the turn"
+    failure = next(r for r in context.session.tool_results if r.tool == "code_outline")
+    assert not failure.ok
+    assert "read_file" in (failure.error or "")
+
+
+class TestLocatingCodeInAnUnfamiliarProject:
+    def test_one_call_locates_a_definition_the_model_never_read(
         self, app_paths: Any, project: Path
     ) -> None:
-        (project / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        # The point of project_symbols: the model finds the file that matters
+        # without outlining every file, then reads only that one.
+        (project / "helpers.py").write_text("def unrelated():\n    return 1\n", encoding="utf-8")
+        (project / "settings.py").write_text(
+            'DEFAULT_PORT = 8080\n\n\ndef load_settings():\n    """Read settings."""\n'
+            '    return {"port": DEFAULT_PORT}\n',
+            encoding="utf-8",
+        )
         provider = FakeModelProvider(
             [
-                tool_response([("code_outline", {"path": "notes.md"})]),
-                text_response("That is a Markdown file, so I read it instead."),
+                tool_response([("project_symbols", {"query": "settings"})]),
+                tool_response([("read_file", {"path": "settings.py"})]),
+                text_response("Settings live in settings.py and load_settings()."),
             ]
         )
         context = _context(app_paths, project, provider)
 
-        result = context.agent.run("Outline notes.md")
+        result = context.agent.run("Where are settings handled?")
 
-        assert result.error is None, "a refused tool must not end the turn"
-        failure = next(r for r in context.session.tool_results if r.tool == "code_outline")
-        assert not failure.ok
-        assert "read_file" in (failure.error or "")
+        assert result.error is None
+        index = next(r for r in context.session.tool_results if r.tool == "project_symbols")
+        assert index.ok
+        found = {(s["path"], s["qualified"]) for s in index.data["symbols"]}
+        assert found == {("settings.py", "load_settings")}
+
+        read = next(r for r in context.session.tool_results if r.tool == "read_file")
+        assert read.data["path"] == "settings.py"
+
+    def test_the_project_map_reports_what_it_skipped(self, app_paths: Any, project: Path) -> None:
+        (project / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        provider = FakeModelProvider(
+            [
+                tool_response([("project_symbols", {})]),
+                text_response("Mapped."),
+            ]
+        )
+        context = _context(app_paths, project, provider)
+
+        context.agent.run("Map the project symbols.")
+
+        index = next(r for r in context.session.tool_results if r.tool == "project_symbols")
+        assert index.ok
+        assert index.data["files_scanned"] == 1
+        assert index.data["truncated"] is False
+        assert index.data["unparsable_files"] == []

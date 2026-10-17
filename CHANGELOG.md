@@ -20,6 +20,10 @@ and the project uses [semantic versioning](https://semver.org/).
 - `find_references` reports where a symbol is defined and where it is used,
   including import lines and attribute access, so a rename or behaviour change
   can be scoped before it is made.
+- `project_symbols` maps every definition in the project in one call, filterable
+  by name fragment or by kind, so locating code the agent has not read does not
+  cost one outline per file. It is a map, not an index: nothing is cached or
+  persisted, because a stale index is worse than none.
 - Both tools are read-only, deterministic and offline: no index, no embedding
   service and no background process, so they work with every provider including
   a local one. Non-Python files, unparsable files and unreadable files are

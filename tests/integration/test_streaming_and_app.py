@@ -199,6 +199,7 @@ class TestApplicationContext:
             "git_status",
             "list_directory",
             "project_structure",
+            "project_symbols",
             "read_file",
             "run_command",
             "search_content",

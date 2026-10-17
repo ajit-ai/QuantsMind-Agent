@@ -76,6 +76,9 @@ Code navigation
   function no longer requires the whole module in the context window.
 * ``find_references``: definitions with ranges and call sites across the
   project, so a rename or behaviour change can be scoped first.
+* ``project_symbols``: the whole project's definitions in one call, filtered by
+  name or kind, so locating code does not cost one outline per file. A map, not
+  a cache: nothing persists between calls.
 * Both are read-only, deterministic, offline -- no index, no embedding service,
   no background process -- so they work with every provider including a local
   one. Non-Python files and unparsable files are refused by name rather than

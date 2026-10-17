@@ -246,9 +246,99 @@ class TestFindReferences:
         assert result.data["definition_count"] == 1
 
 
+class TestProjectSymbols:
+    def test_maps_every_definition_in_the_project(self, tools: ToolRegistry) -> None:
+        result = tools.execute("project_symbols", {})
+
+        assert result.ok
+        assert result.data["files_scanned"] == 2
+        found = {(s["path"], s["qualified"]) for s in result.data["symbols"]}
+        assert found == {
+            ("pkg/store.py", "load"),
+            ("pkg/store.py", "Store"),
+            ("pkg/store.py", "Store.__init__"),
+            ("pkg/store.py", "Store.save"),
+            ("pkg/reader.py", "use"),
+        }
+
+    def test_a_name_query_narrows_the_result(self, tools: ToolRegistry) -> None:
+        result = tools.execute("project_symbols", {"query": "load"})
+
+        assert result.ok
+        assert [s["qualified"] for s in result.data["symbols"]] == ["load"]
+
+    def test_a_query_matches_the_qualified_name(self, tools: ToolRegistry) -> None:
+        result = tools.execute("project_symbols", {"query": "store"})
+
+        found = {s["qualified"] for s in result.data["symbols"]}
+        assert "Store.save" in found
+        assert "load" not in found
+
+    def test_a_kind_filter_selects_constructs(self, tools: ToolRegistry) -> None:
+        result = tools.execute("project_symbols", {"kind": "class"})
+
+        assert result.ok
+        assert {s["qualified"] for s in result.data["symbols"]} == {"Store"}
+
+    def test_a_scope_can_be_narrowed_to_a_directory(self, tools: ToolRegistry) -> None:
+        result = tools.execute("project_symbols", {"path": "pkg", "kind": "method"})
+
+        assert result.ok
+        assert {s["qualified"] for s in result.data["symbols"]} == {
+            "Store.__init__",
+            "Store.save",
+        }
+
+    def test_the_summary_says_what_was_matched(self, tools: ToolRegistry) -> None:
+        result = tools.execute("project_symbols", {"query": "load"})
+
+        assert "matching 'load'" in result.summary
+        assert "1 symbols" in result.summary
+
+    def test_results_are_bounded_and_say_so(self, tools: ToolRegistry, project: Path) -> None:
+        for index in range(5):
+            (project / f"pkg/extra{index}.py").write_text(
+                f"def helper{index}():\n    return {index}\n", encoding="utf-8"
+            )
+
+        result = tools.execute("project_symbols", {"max_results": 2})
+
+        assert result.ok
+        assert result.data["returned"] == 2
+        assert result.data["truncated"] is True
+        assert result.data["symbol_count"] > 2
+
+    def test_non_python_files_are_not_indexed(self, tools: ToolRegistry) -> None:
+        result = tools.execute("project_symbols", {"query": "project"})
+
+        assert result.ok
+        assert result.data["symbols"] == []
+
+    def test_an_unparsable_file_is_counted_not_fatal(
+        self, tools: ToolRegistry, project: Path
+    ) -> None:
+        (project / "pkg" / "broken.py").write_text("def oops(:\n", encoding="utf-8")
+
+        result = tools.execute("project_symbols", {})
+
+        assert result.ok
+        assert "pkg/broken.py" in result.data["unparsable_files"]
+        assert result.data["files_scanned"] == 3
+
+    def test_a_missing_scope_is_refused(self, tools: ToolRegistry) -> None:
+        assert not tools.execute("project_symbols", {"path": "nope"}).ok
+
+    @pytest.mark.parametrize("bad_path", ["../escape.py", "C:/Windows/evil.py", "//host/share"])
+    def test_escape_routes_are_refused(self, tools: ToolRegistry, bad_path: str) -> None:
+        assert not tools.execute("project_symbols", {"path": bad_path}).ok
+
+    def test_no_arguments_indexes_the_whole_project(self, tools: ToolRegistry) -> None:
+        assert tools.execute("project_symbols", {}).ok
+
+
 class TestReadOnly:
-    def test_both_tools_require_only_read_permission(self, tools: ToolRegistry) -> None:
-        assert tools.get("code_outline").spec.permission.value == "READ_WORKSPACE"
-        assert tools.get("find_references").spec.permission.value == "READ_WORKSPACE"
-        assert tools.get("code_outline").spec.read_only is True
-        assert tools.get("find_references").spec.read_only is True
+    def test_every_navigation_tool_requires_only_read_permission(self, tools: ToolRegistry) -> None:
+        for name in ("code_outline", "find_references", "project_symbols"):
+            spec = tools.get(name).spec
+            assert spec.permission.value == "READ_WORKSPACE", name
+            assert spec.read_only is True, name
