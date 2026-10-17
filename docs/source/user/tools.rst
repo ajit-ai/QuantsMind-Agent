@@ -208,8 +208,33 @@ when ``truncated`` cut the list short.
 It is a map, not an index: nothing is cached and nothing persists. A stale index
 would be worse than none, because the model would act on it.
 
+Affected files, reported by the edit
+------------------------------------
+
+After ``write_file`` or ``edit_file`` succeeds, the result carries the files that
+import the one just changed, so the agent does not have to remember to ask:
+
+.. code-block:: json
+
+    {
+      "path": "geometry.py",
+      "undoable": true,
+      "diff": "+def distance(a, b):...",
+      "dependents": [
+        {"path": "plotter.py", "line": 1,
+         "imported_name": "distance", "bound_name": "distance"}
+      ],
+      "dependents_truncated": false
+    }
+
+This is what keeps a cross-file change from being half-finished: the caller list
+arrives in the same observation as the edit, so the next step can cover them.
+Creating a file skips the scan, because nothing could have been importing it.
+The scan is bounded and ``dependents_truncated`` says when the answer may be
+incomplete.
+
 What the navigation tools refuse to do
---------------------------------------
+---------------------------------------
 
 They read Python, and they say so instead of guessing:
 

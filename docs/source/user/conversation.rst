@@ -91,6 +91,10 @@ When one edit in a multi-file change is declined, the others stand and the agent
 reports the change as incomplete -- each file is separately undoable, so you can
 keep what worked and revert what did not.
 
+After every edit the agent is shown which files import the one it changed, so it
+does not have to remember to look for the callers. That list is the difference
+between a change that is complete and one that looks complete.
+
 Two behaviours are worth knowing, because both save you time:
 
 * **Output is bounded from both ends.** A verbose build or test command is cut

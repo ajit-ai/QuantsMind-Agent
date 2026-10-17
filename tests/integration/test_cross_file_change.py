@@ -341,3 +341,48 @@ class TestPartialFailuresStayVisible:
         edits = [r for r in context.session.tool_results if r.tool == "edit_file"]
         assert [edit.ok for edit in edits] == [False, True]
         assert context.session.revisions.depth("plotter.py") == 1
+
+
+class TestAffectedFilesAreReportedByTheEdit:
+    def test_editing_the_interface_surfaces_its_callers_to_the_agent(
+        self, app_paths: Any, project: Path
+    ) -> None:
+        # The agent should not have to remember to ask who depends on the file it
+        # just changed: the edit result tells it, so a cross-file change cannot be
+        # half-finished because the model forgot one call site.
+        provider = FakeModelProvider(
+            [
+                tool_response([("edit_file", _edit("geometry.py", SIGNATURE, NEW_SIGNATURE))]),
+                tool_response([("edit_file", _edit("geometry.py", BODY, NEW_BODY))]),
+                text_response("Changed the signature; plotter.py and test_geometry.py call it."),
+            ]
+        )
+        context = _context(app_paths, project, provider)
+
+        context.agent.run("Make distance() take two points.")
+
+        first = next(r for r in context.session.tool_results if r.tool == "edit_file")
+        assert first.ok
+        assert {entry["path"] for entry in first.data["dependents"]} == {
+            "plotter.py",
+            "test_geometry.py",
+        }
+        assert first.data["dependents_truncated"] is False
+
+    def test_the_caller_edit_reports_only_its_own_dependents(
+        self, app_paths: Any, project: Path
+    ) -> None:
+        provider = FakeModelProvider(
+            [
+                tool_response([("edit_file", _edit("plotter.py", CALL_SITE, NEW_CALL_SITE))]),
+                text_response("Updated the caller."),
+            ]
+        )
+        context = _context(app_paths, project, provider)
+
+        context.agent.run("Update the caller.")
+
+        edit = next(r for r in context.session.tool_results if r.tool == "edit_file")
+        # plotter.py is imported by its own test, so the report is specific rather
+        # than "the whole project".
+        assert {entry["path"] for entry in edit.data["dependents"]} <= {"test_plotter.py"}

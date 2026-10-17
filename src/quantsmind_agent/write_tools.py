@@ -46,6 +46,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from quantsmind_agent.code_imports import importers_of
 from quantsmind_agent.diffs import revision_diff
 from quantsmind_agent.edit_ops import EditOperation, apply_edit, detect_eol
 from quantsmind_agent.errors import (
@@ -97,6 +98,25 @@ def _capture_pre_image(workspace: Workspace, path: str, existed: bool, limit: in
     except InvalidPathError as exc:
         logger.info("Not journalling the change to %s: %s", path, exc.message)
         return _PreImage(None, captured=False)
+
+
+def _affected_files(
+    workspace: Workspace,
+    path: str,
+    *,
+    limit: int = 50,
+    max_files: int = 400,
+) -> dict[str, object]:
+    """Which files import the one just changed, reported to the model.
+
+    A cross-file change only stays correct if the caller notices the callers.
+    Surfacing them in the edit result means the agent does not have to remember
+    to ask, and it is skipped entirely for a file that did not exist a moment ago
+    -- nothing could have been importing it.
+    """
+
+    importers, truncated = importers_of(workspace, path, max_files=max_files)
+    return {"dependents": importers[:limit], "dependents_truncated": truncated}
 
 
 def _record_revision(
@@ -244,6 +264,7 @@ class WriteFileTool:
             create_parents=bool(arguments.get("create_parents", False)),
         )
         undoable = _record_revision(self._journal, before.path, "write_file", pre_image, after)
+        affected = {} if not before.exists else _affected_files(self._workspace, after.path)
         return ToolResult.success(
             self.spec.name,
             f"{'replaced' if before.exists else 'created'} {after.path} ({after.size} bytes)",
@@ -257,6 +278,7 @@ class WriteFileTool:
                 "sha256": after.sha256,
                 "previous_sha256": before.sha256 or None,
                 "undoable": undoable,
+                **affected,
                 **revision_diff(
                     pre_image.bytes,
                     content,
@@ -385,6 +407,7 @@ class EditFileTool:
         )
         after = self._workspace.write_text(path, outcome.content)
         undoable = _record_revision(self._journal, before.path, "edit_file", pre_image, after)
+        affected = _affected_files(self._workspace, after.path)
         logger.info("edit_file applied %s to %s", outcome.description, path)
         return ToolResult.success(
             self.spec.name,
@@ -401,6 +424,7 @@ class EditFileTool:
                 "sha256_before": before.sha256,
                 "sha256_after": after.sha256,
                 "undoable": undoable,
+                **affected,
                 **revision_diff(
                     pre_image.bytes,
                     outcome.content,

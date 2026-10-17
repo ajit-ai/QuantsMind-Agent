@@ -52,6 +52,12 @@ and the project uses [semantic versioning](https://semver.org/).
   `expand`). Results carry `unresolved_imports`, `ambiguous` and an explicit
   `resolution` string, because this is name and import matching with no type
   inference and the model must not read it as more.
+- `write_file` and `edit_file` now report the files that import the file they
+  just changed (`dependents`, with `dependents_truncated` when the scan was cut
+  short). A cross-file change only stays correct if the agent notices the
+  callers, and it should not have to remember to ask: the caller list arrives in
+  the same observation as the edit. Creating a file skips the scan, because
+  nothing could have been importing it.
 - `project_symbols` maps every definition in the project in one call, filterable
   by name fragment or by kind, so locating code the agent has not read does not
   cost one outline per file. It is a map, not an index: nothing is cached or

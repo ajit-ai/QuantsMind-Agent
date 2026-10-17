@@ -28,9 +28,64 @@ from dataclasses import dataclass
 from quantsmind_agent.errors import InvalidPathError
 from quantsmind_agent.workspace import Workspace
 
+
+def importers_of(
+    workspace: Workspace,
+    target_path: str,
+    *,
+    max_files: int = 400,
+) -> tuple[list[dict[str, object]], bool]:
+    """Files that import ``target_path``, and whether the scan was cut short.
+
+    This is the reverse direction, and it is what an edit needs: after changing
+    a module, the agent has to know which other files reach into it. Asking for
+    it explicitly means remembering to ask, and the agent that forgets leaves a
+    broken caller behind.
+
+    Bounded on purpose -- a scan that walks the project on every edit would make
+    the common case slow, so the file count is capped and the caller is told when
+    the answer may be incomplete.
+    """
+
+    importers: list[dict[str, object]] = []
+    truncated = False
+    scanned = 0
+
+    # One entry beyond the budget, so "we stopped early" is distinguishable from
+    # "we looked at everything".
+    for entry in workspace.walk(".", max_entries=max_files + 1):
+        if scanned >= max_files:
+            truncated = True
+            break
+        if not entry.path.endswith(".py") or entry.path == target_path:
+            continue
+        try:
+            source = workspace.read_text(entry.path)
+        except InvalidPathError:
+            continue
+        scanned += 1
+        try:
+            records = parse_imports(source)
+        except SyntaxError:
+            continue
+        for record in records:
+            for binding in resolve_import(workspace, record, entry.path):
+                if binding.path == target_path:
+                    importers.append(
+                        {
+                            "path": entry.path,
+                            "line": binding.line,
+                            "imported_name": binding.imported_name,
+                            "bound_name": binding.bound_name,
+                        }
+                    )
+    return importers, truncated
+
+
 __all__ = [
     "ImportRecord",
     "ResolvedImport",
+    "importers_of",
     "module_name_for",
     "parse_imports",
     "resolve_import",
