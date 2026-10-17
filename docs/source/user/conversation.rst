@@ -86,9 +86,9 @@ directory. They survive closing the application, and the last one is reopened
 when you start again -- with its transcript, and with the project it was working
 in if that folder is still there.
 
-The Session panel in the sidebar lists them: pick one to reopen it, or delete one
-you no longer want. ``New conversation`` keeps the one you were in; it does not
-throw it away.
+The Session panel in the sidebar lists them: pick one to reopen it, rename one
+so you will recognise it later, or delete one you no longer want. ``New
+conversation`` keeps the one you were in; it does not throw it away.
 
 What comes back, and what does not
 ----------------------------------

@@ -379,6 +379,8 @@ class ApplicationContext:
         self.workspace = workspace
         self.session.set_workspace(workspace)
         self.context_engine.set_workspace(workspace)
+        # A project the user opened by hand supersedes any stale "unavailable".
+        self._unavailable_workspace = ""
         self._rebuild()
 
         config = self.config_manager.config
@@ -466,6 +468,10 @@ class ApplicationContext:
         self.recorded_events.clear()
         self.tools.permissions.clear_session_grants()
         self.reset_cancel()
+        # Cleared before the restore, not only when the stored project turns out to
+        # be missing: a stale path from the conversation being left would otherwise
+        # be reported against this one.
+        self._unavailable_workspace = ""
 
         if not self.session.restore_from(payload):
             return False
@@ -550,6 +556,7 @@ class ApplicationContext:
         # grants from the previous one must not carry over.
         self.deny_pending_approval()
         self.reset_cancel()
+        self._unavailable_workspace = ""
         self._rebuild()
         self.tools.permissions.clear_session_grants()
 

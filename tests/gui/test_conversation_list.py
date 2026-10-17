@@ -112,3 +112,90 @@ class TestConversationList:
 
         assert gui_harness.context.session.id == conversation_id
         assert "Reopened" not in gui_harness.transcript
+
+    def test_renaming_shows_the_new_name_in_the_list(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("done")]))
+        gui_harness.ask("a question")
+        conversation_id = gui_harness.context.session.id
+
+        gui_harness.window._on_conversation_rename_requested(conversation_id, "Refactor plan")
+
+        assert gui_harness.context.conversation_title == "Refactor plan"
+        summary = next(
+            item for item in gui_harness.context.list_conversations() if item.id == conversation_id
+        )
+        assert summary.title == "Refactor plan"
+        # The listed label carries the timestamp too, so match on the name.
+        assert any(
+            "Refactor plan" in label for label in gui_harness.window.sidebar.conversation_labels()
+        )
+
+    def test_renaming_the_open_conversation_survives_the_next_save(
+        self, gui_harness: GuiHarness, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("one"), text_response("two")]))
+        gui_harness.ask("first question")
+        conversation_id = gui_harness.context.session.id
+        gui_harness.window._on_conversation_rename_requested(conversation_id, "Keep me")
+
+        gui_harness.ask("second question")
+
+        store = gui_harness.context.conversations
+        assert store is not None
+        payload = store.load(conversation_id)
+        assert payload is not None
+        assert payload["title"] == "Keep me"
+
+    def test_a_blank_rename_is_refused(self, gui_harness: GuiHarness, sample_project: Path) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("done")]))
+        gui_harness.ask("a question")
+        conversation_id = gui_harness.context.session.id
+
+        gui_harness.window._on_conversation_rename_requested(conversation_id, "   ")
+
+        assert gui_harness.context.conversation_title != ""
+        assert "was not applied" in gui_harness.transcript
+
+    def test_renaming_an_unknown_conversation_is_reported_not_crashed(
+        self, gui_harness: GuiHarness
+    ) -> None:
+        gui_harness.window._on_conversation_rename_requested("nope", "Title")
+
+        assert "could not be renamed" in gui_harness.transcript.lower()
+
+    def test_a_stale_unavailable_project_is_not_reported_against_the_next_conversation(
+        self, gui_harness: GuiHarness, tmp_path: Path, sample_project: Path
+    ) -> None:
+        _context_ready(gui_harness)
+        gui_harness.open_project(sample_project)
+        gui_harness.use_provider(FakeModelProvider([text_response("one"), text_response("two")]))
+        gui_harness.ask("first question")
+        lost_id = gui_harness.context.session.id
+        gui_harness.window._on_new_conversation()
+
+        second_project = tmp_path / "second"
+        second_project.mkdir()
+        (second_project / "mod.py").write_text("x = 1\n", encoding="utf-8")
+        gui_harness.open_project(second_project)
+        gui_harness.ask("second question")
+        healthy_id = gui_harness.context.session.id
+        gui_harness.window._on_new_conversation()
+
+        import shutil
+
+        shutil.rmtree(sample_project)
+        gui_harness.window._on_conversation_selected(lost_id)
+        assert gui_harness.context.unavailable_workspace == str(sample_project)
+
+        gui_harness.window._on_conversation_selected(healthy_id)
+
+        assert gui_harness.context.unavailable_workspace == ""
+        assert "not available" not in gui_harness.transcript.rsplit("Reopened", 1)[-1]

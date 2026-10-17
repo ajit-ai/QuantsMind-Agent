@@ -231,6 +231,7 @@ class MainWindow(QMainWindow):
         self.sidebar.new_conversation_requested.connect(self._on_new_conversation)
         self.sidebar.conversation_selected.connect(self._on_conversation_selected)
         self.sidebar.conversation_delete_requested.connect(self._on_conversation_delete_requested)
+        self.sidebar.conversation_rename_requested.connect(self._on_conversation_rename_requested)
 
         events = self._context.events
         # Keep the unsubscribe callable. ``subscribe_all`` stores a strong
@@ -359,6 +360,28 @@ class MainWindow(QMainWindow):
                 self.conversation.append_user(message.content)
             elif role == "assistant" and message.content.strip():
                 self.conversation.append_assistant(message.content)
+
+    @Slot(str, str)
+    def _on_conversation_rename_requested(self, conversation_id: str, title: str) -> None:
+        """Rename a stored conversation and show the new name immediately."""
+
+        if not title.strip():
+            self.conversation.append_notice(
+                "A conversation needs a name; the rename was not applied.",
+                kind="error",
+            )
+            return
+        renamed = self._context.rename_conversation(conversation_id, title)
+        self._refresh_conversations()
+        if renamed:
+            self.activity.notice("conversation renamed")
+            if conversation_id == self._context.session.id:
+                self._refresh_from_context()
+        else:
+            self.conversation.append_notice(
+                "That conversation could not be renamed; it may have been deleted.",
+                kind="error",
+            )
 
     @Slot(str)
     def _on_conversation_delete_requested(self, conversation_id: str) -> None:

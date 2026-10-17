@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QPushButton,
     QSizePolicy,
@@ -39,6 +40,8 @@ class Sidebar(QWidget):
     conversation_selected = Signal(str)
     #: The delete button asked for the conversation currently listed, by id.
     conversation_delete_requested = Signal(str)
+    #: The rename button asked for a new title for a conversation id.
+    conversation_rename_requested = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -148,6 +151,10 @@ class Sidebar(QWidget):
         new_button = QPushButton("New")
         new_button.clicked.connect(self.new_conversation_requested.emit)
         buttons.addWidget(new_button)
+        rename_button = QPushButton("Rename")
+        rename_button.setToolTip("Give the listed conversation a name you will recognise")
+        rename_button.clicked.connect(self._on_rename_clicked)
+        buttons.addWidget(rename_button)
         delete_button = QPushButton("Delete")
         delete_button.setToolTip("Delete the listed conversation")
         delete_button.clicked.connect(self._on_delete_clicked)
@@ -155,11 +162,27 @@ class Sidebar(QWidget):
         grid.addLayout(buttons, 2, 0, 1, 2)
 
         self._conversation_ids: list[str] = []
+        self._conversation_labels: dict[str, str] = {}
         return box
 
     def _on_conversation_chosen(self, index: int) -> None:
         if 0 <= index < len(self._conversation_ids):
             self.conversation_selected.emit(self._conversation_ids[index])
+
+    def _on_rename_clicked(self) -> None:
+        index = self._conversation_combo.currentIndex()
+        if not 0 <= index < len(self._conversation_ids):
+            return
+        conversation_id = self._conversation_ids[index]
+        current = self._conversation_combo.itemText(index)
+        title, accepted = QInputDialog.getText(
+            self,
+            "Rename conversation",
+            "Name this conversation:",
+            text=current,
+        )
+        if accepted:
+            self.conversation_rename_requested.emit(conversation_id, title)
 
     def _on_delete_clicked(self) -> None:
         index = self._conversation_combo.currentIndex()
@@ -170,16 +193,21 @@ class Sidebar(QWidget):
     def set_conversations(self, entries: list[tuple[str, str]], *, active_id: str = "") -> None:
         """Show stored conversations as ``(id, label)`` pairs.
 
-        The list is only rebuilt when the set of ids changes, so refreshing it
-        after every turn does not make the user fight a moving dropdown.
+        The list is only rebuilt when the ids change, so refreshing it after every
+        turn does not make the user fight a moving dropdown. A label that changed
+        for the same ids (a rename, a newly derived title) is still updated in
+        place, which is the case that would otherwise leave a stale name on screen.
         """
 
         ids = [entry[0] for entry in entries]
+        labels = dict(entries)
         if ids == self._conversation_ids:
+            self._relabel(labels)
             self._mark_active(active_id)
             return
 
         self._conversation_ids = ids
+        self._conversation_labels = labels
         blocked = self._conversation_combo.blockSignals(True)
         self._conversation_combo.clear()
         for conversation_id, label in entries:
@@ -187,12 +215,30 @@ class Sidebar(QWidget):
         self._conversation_combo.blockSignals(blocked)
         self._mark_active(active_id)
 
+    def _relabel(self, labels: dict[str, str]) -> None:
+        """Update changed labels without disturbing the selection."""
+
+        if labels == self._conversation_labels:
+            return
+        for index, conversation_id in enumerate(self._conversation_ids):
+            label = labels.get(conversation_id)
+            if label is not None and label != self._conversation_combo.itemText(index):
+                self._conversation_combo.setItemText(index, label)
+        self._conversation_labels = labels
+
     def _mark_active(self, active_id: str) -> None:
         if active_id and active_id in self._conversation_ids:
             self._conversation_combo.setCurrentIndex(self._conversation_ids.index(active_id))
 
     def conversations_available(self) -> bool:
         return bool(self._conversation_ids)
+
+    def conversation_labels(self) -> list[str]:
+        """The listed names, in order. Read by tests to assert what a user sees."""
+
+        return [
+            self._conversation_combo.itemText(i) for i in range(self._conversation_combo.count())
+        ]
 
     # -- public API --------------------------------------------------------
     def set_workspace(self, path: str | None) -> None:
