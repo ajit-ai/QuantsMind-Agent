@@ -97,9 +97,15 @@ Retrieval-based context
 Conversation persistence
 ------------------------
 
-* Opt-in history, SQLite or JSON, with export and hard delete.
-* Resume a conversation across restarts.
+* Opt-in history, JSON, one file per conversation, with prune and delete.
+* Resume a conversation across restarts, restoring the transcript and reopening
+  its project when that folder is still there.
 * Redaction of secrets found in stored transcripts.
+* Approval grants and undo history are deliberately **not** persisted: both are
+  scoped to the session that produced them, and restoring either would extend a
+  user's trust past the moment they gave it.
+
+Implemented; see ``docs/source/user/conversation.rst``.
 
 Diff viewer
 -----------

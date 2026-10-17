@@ -1,4 +1,4 @@
-.. _configuration:
+﻿.. _configuration:
 
 
 =============
@@ -61,6 +61,9 @@ Agent settings
     auto_approve_writes = false
     command_timeout_seconds = 120.0
     max_command_output_chars = 20000
+    persist_conversations = true
+    resume_last_conversation = true
+    max_stored_conversations = 50
     git_enabled = true
     system_prompt = ""
     history_turns = 12
@@ -89,7 +92,16 @@ Agent settings
      - Default time limit for ``run_command`` when the model does not ask for
        one. Clamped to 1-600s.
    * - ``max_command_output_chars``
-     - Per-stream cap on captured command output.
+     - Per-stream cap on captured command output. The head and the tail are both
+       kept, because the failing part of a build or test run is at the end.
+   * - ``persist_conversations``
+     - Store conversations on disk so they survive a restart. ``false`` keeps them
+       in memory only, which is the v0.2 behaviour.
+   * - ``resume_last_conversation``
+     - Reopen the most recent conversation when the application starts. The
+       transcript comes back; approval grants and undo history never do.
+   * - ``max_stored_conversations``
+     - How many conversations to keep. The oldest are pruned beyond the cap.
    * - ``git_enabled``
      - Registers the read-only Git tools. ``false`` removes them entirely
        rather than denying them, so a model cannot even name them.

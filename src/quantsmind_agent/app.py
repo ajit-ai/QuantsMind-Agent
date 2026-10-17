@@ -26,6 +26,7 @@ from quantsmind_agent.code_tools import build_code_tools
 from quantsmind_agent.command_tools import build_command_tools
 from quantsmind_agent.config import ConfigManager
 from quantsmind_agent.context import ContextEngine
+from quantsmind_agent.conversations import ConversationStore, ConversationSummary, snapshot_session
 from quantsmind_agent.errors import QuantsMindError
 from quantsmind_agent.events import AgentEvent, AgentEventType, EventBus
 from quantsmind_agent.git_tools import build_git_tools
@@ -55,6 +56,15 @@ __all__ = ["ApplicationContext", "main"]
 
 logger = get_logger(__name__)
 
+#: Events that end a turn. A turn is the smallest unit of durable progress.
+_TURN_END_EVENTS = frozenset(
+    {
+        AgentEventType.AGENT_COMPLETED,
+        AgentEventType.AGENT_FAILED,
+        AgentEventType.AGENT_CANCELLED,
+    }
+)
+
 
 class ApplicationContext:
     """Owns every long-lived subsystem and the transitions between them.
@@ -77,6 +87,14 @@ class ApplicationContext:
         self.approval: Any | None = None
         #: One cancellation flag shared by the agent loop and blocking tools.
         self._cancel = threading.Event()
+        #: Durable conversation storage; ``None`` when persistence is switched off.
+        self.conversations: ConversationStore | None = None
+        #: Title of the conversation in progress, derived from the first request.
+        self._conversation_title = ""
+        #: Whether the last turn ended cleanly, as it will be recorded on disk.
+        self._last_turn_finished = True
+        #: A stored project that could not be reopened, for the UI to explain.
+        self._unavailable_workspace = ""
         self.events.subscribe_all(self._record_event)
         self._rebuild()
 
@@ -99,8 +117,32 @@ class ApplicationContext:
             manager.reset()
 
         context = cls(config_manager=manager, paths=resolved_paths)
+        context._build_store()
         context._restore_workspace()
         return context
+
+    def _build_store(self) -> None:
+        """Attach conversation storage when the setting allows it.
+
+        A directory that cannot be created disables persistence rather than
+        stopping startup: a broken data directory is not a reason to refuse to
+        open the application.
+        """
+
+        agent = self.config_manager.config.agent
+        self.conversations = None
+        if not agent.persist_conversations:
+            logger.info("Conversation persistence is switched off")
+            return
+        root = self.paths.data_dir / "conversations"
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:  # pragma: no cover - unwritable data directory
+            logger.warning("Conversations cannot be stored in %s: %s", root, exc)
+            return
+        self.conversations = ConversationStore(
+            root, max_conversations=agent.max_stored_conversations
+        )
 
     # -- event plumbing ----------------------------------------------------
     def _record_event(self, event: AgentEvent) -> None:
@@ -110,6 +152,12 @@ class ApplicationContext:
         if len(self.recorded_events) > 400:
             del self.recorded_events[: len(self.recorded_events) - 400]
         self.session.record_event(event)
+        # A turn is the unit of durable progress: saving on completion, failure
+        # or cancellation means a crash costs at most the turn in progress, and
+        # the record says whether that turn finished.
+        if event.type in _TURN_END_EVENTS:
+            self._last_turn_finished = event.type is AgentEventType.AGENT_COMPLETED
+            self.save_conversation()
 
     # -- configuration -----------------------------------------------------
     def apply_configuration(self) -> None:
@@ -355,9 +403,146 @@ class ApplicationContext:
             logger.warning("Could not persist the configuration: %s", exc)
 
     # -- conversation ------------------------------------------------------
-    def reset_conversation(self) -> None:
-        """Clear the transcript but keep the project open."""
+    # -- conversations -----------------------------------------------------
+    def save_conversation(self, *, title: str = "") -> None:
+        """Write the current conversation to disk.
 
+        Called after every turn and on shutdown. A persistence failure is logged
+        and swallowed: losing the transcript is bad, but refusing to run because
+        the disk is full would be worse.
+        """
+
+        if self.conversations is None:
+            return
+        provider = self.config_manager.config.provider
+        payload = snapshot_session(
+            self.session,
+            title=title or self._conversation_title,
+            provider={
+                "name": provider.name,
+                "model": provider.model,
+                "base_url": provider.base_url,
+            },
+            finished=self._last_turn_finished,
+        )
+        self._conversation_title = payload["title"]
+        try:
+            self.conversations.save(payload)
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not persist the conversation: %s", exc)
+
+    def resume_latest_conversation(self) -> bool:
+        """Reopen the most recent conversation, if the setting allows it.
+
+        Approval grants and the undo journal are deliberately *not* restored: the
+        user re-approves, and nothing can be undone until they ask for it again.
+        """
+
+        if self.conversations is None:
+            return False
+        summary = self.conversations.latest()
+        if summary is None:
+            return False
+        return self.open_conversation(summary.id)
+
+    def open_conversation(self, conversation_id: str) -> bool:
+        """Switch to a stored conversation.
+
+        Everything session-scoped is reset first -- undo history, recorded events,
+        permission grants, the turn counter -- so nothing leaks between
+        conversations. A workspace that no longer exists is reported and left
+        unopened rather than silently substituted.
+        """
+
+        if self.conversations is None:
+            return False
+        payload = self.conversations.load(conversation_id)
+        if payload is None:
+            logger.info("Conversation %s is not available", conversation_id)
+            return False
+
+        self.session.reset(keep_workspace=False)
+        self.events.clear_history()
+        self.recorded_events.clear()
+        self.tools.permissions.clear_session_grants()
+        self.reset_cancel()
+
+        if not self.session.restore_from(payload):
+            return False
+        self._conversation_title = str(payload.get("title") or "")
+        self._last_turn_finished = bool(payload.get("finished", True))
+
+        stored_workspace = str(payload.get("workspace") or "")
+        if stored_workspace:
+            if self._restore_stored_workspace(stored_workspace):
+                logger.info("Reopened %s in %s", conversation_id, stored_workspace)
+            else:
+                # The project moved or was deleted. Opening it under another name
+                # would put the agent in the wrong project.
+                self._unavailable_workspace = stored_workspace
+                logger.info("Stored workspace %s is not available", stored_workspace)
+        return True
+
+    def _restore_stored_workspace(self, stored: str) -> bool:
+        if not Path(stored).is_dir():
+            return False
+        try:
+            self.open_workspace(stored)
+        except QuantsMindError as exc:
+            logger.info("Could not reopen %s: %s", stored, exc.message)
+            return False
+        return True
+
+    def list_conversations(self) -> list[ConversationSummary]:
+        """Stored conversations, newest first."""
+
+        if self.conversations is None:
+            return []
+        return self.conversations.list()
+
+    def rename_conversation(self, conversation_id: str, title: str) -> bool:
+        """Rename a stored conversation."""
+
+        if self.conversations is None:
+            return False
+        renamed = self.conversations.rename(conversation_id, title)
+        if renamed and conversation_id == self.session.id:
+            self._conversation_title = title.strip() or self._conversation_title
+        return renamed
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """Delete a stored conversation. The open one is left running."""
+
+        if self.conversations is None:
+            return False
+        return self.conversations.delete(conversation_id)
+
+    @property
+    def conversation_title(self) -> str:
+        return self._conversation_title
+
+    @property
+    def unavailable_workspace(self) -> str:
+        """A stored project that could not be reopened, for the UI to explain."""
+
+        return self._unavailable_workspace
+
+    @property
+    def last_turn_finished(self) -> bool:
+        """Whether the last turn ended cleanly, as recorded on disk."""
+
+        return self._last_turn_finished
+
+    # -- conversation ------------------------------------------------------
+    def reset_conversation(self) -> None:
+        """Clear the transcript but keep the project open.
+
+        The conversation being left behind is saved first: "new conversation" is
+        not a reason to lose the previous transcript.
+        """
+
+        if self.session.messages or self.session.turns:
+            self.save_conversation()
         self.session.reset(keep_workspace=True)
         self.events.clear_history()
         self.recorded_events.clear()
@@ -443,6 +628,11 @@ class ApplicationContext:
             self.bridge.cancel()
         else:
             self.cancel()
+        # The transcript is worth keeping even on the way out; a turn cancelled by
+        # closing the window is recorded as unfinished rather than as complete.
+        if self.session.messages or self.session.turns:
+            self._last_turn_finished = self._last_turn_finished and not self._cancel.is_set()
+            self.save_conversation()
 
 
 # --------------------------------------------------------------------------

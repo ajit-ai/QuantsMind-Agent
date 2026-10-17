@@ -322,6 +322,12 @@ class AgentCore:
             self._running = False
             self._session.end_turn(record)
 
+        # Filled in before the end-of-turn event, so a listener that persists the
+        # conversation records the same turn summary the session holds.
+        record.iterations = outcome.iterations
+        record.final_text = outcome.text
+        record.cancelled = outcome.cancelled
+
         if outcome.cancelled:
             self._emit(AgentEventType.AGENT_CANCELLED, {"iterations": outcome.iterations})
         elif outcome.error is None:
@@ -333,9 +339,6 @@ class AgentCore:
                     "chars": len(outcome.text),
                 },
             )
-        record.iterations = outcome.iterations
-        record.final_text = outcome.text
-        record.cancelled = outcome.cancelled
         return outcome
 
     # -- the loop ----------------------------------------------------------

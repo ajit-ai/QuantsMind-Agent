@@ -17,12 +17,58 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from quantsmind_agent.events import AgentEvent
+from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.revisions import RevisionJournal
-from quantsmind_agent.schema import Message, MessageRole, make_conversation_id
+from quantsmind_agent.schema import (
+    AssistantMessage,
+    Message,
+    MessageRole,
+    ToolCall,
+    ToolMessage,
+    UserMessage,
+    make_conversation_id,
+)
 from quantsmind_agent.tools import ToolResult
 from quantsmind_agent.workspace import Workspace
 
 __all__ = ["Session", "TurnRecord"]
+
+logger = get_logger(__name__)
+
+
+def _message_from_dict(payload: dict[str, Any]) -> Message | None:
+    """Rebuild one stored message, tolerating a role this version does not know.
+
+    An unrecognised role is dropped rather than guessed at: a transcript with one
+    unreadable line in it is still worth resuming.
+    """
+
+    role = str(payload.get("role") or "")
+    content = str(payload.get("content") or "")
+    if role == MessageRole.USER.value:
+        return UserMessage(content=content)
+    if role == MessageRole.ASSISTANT.value:
+        calls = []
+        for call in payload.get("tool_calls", []) or []:
+            if not isinstance(call, dict):
+                continue
+            arguments = call.get("arguments")
+            calls.append(
+                ToolCall(
+                    id=str(call.get("id") or ""),
+                    name=str(call.get("name") or ""),
+                    arguments=arguments if isinstance(arguments, dict) else {},
+                )
+            )
+        return AssistantMessage(content=content, tool_calls=calls)
+    if role == MessageRole.TOOL.value:
+        return ToolMessage(
+            content=content,
+            tool_name=str(payload.get("tool_name") or ""),
+            tool_call_id=str(payload.get("tool_call_id") or ""),
+            ok=bool(payload.get("ok", True)),
+        )
+    return None
 
 
 @dataclass(slots=True)
@@ -171,6 +217,38 @@ class Session:
         # Bound memory: keep the most recent 500 events for the session view.
         if len(self._events) > 500:
             del self._events[: len(self._events) - 500]
+
+    # -- resumption --------------------------------------------------------
+    def restore_from(self, payload: dict[str, Any]) -> bool:
+        """Replace this session's content with a stored record.
+
+        Only *content* comes back. The undo journal and the turn history are
+        deliberately left as they are: a restored pre-image would outlive the
+        session that captured it, and an interrupted turn is not something to
+        replay. The caller re-approves and starts with an empty undo list.
+
+        Returns ``False`` when the record holds nothing restorable, so the caller
+        can start fresh rather than presenting an empty transcript as if it were
+        the conversation.
+        """
+
+        rebuilt: list[Message] = []
+        for item in payload.get("messages", []) or []:
+            if not isinstance(item, dict):
+                continue
+            message = _message_from_dict(item)
+            if message is not None:
+                rebuilt.append(message)
+        if not rebuilt:
+            return False
+
+        self.id = str(payload.get("id") or self.id)
+        self.created_at = float(payload.get("created_at") or self.created_at)
+        self._messages.clear()
+        self.add_messages(rebuilt)
+        self._tool_results.clear()
+        logger.info("Restored conversation %s with %d messages", self.id, len(rebuilt))
+        return True
 
     # -- lifecycle --------------------------------------------------------
     def reset(self, *, keep_workspace: bool = True) -> None:

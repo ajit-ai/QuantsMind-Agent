@@ -9,6 +9,32 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+**Conversations (v0.3)**
+
+- Conversations are stored on disk, one JSON file each under the application data
+  directory, and the most recent one is reopened at startup: transcript restored,
+  project reopened when that folder still exists. New settings
+  `agent.persist_conversations`, `agent.resume_last_conversation` and
+  `agent.max_stored_conversations` control this; the first defaults to on, which
+  is a change from v0.2 where a conversation died with the process.
+- Full conversation lifecycle through the application and the sidebar: list,
+  reopen, rename and delete, with the stored project and provider recorded in the
+  record. `New conversation` keeps the previous one rather than discarding it.
+- Writes are atomic (sibling temporary file plus `os.replace`), so a crash
+  mid-write leaves the previous record intact. A corrupt record is quarantined as
+  `.json.corrupt` instead of being deleted, one bad record does not hide the
+  rest, and a record written by a newer version is skipped rather than misread.
+  Records are versioned and older ones are migrated on read.
+- Credential-shaped text is masked before anything is written, and API keys never
+  enter a record at all.
+
+### Fixed
+
+- A turn's summary is now recorded before the end-of-turn event fires, so a
+  conversation saved as a turn ended holds the same turn data the session does.
+
 ### Changed
 
 - Command output is now bounded from both ends. The cap keeps the head *and* the
@@ -32,6 +58,9 @@ and the project uses [semantic versioning](https://semver.org/).
   locate/edit/verify loop, and the approval and refusal rules.
 - The user documentation no longer claims the agent cannot fix a bug or run
   tests.
+- Restoring a conversation brings back the transcript only. Approval session
+  grants, undo history and pending tool calls are never persisted or replayed,
+  and an interrupted turn is recorded as unfinished rather than as complete.
 
 ### Added
 

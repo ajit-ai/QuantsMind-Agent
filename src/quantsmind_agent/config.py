@@ -145,9 +145,24 @@ class AgentSettings(BaseModel):
     max_command_output_chars: int = Field(default=20_000, gt=0, le=200_000)
     """Per-stream cap on captured command output."""
 
+    persist_conversations: bool = True
+    """Store conversations on disk so they survive a restart.
+
+    Off means the transcript lives only in memory, which is the v0.2 behaviour.
+    Storage holds messages and endpoints; credentials never enter a record.
+    """
+
+    resume_last_conversation: bool = True
+    """Reopen the most recent conversation when the application starts.
+
+    Reopening restores the transcript only. Approval grants and undo history are
+    session-scoped and always start empty, whatever this is set to.
+    """
+
+    max_stored_conversations: int = Field(default=50, ge=1, le=500)
+    """How many conversations to keep, oldest pruned first."""
+
     git_enabled: bool = True
-    """Expose the read-only Git tools. Turning this off removes them entirely
-    rather than denying them, so a model cannot even name them."""
 
 
 class LoggingSettings(BaseModel):

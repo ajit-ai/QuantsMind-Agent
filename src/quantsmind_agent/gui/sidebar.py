@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
@@ -33,6 +35,10 @@ class Sidebar(QWidget):
     close_workspace_requested = Signal()
     settings_requested = Signal()
     new_conversation_requested = Signal()
+    #: A stored conversation was chosen from the list, by id.
+    conversation_selected = Signal(str)
+    #: The delete button asked for the conversation currently listed, by id.
+    conversation_delete_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -131,10 +137,62 @@ class Sidebar(QWidget):
         self._session_value.setStyleSheet("color:#6a7280;font-size:11px;")
         grid.addWidget(self._session_value, 0, 0, 1, 2)
 
-        button = QPushButton("New conversation")
-        button.clicked.connect(self.new_conversation_requested.emit)
-        grid.addWidget(button, 1, 0, 1, 2)
+        #: Stored conversations, newest first. The active one is marked rather
+        #: than preselected, so choosing an entry always means "switch to it".
+        self._conversation_combo = QComboBox()
+        self._conversation_combo.setToolTip("Reopen a previous conversation")
+        self._conversation_combo.currentIndexChanged.connect(self._on_conversation_chosen)
+        grid.addWidget(self._conversation_combo, 1, 0, 1, 2)
+
+        buttons = QHBoxLayout()
+        new_button = QPushButton("New")
+        new_button.clicked.connect(self.new_conversation_requested.emit)
+        buttons.addWidget(new_button)
+        delete_button = QPushButton("Delete")
+        delete_button.setToolTip("Delete the listed conversation")
+        delete_button.clicked.connect(self._on_delete_clicked)
+        buttons.addWidget(delete_button)
+        grid.addLayout(buttons, 2, 0, 1, 2)
+
+        self._conversation_ids: list[str] = []
         return box
+
+    def _on_conversation_chosen(self, index: int) -> None:
+        if 0 <= index < len(self._conversation_ids):
+            self.conversation_selected.emit(self._conversation_ids[index])
+
+    def _on_delete_clicked(self) -> None:
+        index = self._conversation_combo.currentIndex()
+        if 0 <= index < len(self._conversation_ids):
+            self.conversation_delete_requested.emit(self._conversation_ids[index])
+
+    # -- conversations -----------------------------------------------------
+    def set_conversations(self, entries: list[tuple[str, str]], *, active_id: str = "") -> None:
+        """Show stored conversations as ``(id, label)`` pairs.
+
+        The list is only rebuilt when the set of ids changes, so refreshing it
+        after every turn does not make the user fight a moving dropdown.
+        """
+
+        ids = [entry[0] for entry in entries]
+        if ids == self._conversation_ids:
+            self._mark_active(active_id)
+            return
+
+        self._conversation_ids = ids
+        blocked = self._conversation_combo.blockSignals(True)
+        self._conversation_combo.clear()
+        for conversation_id, label in entries:
+            self._conversation_combo.addItem(label, conversation_id)
+        self._conversation_combo.blockSignals(blocked)
+        self._mark_active(active_id)
+
+    def _mark_active(self, active_id: str) -> None:
+        if active_id and active_id in self._conversation_ids:
+            self._conversation_combo.setCurrentIndex(self._conversation_ids.index(active_id))
+
+    def conversations_available(self) -> bool:
+        return bool(self._conversation_ids)
 
     # -- public API --------------------------------------------------------
     def set_workspace(self, path: str | None) -> None:

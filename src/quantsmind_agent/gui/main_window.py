@@ -66,8 +66,33 @@ class MainWindow(QMainWindow):
         self._unsubscribe_events: Callable[[], None] | None = None
         self._build()
         self._connect()
+        self._resume_previous_conversation()
         self._refresh_from_context()
         self._show_readiness_hint()
+
+    def _resume_previous_conversation(self) -> None:
+        """Reopen the last conversation when the user asked for that.
+
+        Only the transcript comes back: no approval grants, no undo history. If the
+        project it was working in has moved, that is said plainly rather than
+        quietly opening a different folder.
+        """
+
+        self._refresh_conversations()
+        if not self._context.config_manager.config.agent.resume_last_conversation:
+            return
+        if not self._context.resume_latest_conversation():
+            return
+        self._restore_transcript()
+        unavailable = self._context.unavailable_workspace
+        if unavailable:
+            self.conversation.append_notice(
+                f"The project this conversation used is not available: {unavailable}. "
+                "Open it again to continue working.",
+                kind="error",
+            )
+        self._refresh_conversations()
+        self.conversation.append_notice("Reopened your last conversation.")
 
     @property
     def is_busy(self) -> bool:
@@ -204,6 +229,8 @@ class MainWindow(QMainWindow):
         self.sidebar.close_workspace_requested.connect(self._on_close_workspace)
         self.sidebar.settings_requested.connect(self._on_settings)
         self.sidebar.new_conversation_requested.connect(self._on_new_conversation)
+        self.sidebar.conversation_selected.connect(self._on_conversation_selected)
+        self.sidebar.conversation_delete_requested.connect(self._on_conversation_delete_requested)
 
         events = self._context.events
         # Keep the unsubscribe callable. ``subscribe_all`` stores a strong
@@ -280,6 +307,67 @@ class MainWindow(QMainWindow):
         self.activity.clear_activity()
         self._refresh_from_context()
         self.conversation.append_notice("Started a new conversation.")
+        self._refresh_conversations()
+
+    def _refresh_conversations(self) -> None:
+        """Mirror the stored conversations into the sidebar list."""
+
+        summaries = self._context.list_conversations()
+        self.sidebar.set_conversations(
+            [(summary.id, summary.label()) for summary in summaries],
+            active_id=self._context.session.id,
+        )
+
+    @Slot(str)
+    def _on_conversation_selected(self, conversation_id: str) -> None:
+        """Reopen a stored conversation, with nothing leaking from this one."""
+
+        if conversation_id == self._context.session.id:
+            return
+        if not self._context.open_conversation(conversation_id):
+            self.conversation.append_notice(
+                "That conversation could not be opened; it may have been moved.",
+                kind="error",
+            )
+            self._refresh_conversations()
+            return
+        self.conversation.clear_transcript()
+        self.activity.clear_activity()
+        self._restore_transcript()
+        unavailable = self._context.unavailable_workspace
+        if unavailable:
+            self.conversation.append_notice(
+                f"The project this conversation used is not available: {unavailable}. "
+                "Open it again to continue working.",
+                kind="error",
+            )
+        self._refresh_from_context()
+        self._refresh_conversations()
+        self.conversation.append_notice("Reopened the conversation.")
+
+    def _restore_transcript(self) -> None:
+        """Replay the restored conversation into the view.
+
+        Replayed from the messages, not from turn records: the transcript is what
+        is durable, and it is what the user recognises. Tool notices are not
+        re-rendered -- the full record stays on disk for that.
+        """
+
+        for message in self._context.session.messages:
+            role = getattr(message.role, "value", "")
+            if role == "user":
+                self.conversation.append_user(message.content)
+            elif role == "assistant" and message.content.strip():
+                self.conversation.append_assistant(message.content)
+
+    @Slot(str)
+    def _on_conversation_delete_requested(self, conversation_id: str) -> None:
+        deleted = self._context.delete_conversation(conversation_id)
+        self._refresh_conversations()
+        self.conversation.append_notice(
+            "Conversation deleted." if deleted else "Nothing to delete.",
+            kind="info" if deleted else "error",
+        )
 
     # -- approval -----------------------------------------------------------
     @Slot(object)
@@ -448,6 +536,8 @@ class MainWindow(QMainWindow):
         self.sidebar.set_status(self._status_text())
         self._status_activity.setText("")
         self._update_session_counts()
+        # The conversation was saved as the turn ended; the list must show it.
+        self._refresh_conversations()
 
     def _show_missing_text(self, streamed: str, final: str) -> None:
         """Render any part of the answer the stream did not deliver.
@@ -477,6 +567,7 @@ class MainWindow(QMainWindow):
         self.activity.record("agent", message, "failed")
         self.sidebar.set_status(self._status_text())
         self._update_session_counts()
+        self._refresh_conversations()
 
     def _on_busy_changed(self, busy: bool) -> None:
         self.send_button.setEnabled(not busy)

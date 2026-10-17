@@ -78,6 +78,65 @@ Starting a new conversation
 keeps the open project and your settings, and starts a fresh session id. To
 switch projects as well, close the project first.
 
+Conversations are kept
+======================
+
+Conversations are stored on disk, one JSON file each, under the application data
+directory. They survive closing the application, and the last one is reopened
+when you start again -- with its transcript, and with the project it was working
+in if that folder is still there.
+
+The Session panel in the sidebar lists them: pick one to reopen it, or delete one
+you no longer want. ``New conversation`` keeps the one you were in; it does not
+throw it away.
+
+What comes back, and what does not
+----------------------------------
+
+Coming back is deliberately narrower than saving everything. A resumed
+conversation restores the **transcript** and nothing else:
+
+* **Undo history is not restored.** The undo list holds the exact bytes a file had
+  before each change. Those bytes were captured for the session that made them,
+  and the file may have changed since; a restored pre-image could overwrite work
+  you did outside the agent. Undo starts empty after a restart.
+* **Approval grants are not restored.** "Allow for Session" meant that session.
+  After a restart you are asked again, every time.
+* **An interrupted turn is never replayed.** If the application closed mid-turn,
+  the conversation is marked unfinished and nothing is re-run.
+
+If the project a conversation was working in has been moved or deleted, the
+transcript still opens and the sidebar says so, rather than quietly opening a
+different folder.
+
+Credentials are never written into a conversation. API keys stay in the OS
+credential store; a record holds the provider, endpoint and model, and anything
+in your messages that looks like a key is masked before it is written.
+
+Settings
+--------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 14 52
+
+   * - Setting
+     - Default
+     - Effect
+   * - ``persist_conversations``
+     - ``true``
+     - Store conversations at all
+   * - ``resume_last_conversation``
+     - ``true``
+     - Reopen the newest one at startup
+   * - ``max_stored_conversations``
+     - ``50``
+     - Cap on stored records, oldest pruned
+
+These live under ``[agent]`` in ``config.toml`` -- see :doc:`settings`. Turning
+``persist_conversations`` off returns the application to its v0.2 behaviour,
+where a conversation lives only until you close the window.
+
 Asking for a change
 ===================
 
