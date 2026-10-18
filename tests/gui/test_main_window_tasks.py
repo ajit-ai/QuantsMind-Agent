@@ -183,8 +183,11 @@ class TestApprovalIsAHardGate:
             ),
         )
 
+        workspace = opened.context.workspace
+        assert workspace is not None
+
         with pytest.raises(PlanRejected):
-            window._build_orchestrator(escaping, workspace_root(opened))
+            window._task_service.propose(escaping, workspace)
 
 
 # __PART2__

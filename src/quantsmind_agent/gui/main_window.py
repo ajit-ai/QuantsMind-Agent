@@ -11,7 +11,6 @@ import re
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 from PySide6.QtCore import Qt, QThread, QTimer, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -38,7 +37,8 @@ from quantsmind_agent.gui.task_panel import TaskPanel
 from quantsmind_agent.gui.worker import AgentWorkerBridge
 from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.permissions import ApprovalOutcome
-from quantsmind_agent.tasks import PlanRejected, Task, TaskStatus
+from quantsmind_agent.services import TaskService
+from quantsmind_agent.tasks import PlanRejected
 from quantsmind_agent.version import APP_NAME, __version__
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -82,6 +82,17 @@ class MainWindow(QMainWindow):
         # after construction still reaches a human.
         self.approval = ApprovalBridge(self)
         context.attach_approval(self.approval)
+        #: The application service that owns the task lifecycle. The window asks
+        #: it what is true and renders the answer; it does not build tasks, store
+        #: orchestrators or decide what is authorised. That used to happen here,
+        #: which made every security decision in the product a line of widget code.
+        self._task_service = TaskService(
+            data_dir=context.paths.data_dir,
+            # Resolved per call rather than captured: the application rebuilds its
+            # tools when the workspace or configuration changes, and a captured
+            # registry would run a task against a stale agent with no tools.
+            registry_factory=lambda _workspace: context.tools,
+        )
         #: The approval dialog currently on screen, if any.
         self._active_dialog: ApprovalDialog | None = None
         #: Releases the agent-event subscription. ``None`` once released.
@@ -91,6 +102,7 @@ class MainWindow(QMainWindow):
         self._resume_previous_conversation()
         self._refresh_from_context()
         self._show_readiness_hint()
+        self._show_interrupted_if_any()
 
     def _resume_previous_conversation(self) -> None:
         """Reopen the last conversation when the user asked for that.
@@ -324,51 +336,15 @@ class MainWindow(QMainWindow):
         if workspace is None:
             self.task_panel.status.setText("Open a project before running a task.")
             return
-        orchestrator = self._build_orchestrator(plan, str(workspace.root))
-        if not approved:
-            orchestrator.cancel("the user rejected the plan")
-            self.task_panel.attach(orchestrator)
-            self._pending_plan = None
-            return
-        from quantsmind_agent.task_policy import approval_for_plan
-
         try:
-            orchestrator.approve(approval_for_plan(plan, str(workspace.root), approved=True))
+            orchestrator = self._task_service.propose(plan, workspace)
+            orchestrator = self._task_service.decide(approved)
         except PlanRejected as exc:
-            self.task_panel.status.setText(f"That approval was refused: {exc}")
+            self.task_panel.status.setText(f"That decision was refused: {exc}")
             return
         self.task_panel.attach(orchestrator)
         self._pending_plan = None
-
-    def _build_orchestrator(self, plan: Any, workspace_root: str) -> Any:
-        """An orchestrator bound to the *live* registry, policy and store.
-
-        The registry is resolved through the context on every call rather than
-        captured, because the application rebuilds its tools whenever the
-        workspace or configuration changes -- holding one would run a task against
-        a stale agent with no tools.
-        """
-
-        from quantsmind_agent.orchestrator import Orchestrator
-        from quantsmind_agent.task_policy import TaskPolicy
-        from quantsmind_agent.task_store import TaskStore
-
-        task = Task(
-            id=uuid4().hex[:12],
-            objective=str(plan.objective),
-            workspace=workspace_root,
-            conversation_id=self._context.session.id,
-        )
-        store = TaskStore(self._context.paths.data_dir / "tasks")
-        orchestrator = Orchestrator(
-            task,
-            registry=self._context.tools,
-            policy=TaskPolicy(workspace=self._context.workspace),
-            store=store,
-            workspace=self._context.workspace,
-        )
-        orchestrator.submit_plan(plan)
-        return orchestrator
+        self._show_interrupted_if_any()
 
     def _on_task_run(self) -> None:
         orchestrator = self.task_orchestrator
@@ -385,7 +361,6 @@ class MainWindow(QMainWindow):
         if task.approved_plan is None:
             self.task_panel.status.setText("Approve the plan before running it.")
             return
-        task.status = TaskStatus.APPROVED
         self.task_panel.start_worker()
 
     def _on_task_cancel(self) -> None:
@@ -406,6 +381,40 @@ class MainWindow(QMainWindow):
         self._pending_plan = None
         self.task_panel.shutdown()
         self.task_panel.attach(None)
+        self._task_service.release()
+
+    # -- interrupted work --------------------------------------------------
+    def _show_interrupted_if_any(self) -> None:
+        """Tell the user about work that was in flight when the app last closed.
+
+        Reported, never resumed: the outcome of an interrupted task is unknown,
+        and the only thing the application may do about it automatically is say so.
+        """
+
+        workspace = self._context.workspace
+        interrupted = self._task_service.interrupted_tasks(workspace)
+        if not interrupted:
+            return
+        newest = interrupted[0]
+        self.task_panel.status.setText(
+            f"{len(interrupted)} task(s) were interrupted when the application closed. "
+            f"{newest.describe()}"
+        )
+        for item in interrupted:
+            logger.warning("interrupted task %s: %s", item.task.id, item.describe())
+
+    def _resume_interrupted(self, item: Any) -> None:
+        """Adopt an interrupted task for inspection, without running it."""
+
+        workspace = self._context.workspace
+        if workspace is None:
+            self.task_panel.status.setText("Open the task's project before continuing it.")
+            return
+        orchestrator = self._task_service.adopt(item.task, workspace)
+        self.task_panel.attach(orchestrator)
+        self.task_panel.status.setText(
+            "This task was interrupted. Review it, then approve again to continue."
+        )
 
     def _composer(self) -> QWidget:
         panel = QWidget()
