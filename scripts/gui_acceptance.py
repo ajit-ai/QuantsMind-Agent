@@ -238,6 +238,22 @@ def window_titles_of(pid: int) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def _desktop_env() -> dict[str, str]:
+    """The environment the application is launched in for desktop acceptance.
+
+    ``QT_QPA_PLATFORM=offscreen`` renders into a buffer and never creates a
+    native window, so a run launched under it can only prove the process stays
+    alive -- the title probe finds nothing, and "no window" would be an artefact
+    of the harness rather than a fact about the application. The variable is
+    therefore dropped for the child: this check is about the desktop.
+    """
+
+    env = dict(os.environ)
+    if env.get("QT_QPA_PLATFORM") == "offscreen":
+        del env["QT_QPA_PLATFORM"]
+    return env
+
+
 def probe(pid: int) -> list[str]:
     system = platform.system()
     if system == "Windows":
@@ -290,6 +306,7 @@ def main(argv: list[str] | None = None) -> int:
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         cwd=str(workdir),
+        env=_desktop_env(),
     )
 
     titles: list[str] = []
@@ -351,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         capture_output=True,
         text=True,
         timeout=max(120.0, args.timeout),
+        env=_desktop_env(),
     )
     structure: dict = {}
     if described.returncode == 0:
