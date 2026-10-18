@@ -1,10 +1,9 @@
 .. _persistence-and-recovery:
 
 
-=======================
+========================
 Persistence and recovery
 ========================
-
 The application keeps two kinds of durable state: conversations, and tasks. Both
 are JSON on disk under the user's application-data directory, never inside the
 installed program, and neither is ever packaged.
@@ -31,11 +30,11 @@ was authorised to do.
 Writes
 ======
 
-``TaskStore.save`` writes to a temporary file in the same directory and then
-``os.replace``s it into position, so a crash mid-write leaves the previous record
-intact rather than a truncated one. Credential-shaped strings are scrubbed on the
-way *in*, so a secret quoted by a model in a task's text is never written to disk
-at all.
+``TaskStore.save`` writes to a temporary file in the same directory and then moves
+it into position with ``os.replace``, so a crash mid-write leaves the previous
+record intact rather than a truncated one. Credential-shaped strings are scrubbed
+on the way *in*, so a secret quoted by a model in a task's text is never written to
+disk at all.
 
 Corrupt or unreadable records are quarantined rather than deleted, and
 ``verify_integrity`` lists them. A record that cannot be parsed is evidence; it

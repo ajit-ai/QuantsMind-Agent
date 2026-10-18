@@ -35,6 +35,7 @@ github_url = "https://github.com/ajit-ai/QuantsMind-Agent"
 
 # -- General configuration -------------------------------------------------
 extensions = [
+    "sphinxcontrib.mermaid",
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
