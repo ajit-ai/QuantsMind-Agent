@@ -84,6 +84,25 @@ class ProviderSettings(BaseModel):
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     api_key_env: str = "QM_API_KEY"
     organization: str | None = None
+    #: Capability overrides for this endpoint, as declared by the chosen preset.
+    #: ``None`` means "no opinion", not "unsupported".
+    capability_overrides: dict[str, Any] | None = None
+
+    def capabilities(self) -> dict[str, Any] | None:
+        """The declared capability overrides for this endpoint, if any.
+
+        Kept as a plain mapping in the settings so a configuration file can carry
+        it, and turned into a typed record at the provider boundary.
+        """
+
+        if self.capability_overrides is not None:
+            return dict(self.capability_overrides)
+        preset = PROVIDER_PRESETS.get(self.name)
+        if preset:
+            declared = preset.get("capabilities")
+            if isinstance(declared, dict):
+                return dict(declared)
+        return None
 
     @field_validator("base_url")
     @classmethod
@@ -248,14 +267,52 @@ class Configuration(BaseModel):
 
 
 #: Ready-made endpoints for common OpenAI-compatible services.
-PROVIDER_PRESETS: dict[str, dict[str, str]] = {
-    "OpenAI": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
-    "OpenRouter": {"base_url": "https://openrouter.ai/api/v1", "model": "openai/gpt-4o-mini"},
-    "Groq": {"base_url": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile"},
-    "Local (Ollama)": {"base_url": "http://localhost:11434/v1", "model": "qwen2.5-coder"},
-    "Local (LM Studio)": {"base_url": "http://localhost:1234/v1", "model": "local-model"},
-    "Local (llama.cpp)": {"base_url": "http://localhost:8080/v1", "model": "local-model"},
-    "Custom endpoint": {"base_url": "https://api.example.com/v1", "model": "my-model"},
+#:
+#: Each preset is one protocol implementation pointed at a different endpoint,
+#: not a different provider class. The ``capabilities`` record what that service
+#: is actually known to do, because "OpenAI-compatible" describes the shape of a
+#: request, not the features behind it: a local Ollama endpoint accepts the same
+#: JSON and honours far less of it.
+PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
+    "OpenAI": {
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "capabilities": {"tools": True, "streaming": True, "structured_output": True},
+    },
+    "OpenRouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "openai/gpt-4o-mini",
+        "capabilities": {"tools": True, "streaming": True, "structured_output": None},
+    },
+    "Groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "model": "llama-3.3-70b-versatile",
+        "capabilities": {"tools": True, "streaming": True, "structured_output": None},
+    },
+    "Local (Ollama)": {
+        "base_url": "http://localhost:11434/v1",
+        "model": "qwen2.5-coder",
+        # Ollama accepts the OpenAI request shape, but tool-calling support
+        # depends entirely on the model that is loaded, so it is declared
+        # unknown rather than yes. The application then asks for plain text and
+        # parses it, which works on every model instead of quietly failing.
+        "capabilities": {"tools": None, "streaming": True, "structured_output": None},
+    },
+    "Local (LM Studio)": {
+        "base_url": "http://localhost:1234/v1",
+        "model": "local-model",
+        "capabilities": {"tools": None, "streaming": True, "structured_output": None},
+    },
+    "Local (llama.cpp)": {
+        "base_url": "http://localhost:8080/v1",
+        "model": "local-model",
+        "capabilities": {"tools": False, "streaming": True, "structured_output": False},
+    },
+    "Custom endpoint": {
+        "base_url": "https://api.example.com/v1",
+        "model": "my-model",
+        "capabilities": {"tools": None, "streaming": None, "structured_output": None},
+    },
 }
 
 

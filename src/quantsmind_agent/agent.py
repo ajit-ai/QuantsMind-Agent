@@ -209,7 +209,12 @@ class AgentCore:
         self._session = session
         self._events: EventBus = event_bus if event_bus is not None else gateway.event_bus
         self._max_iterations = max(1, int(max_iterations))
-        self._use_streaming = use_streaming
+        # What the endpoint says it can do, not what we would like it to do.
+        # Streaming is additionally a user preference; this is the floor.
+        self._capabilities = gateway.capabilities()
+        self._provider_streams = self._capabilities.supports("streaming")
+        self._provider_tools = self._capabilities.supports("tools")
+        self._use_streaming = use_streaming and self._provider_streams
         self._request_options = request_options or (lambda: {})
         self._cancel = cancel_event if cancel_event is not None else threading.Event()
         #: Set when :meth:`cancel` is called before the turn's loop starts.
@@ -223,6 +228,23 @@ class AgentCore:
         return self._cancel
 
     # -- state -------------------------------------------------------------
+    @property
+    def capabilities(self) -> Any:
+        """What the configured provider is known to support."""
+
+        return self._capabilities
+
+    @property
+    def provider_supports_tools(self) -> bool:
+        """Whether tool schemas may be sent to this endpoint.
+
+        An endpoint that does not declare tool support gets plain text instead.
+        Attaching schemas that are ignored would leave the model answering from
+        its own guesswork while the application believed it was calling tools.
+        """
+
+        return self._provider_tools
+
     @property
     def is_running(self) -> bool:
         return self._running
@@ -350,7 +372,7 @@ class AgentCore:
     ) -> None:
         # History for this turn excludes the message we just appended.
         prior = self._session.history_for_context()[:-1]
-        tools = self._tools.openai_schemas()
+        tools = self._tools.openai_schemas() if self._provider_tools else []
         observations: list[Message] = []
         evidence = TurnEvidence()
 

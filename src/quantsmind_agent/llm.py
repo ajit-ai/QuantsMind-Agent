@@ -30,6 +30,7 @@ __all__ = [
     "ModelGateway",
     "ModelInfo",
     "ModelProvider",
+    "ProviderCapabilities",
     "StreamChunk",
 ]
 
@@ -50,18 +51,76 @@ class StreamChunk:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderCapabilities:
+    """What a provider actually supports, declared rather than assumed.
+
+    These fields existed before as booleans on :class:`ModelInfo` and nothing
+    ever read them, which is worse than not having them: they said "tools are
+    supported" to any code that cared to ask, and no code asked, so an endpoint
+    that silently ignored tool schemas looked identical to one that honoured them.
+
+    Every field is optional in the sense that ``None`` means "not declared" --
+    which is reported as unknown rather than as yes. Callers decide what to do
+    about an unknown capability; the application never silently assumes the
+    optimistic answer.
+    """
+
+    tools: bool | None = True
+    streaming: bool | None = True
+    structured_output: bool | None = None
+    context_window: int | None = None
+    cancellation: bool | None = False
+
+    def supports(self, name: str) -> bool:
+        """Whether ``name`` is declared *and* supported.
+
+        An undeclared capability answers ``False``: the application then uses a
+        supported alternative or explains the limitation, which is the behaviour
+        the specification asks for. Answering ``True`` for an unknown capability
+        would be the silent weakening it is trying to prevent.
+        """
+
+        return bool(getattr(self, name, None))
+
+    def describe(self) -> str:
+        """A one-line, human-readable capability summary for diagnostics."""
+
+        parts = [
+            f"{name}={'yes' if value is True else 'no' if value is False else 'unknown'}"
+            for name, value in (
+                ("tools", self.tools),
+                ("streaming", self.streaming),
+                ("structured_output", self.structured_output),
+                ("cancellation", self.cancellation),
+            )
+        ]
+        window = f", context_window={self.context_window}" if self.context_window else ""
+        return "; ".join(parts) + window
+
+
+@dataclass(frozen=True, slots=True)
 class ModelInfo:
     """Describes a configured model endpoint (never includes credentials)."""
 
     provider: str
     model: str
     base_url: str = ""
-    supports_tools: bool = True
-    supports_streaming: bool = True
-    context_window: int | None = None
+    capabilities: ProviderCapabilities = field(default_factory=ProviderCapabilities)
+
+    @property
+    def supports_tools(self) -> bool:
+        return self.capabilities.supports("tools")
+
+    @property
+    def supports_streaming(self) -> bool:
+        return self.capabilities.supports("streaming")
+
+    @property
+    def context_window(self) -> int | None:
+        return self.capabilities.context_window
 
     def describe(self) -> str:
-        return f"{self.provider}:{self.model}"
+        return f"{self.provider}:{self.model} ({self.capabilities.describe()})"
 
 
 @dataclass(slots=True)
@@ -125,7 +184,12 @@ class ChatResponse:
 
 @runtime_checkable
 class ModelProvider(Protocol):
-    """The contract every LLM backend implements."""
+    """The contract every LLM backend implements.
+
+    ``capabilities`` is optional on the wire but not in practice: an adapter
+    that does not declare one is treated as declaring nothing, so the gateway
+    reports unknown rather than assuming support.
+    """
 
     name: str
 
@@ -195,10 +259,37 @@ class ModelGateway:
         return self._provider.list_models()
 
     def describe(self, model: str) -> ModelInfo:
-        """Best-effort description of the active endpoint."""
+        """Describe the active endpoint, including what it can actually do.
 
-        base_url = getattr(self._provider, "base_url", "")
-        return ModelInfo(provider=self._provider.name, model=model, base_url=base_url)
+        The capabilities come from the adapter rather than from this class's
+        defaults, because the whole point is to stop guessing: an endpoint that
+        cannot stream should be found out here, not by watching a stream fail.
+        """
+
+        declared = getattr(self._provider, "capabilities", None)
+        if declared is None:
+            capabilities = ProviderCapabilities(
+                tools=None, streaming=None, structured_output=None, cancellation=None
+            )
+        elif isinstance(declared, ProviderCapabilities):
+            capabilities = declared
+        else:  # a provider that reports the old boolean trio
+            capabilities = ProviderCapabilities(
+                tools=bool(getattr(declared, "supports_tools", None)),
+                streaming=bool(getattr(declared, "supports_streaming", None)),
+                context_window=getattr(declared, "context_window", None),
+            )
+        return ModelInfo(
+            provider=self._provider.name,
+            model=model,
+            base_url=getattr(self._provider, "base_url", ""),
+            capabilities=capabilities,
+        )
+
+    def capabilities(self, model: str = "") -> ProviderCapabilities:
+        """What the active endpoint supports, for callers that must branch."""
+
+        return self.describe(model).capabilities
 
     def require_api_key(self) -> str:
         """Return the credential or raise :class:`MissingAPIKeyError`."""

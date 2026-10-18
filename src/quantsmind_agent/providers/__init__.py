@@ -74,5 +74,6 @@ def build_provider(
         organization=settings.organization,
         timeout_seconds=settings.timeout_seconds,
         requires_api_key=settings.requires_api_key(),
+        capabilities=settings.capabilities() or None,
         transport=transport,
     )

@@ -17,7 +17,8 @@ instance and never included in error messages.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import fields
 from typing import Any
 
 import httpx
@@ -31,7 +32,7 @@ from quantsmind_agent.errors import (
     NetworkError,
     QuantsMindError,
 )
-from quantsmind_agent.llm import ChatRequest, ChatResponse, StreamChunk
+from quantsmind_agent.llm import ChatRequest, ChatResponse, ProviderCapabilities, StreamChunk
 from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.schema import ToolCall
 
@@ -47,6 +48,17 @@ class OpenAICompatProvider:
 
     name = "openai_compatible"
 
+    #: What the *protocol* supports. A particular service behind this protocol
+    #: may honour less; ``capabilities`` below narrows that per endpoint, and the
+    #: presets in :mod:`quantsmind_agent.config` say by how much.
+    base_capabilities = ProviderCapabilities(
+        tools=True,
+        streaming=True,
+        structured_output=True,
+        context_window=None,
+        cancellation=False,
+    )
+
     def __init__(
         self,
         base_url: str,
@@ -55,6 +67,7 @@ class OpenAICompatProvider:
         organization: str | None = None,
         timeout_seconds: float = 120.0,
         requires_api_key: bool = True,
+        capabilities: ProviderCapabilities | Mapping[str, Any] | None = None,
         transport: httpx.BaseTransport | None = None,
         client: httpx.Client | None = None,
     ) -> None:
@@ -72,6 +85,41 @@ class OpenAICompatProvider:
         self._api_key_source = api_key
         self._transport = transport
         self._client = client
+        self.capabilities = self._resolve_capabilities(capabilities)
+
+    @classmethod
+    def _resolve_capabilities(
+        cls, overrides: ProviderCapabilities | Mapping[str, Any] | None
+    ) -> ProviderCapabilities:
+        """Merge an endpoint's declared capabilities over the protocol's own.
+
+        Only keys the endpoint actually declares are overridden, so a preset that
+        is silent about streaming adds no opinion rather than removing streaming.
+        An explicit ``None`` in the override means "unknown", which is different
+        from silence and is preserved as such.
+        """
+
+        if overrides is None:
+            return cls.base_capabilities
+        if isinstance(overrides, ProviderCapabilities):
+            return overrides
+        known = {item.name for item in fields(ProviderCapabilities)}
+        unknown = set(overrides) - known
+        if unknown:
+            raise LLMConfigurationError(
+                f"Unknown capability names: {', '.join(sorted(unknown))}",
+                user_message=(
+                    "The provider configuration names capabilities that do not exist: "
+                    f"{', '.join(sorted(unknown))}."
+                ),
+                details={"unknown": sorted(unknown), "known": sorted(known)},
+            )
+        merged = {
+            item.name: getattr(cls.base_capabilities, item.name)
+            for item in fields(cls.base_capabilities)
+        }
+        merged.update(overrides)
+        return ProviderCapabilities(**merged)
 
     # -- credential -------------------------------------------------------
     def _resolve_api_key(self) -> str | None:

@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 
 from quantsmind_agent.errors import LLMTimeoutError, ModelUnavailableError, NetworkError
-from quantsmind_agent.llm import ChatRequest, ChatResponse, StreamChunk
+from quantsmind_agent.llm import ChatRequest, ChatResponse, ProviderCapabilities, StreamChunk
 from quantsmind_agent.schema import ToolCall
 
 __all__ = [
@@ -69,6 +69,11 @@ class FakeModelProvider:
     Implements :class:`~quantsmind_agent.llm.ModelProvider` structurally. It
     deliberately does not subclass the Protocol: the gateway relies on duck
     typing, and inheriting would couple the fake to the production interface.
+
+    It declares full capabilities, because that is what a real adapter must do
+    to have its tools used at all. Tests that need the "endpoint cannot do this"
+    behaviour pass ``capabilities=`` instead of relying on silence -- silence now
+    means *unknown*, which the application refuses to assume either way.
     """
 
     name = "fake"
@@ -79,10 +84,18 @@ class FakeModelProvider:
         *,
         stream_chunks: list[list[str]] | None = None,
         base_url: str = "https://fake.invalid/v1",
+        capabilities: ProviderCapabilities | None = None,
     ) -> None:
         self._responses = list(responses or [text_response("ok")])
         self._stream_chunks = stream_chunks
         self.base_url = base_url
+        self.capabilities = capabilities or ProviderCapabilities(
+            tools=True,
+            streaming=True,
+            structured_output=True,
+            context_window=8192,
+            cancellation=False,
+        )
         self.requests: list[ChatRequest] = []
         self.stream_requests: list[ChatRequest] = []
 
