@@ -74,7 +74,8 @@ __all__ = [
 #: v2 adds ``verification``: the outcome of verifying a finished task. A record
 #: written by v1 loads with no verification record, which reads as "never
 #: verified" rather than "verified by an absence of evidence".
-SCHEMA_VERSION = 2
+#: v3 adds `trace`: the ordered record of how a task reached its state.
+SCHEMA_VERSION = 3
 
 #: Bumped when the *canonical form* of a plan changes.
 #:
@@ -545,6 +546,105 @@ def plan_digest(plan: Plan) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
+class TraceKind(StrEnum):
+    """The kinds of thing worth recording about how a task reached its state.
+
+    Named rather than free text so a trace can be filtered, and so the difference
+    between a provider fault, a policy refusal and a failing check survives
+    being written down.
+    """
+
+    TASK_ACCEPTED = "task_accepted"
+    PLAN_PROPOSED = "plan_proposed"
+    PLAN_VALIDATED = "plan_validated"
+    PLAN_REJECTED = "plan_rejected"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXECUTION_STARTED = "execution_started"
+    STEP = "step"
+    PROVIDER = "provider"
+    VERIFICATION_STARTED = "verification_started"
+    VERIFICATION = "verification"
+    CANCELLED = "cancelled"
+    PAUSED = "paused"
+    FINISHED = "finished"
+    PERSISTENCE_FAILED = "persistence_failed"
+
+
+class TraceEvent:
+    """One ordered, bounded record of something that happened to a task.
+
+    Kept on the task rather than in a second store, so a trace cannot disagree
+    with the record it describes -- the failure mode of every separate audit log
+    that has ever been written.
+
+    Bounded on purpose: a run with a step budget of 200 would otherwise record 200
+    events forever. The oldest entries are dropped past :data:`MAX_TRACE_EVENTS`,
+    because the recent ones are what diagnose a failure and the early ones are
+    also recoverable from the plan and the execution records.
+    """
+
+    __slots__ = ("at", "detail", "fields", "kind", "step_id")
+
+    def __init__(
+        self,
+        kind: TraceKind,
+        at: float,
+        detail: str = "",
+        *,
+        step_id: str = "",
+        **fields: Any,
+    ) -> None:
+        self.kind = TraceKind(kind)
+        self.at = at
+        #: Bounded here rather than by the caller, so no code path can write an
+        #: unbounded event into a record that gets persisted.
+        self.detail = detail[:500]
+        self.step_id = step_id
+        #: Only scalar, short values. Scrubbed before they reach disk.
+        self.fields: dict[str, Any] = {
+            key: value
+            for key, value in fields.items()
+            if isinstance(value, (str, int, float, bool, type(None)))
+        }
+
+    def describe(self) -> str:
+        parts = [f"{self.kind.value}"]
+        if self.step_id:
+            parts.append(f"[{self.step_id}]")
+        if self.detail:
+            parts.append(self.detail)
+        return " ".join(parts)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": str(self.kind),
+            "at": self.at,
+            "detail": self.detail,
+            "step_id": self.step_id,
+            "fields": dict(self.fields),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> TraceEvent:
+        fields = payload.get("fields")
+        return cls(
+            TraceKind(str(payload.get("kind", "finished"))),
+            float(payload.get("at", 0.0) or 0.0),
+            str(payload.get("detail", "")),
+            step_id=str(payload.get("step_id", "")),
+            **{
+                str(key): value
+                for key, value in (fields.items() if isinstance(fields, dict) else ())
+            },
+        )
+
+
+#: How many trace events a task keeps. Enough to diagnose a failure; small enough
+#: that history does not grow without bound.
+MAX_TRACE_EVENTS = 200
+
+
 @dataclass(frozen=True, slots=True)
 class VerificationRecord:
     """The outcome of verifying one task, kept beside the evidence.
@@ -998,6 +1098,7 @@ class Task:
     repairs: list[RepairAttempt] = field(default_factory=list)
     recovery: list[RecoveryDecision] = field(default_factory=list)
     verification: VerificationRecord | None = None
+    trace: list[TraceEvent] = field(default_factory=list)
     steps_executed: int = 0
     checks_run: int = 0
     active_seconds: float = 0.0
@@ -1009,6 +1110,14 @@ class Task:
 
     def set_status(self, step_id: str, status: StepStatus) -> None:
         self.step_status[step_id] = status
+
+    def record(self, event: TraceEvent) -> None:
+        """Append a trace event, dropping the oldest past the bound."""
+
+        self.trace.append(event)
+        overflow = len(self.trace) - MAX_TRACE_EVENTS
+        if overflow > 0:
+            del self.trace[:overflow]
 
     def move_to(self, status: TaskStatus, *, detail: str = "") -> None:
         """Move to a new lifecycle status, refusing a move the table forbids.
@@ -1078,6 +1187,7 @@ class Task:
             "repairs": [item.to_dict() for item in self.repairs],
             "recovery": [item.to_dict() for item in self.recovery],
             "verification": self.verification.to_dict() if self.verification else None,
+            "trace": [item.to_dict() for item in self.trace],
             "steps_executed": self.steps_executed,
             "checks_run": self.checks_run,
             "active_seconds": self.active_seconds,
@@ -1126,6 +1236,11 @@ class Task:
                 if isinstance(migrated.get("verification"), dict)
                 else None
             ),
+            trace=[
+                TraceEvent.from_dict(item)
+                for item in migrated.get("trace") or []
+                if isinstance(item, dict)
+            ],
             steps_executed=int(migrated.get("steps_executed", 0) or 0),
             checks_run=int(migrated.get("checks_run", 0) or 0),
             active_seconds=float(migrated.get("active_seconds", 0.0) or 0.0),
@@ -1160,6 +1275,8 @@ def migrate(payload: object) -> dict[str, Any]:
     migrated = dict(payload)
     if version < 2:
         migrated["verification"] = None
+    if version < 3:
+        migrated["trace"] = []
     migrated["schema_version"] = SCHEMA_VERSION
     return migrated
 

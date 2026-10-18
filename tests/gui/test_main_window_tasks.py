@@ -281,18 +281,57 @@ class TestWindowLifecycle:
         assert orchestrator.task.report is not None
 
 
-class TestPlanGenerationRoutesThroughTheChat:
-    def test_requesting_a_plan_sends_the_objective_to_the_composer(
+class TestPlanGenerationUsesStructuredOutput:
+    def test_a_too_short_objective_is_refused_without_calling_the_model(
         self, opened: GuiHarness
     ) -> None:
+        """Propose now goes through the structured-output path, not the composer."""
+
         window = opened.window
         window.show_task_view()
 
-        window.task_panel.objective.setText("rewrite the greeting module")
+        window.task_panel.objective.setText("hi")
         window.task_panel._on_propose()
 
-        assert "rewrite the greeting module" in window.input.toPlainText()
-        assert window._views.currentIndex() == 0
+        # The refusal is stated rather than silently ignored, and nothing was put
+        # in the composer for a human to send by hand.
+        assert window.input.toPlainText() == ""
+        assert "more fully" in window.task_panel.status.text()
+        assert window._plan_thread is None
+
+    def test_an_unusable_model_answer_is_refused_with_reasons(self, opened: GuiHarness) -> None:
+        from quantsmind_agent.planner import PlanProposal
+
+        window = opened.window
+        window.show_task_view()
+
+        window._proposal_ready(PlanProposal(problems=("the model returned prose",)))
+
+        assert "No usable plan" in window.task_panel.status.text()
+        assert window._pending_plan is None
+
+    def test_a_valid_proposal_is_offered_for_review(self, opened: GuiHarness) -> None:
+        from quantsmind_agent.planner import PlanProposal
+        from quantsmind_agent.tasks import Plan, PlannedStep
+
+        window = opened.window
+        window.show_task_view()
+        proposed = Plan(
+            objective="rewrite the greeting module",
+            steps=(
+                PlannedStep(
+                    id="write",
+                    description="write it",
+                    tool="write_file",
+                    arguments={"path": "a.py", "content": "hi\n"},
+                ),
+            ),
+        )
+
+        window._proposal_ready(PlanProposal(plan=proposed))
+
+        assert window._pending_plan is proposed
+        assert window._views.currentIndex() == 1
 
     def test_the_panel_never_approves_its_own_plan(self, opened: GuiHarness) -> None:
         """Pressing Propose must not create a runnable task."""

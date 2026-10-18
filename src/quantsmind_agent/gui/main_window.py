@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import queue
 import re
+import threading
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -86,6 +87,8 @@ class MainWindow(QMainWindow):
         #: it what is true and renders the answer; it does not build tasks, store
         #: orchestrators or decide what is authorised. That used to happen here,
         #: which made every security decision in the product a line of widget code.
+        #: Holds the current plan-proposal thread so it can be joined on close.
+        self._plan_thread: threading.Thread | None = None
         self._task_service = TaskService(
             data_dir=context.paths.data_dir,
             # Resolved per call rather than captured: the application rebuilds its
@@ -95,6 +98,10 @@ class MainWindow(QMainWindow):
         )
         #: The approval dialog currently on screen, if any.
         self._active_dialog: ApprovalDialog | None = None
+        #: The plan proposed and awaiting a human decision, or ``None``. A
+        #: proposal is never an approval: it is shown, and nothing runs until the
+        #: user says so.
+        self._pending_plan: Any = None
         #: Releases the agent-event subscription. ``None`` once released.
         self._unsubscribe_events: Callable[[], None] | None = None
         self._build()
@@ -295,24 +302,64 @@ class MainWindow(QMainWindow):
         }
 
     def _on_task_plan_requested(self, objective: str) -> None:
-        """Plan generation happens in the conversation, not behind the panel.
+        """Ask the model for a plan through the structured-output path.
 
-        The panel cannot invent a plan, so "Propose plan" sends the objective to
-        the agent in the chat view and switches there. When the model answers
-        with a plan block, :meth:`submit_task_plan` validates it and offers it
-        for approval. This keeps one model-call path in the application instead of
-        adding a second one that only tasks use.
+        The panel cannot invent a plan, so "Propose plan" asks the configured
+        model for one, and the answer is validated here before anyone sees it.
+        What used to happen was a request for a fenced JSON block in prose and a
+        hope; the difference is that a malformed answer is now a stated failure
+        with reasons, not something that has to be spotted in a paragraph.
+
+        The call runs on a worker thread: it is a model call, and the GUI thread
+        is for drawing.
         """
 
         self.show_chat_view()
-        prompt = (
-            "Propose a plan for this change. Reply with one fenced ```json block "
-            'containing {"objective", "steps", "acceptance_criteria"} where each '
-            'step has {"id", "description", "tool", "arguments", "depends_on", '
-            '"risk", "expected_paths"}. Use only the tools you have.'
+        text = objective.strip()
+        if len(text) < 4:
+            self.task_panel.status.setText("Describe the change a little more fully first.")
+            return
+        if not self._context.workspace:
+            self.task_panel.status.setText("Open a project before planning a task.")
+            return
+        self.task_panel.status.setText("Asking the model for a plan...")
+
+        def ask() -> None:
+            try:
+                proposal = self._planner().propose(text)
+            except Exception as exc:  # a planner that raises is still just a failure
+                self._proposal_failed(str(exc))
+                return
+            self._proposal_ready(proposal)
+
+        self._plan_thread = threading.Thread(target=ask, name="plan-proposal", daemon=True)
+        self._plan_thread.start()
+
+    def _planner(self) -> Any:
+        """A planner bound to the live gateway, workspace and tool set."""
+
+        from quantsmind_agent.planner import TaskPlanner
+
+        workspace = self._context.workspace
+        return TaskPlanner(
+            gateway=self._context.gateway,
+            known_tools=frozenset(self._context.tools.names),
+            workspace=str(workspace.root) if workspace is not None else "",
+            model=self._context.config_manager.config.provider.model,
         )
-        self.input.setPlainText(objective.strip())
-        self.input.setPlaceholderText(prompt)
+
+    def _proposal_ready(self, proposal: Any) -> None:
+        """Called with whatever the model produced."""
+
+        if not proposal.ok:
+            self._proposal_failed("; ".join(proposal.problems[:3]))
+            return
+        self.submit_task_plan(proposal.plan)
+
+    def _proposal_failed(self, reason: str) -> None:
+        self.task_panel.status.setText(f"No usable plan: {reason}")
+        self.show_task_view()
+        logger.info("plan proposal refused: %s", reason[:200])
 
     def show_chat_view(self) -> None:
         self._views.setCurrentIndex(0)

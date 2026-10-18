@@ -35,6 +35,7 @@ from quantsmind_agent.errors import (
     NetworkError,
 )
 from quantsmind_agent.llm import ChatRequest, ChatResponse, ProviderCapabilities, StreamChunk
+from quantsmind_agent.streaming import DeliveryState, RetryDecision, classify_stream_failure
 
 __all__ = [
     "FailureKind",
@@ -45,6 +46,17 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+
+def _close(chunks: Any) -> None:
+    """Close a provider stream if it can be closed, and say so if it cannot."""
+
+    closer = getattr(chunks, "close", None)
+    if callable(closer):
+        try:
+            closer()
+        except Exception:  # a stream that cannot close must not mask the outcome
+            logger.debug("could not close a provider stream", exc_info=True)
 
 
 class FailureKind(StrEnum):
@@ -297,11 +309,15 @@ class ProviderRouter:
         )
 
     def stream(self, request: ChatRequest) -> Iterator[StreamChunk]:
-        """Stream from the first endpoint that can.
+        """Stream from the first endpoint that can, and never restart one.
 
-        Streaming is a generator, so a failure part-way through has already
-        produced output for the caller; that is not a retryable shape and is not
-        retried here.
+        v0.6 fell back between streams when an endpoint failed before producing
+        anything. That is still allowed, and only that case is: once a chunk has
+        reached the caller, the conversation already shows part of an answer, and
+        another endpoint's answer is not a continuation of it.
+
+        The generator is closed on every exit -- success, failure and cancellation
+        -- so a provider's response stream is not left open behind us.
         """
 
         attempts_allowed = max(1, self._policy.max_attempts)
@@ -309,35 +325,114 @@ class ProviderRouter:
         for index, candidate in enumerate(self._candidates):
             if index >= attempts_allowed:
                 break
+            chunks: Iterator[StreamChunk] | None = None
+            dispatched = False
             try:
                 chunks = candidate.provider.stream(request)
-                first = next(iter(chunks), None)
+                dispatched = True
+                iterator = iter(chunks)
+                first: StreamChunk | None = None
+                while True:
+                    first = next(iterator)
+                    break
             except StopIteration:
-                return
-            except BaseException as exc:
-                kind = classify_failure(exc)
+                if chunks is not None:
+                    _close(chunks)
                 self._announce(
                     RouteAttempt(
-                        index=index,
-                        provider=candidate.name,
-                        model=candidate.model,
-                        outcome="failed",
-                        failure=kind,
-                        detail=str(exc)[:200],
+                        index=index, provider=candidate.name, model=candidate.model, outcome="empty"
                     )
                 )
+                self.last_decision = RoutingDecision(
+                    attempts=self.last_decision.attempts if self.last_decision else [],
+                    provider=candidate.name,
+                    model=candidate.model,
+                    fell_back=index > 0,
+                )
+                return
+            except BaseException as exc:
+                if chunks is not None:
+                    _close(chunks)
+                kind = classify_failure(exc)
+                attempt = RouteAttempt(
+                    index=index,
+                    provider=candidate.name,
+                    model=candidate.model,
+                    outcome="failed",
+                    failure=kind,
+                    detail=str(exc)[:200],
+                )
+                self._announce(attempt)
+                if self.last_decision is None:
+                    self.last_decision = RoutingDecision()
+                self.last_decision.attempts.append(attempt)
                 last = exc
-                if not self._policy.permits(kind):
+                decision = classify_stream_failure(
+                    delivered=DeliveryState.NONE,
+                    dispatched=dispatched,
+                    failure_kind=kind.value,
+                )
+                if decision is not RetryDecision.SAFE:
+                    self.last_decision.provider = candidate.name
+                    self.last_decision.model = candidate.model
                     raise
                 continue
+
             self._announce(
                 RouteAttempt(
                     index=index, provider=candidate.name, model=candidate.model, outcome="served"
                 )
             )
-            if first is not None:
-                yield first
-            yield from chunks
+            self.last_decision = RoutingDecision(
+                attempts=(self.last_decision.attempts if self.last_decision is not None else [])
+                + [
+                    RouteAttempt(
+                        index=index,
+                        provider=candidate.name,
+                        model=candidate.model,
+                        outcome="served",
+                    )
+                ],
+                provider=candidate.name,
+                model=candidate.model,
+                fell_back=index > 0,
+            )
+            delivered = DeliveryState.NONE
+            try:
+                if first is not None:
+                    if first.delta or first.tool_calls or first.finish_reason:
+                        delivered = DeliveryState.PARTIAL
+                    yield first
+                for item in iterator:
+                    if item.delta or item.tool_calls or item.finish_reason:
+                        delivered = DeliveryState.PARTIAL
+                    yield item
+                delivered = DeliveryState.COMPLETE
+            except BaseException as exc:
+                # The caller already has content, so this is a NO_RESTART no matter
+                # how friendly the failure looks. Recorded rather than swallowed:
+                # "the answer stopped half way" is the diagnosis.
+                kind = classify_failure(exc)
+                attempt = RouteAttempt(
+                    index=index,
+                    provider=candidate.name,
+                    model=candidate.model,
+                    outcome="interrupted" if delivered is DeliveryState.PARTIAL else "failed",
+                    failure=kind,
+                    detail=str(exc)[:200],
+                )
+                self._announce(attempt)
+                if self.last_decision is not None:
+                    self.last_decision.attempts.append(attempt)
+                raise
+            finally:
+                # Closing on every exit -- including a caller that walks away --
+                # is what stops a half-read stream from outliving the turn.
+                _close(chunks)
+            # Served. Returning here rather than falling out of the loop matters:
+            # an earlier endpoint's failure is still in `last`, and falling through
+            # would re-raise it after having already delivered this answer.
+            return
 
         if last is not None:
             raise last

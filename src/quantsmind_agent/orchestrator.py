@@ -55,6 +55,8 @@ from quantsmind_agent.tasks import (
     TaskReport,
     TaskStatus,
     ToolExecutionRecord,
+    TraceEvent,
+    TraceKind,
     VerificationOutcome,
     VerificationRecord,
     validate_plan,
@@ -64,6 +66,31 @@ from quantsmind_agent.verification import Check, discover_checks, run_checks
 __all__ = ["AdvanceResult", "Orchestrator", "StepOutcome", "TaskEvent", "hash_file"]
 
 logger = logging.getLogger(__name__)
+
+
+#: Emitted event names that mean something more specific than "a step happened".
+_TRACE_ALIASES: dict[str, TraceKind] = {
+    "plan_ready": TraceKind.PLAN_PROPOSED,
+    "approved": TraceKind.APPROVED,
+    "rejected": TraceKind.REJECTED,
+    "verification_required": TraceKind.VERIFICATION_STARTED,
+    "verification_finished": TraceKind.VERIFICATION,
+    "verification_refused": TraceKind.VERIFICATION_STARTED,
+    "persist_failed": TraceKind.PERSISTENCE_FAILED,
+    "blocked": TraceKind.STEP,
+    "repair_admitted": TraceKind.STEP,
+}
+
+
+def _trace_kind(kind: str) -> TraceKind:
+    """Map an emitted event name onto a stable trace kind."""
+
+    try:
+        return TraceKind(kind)
+    except ValueError:
+        if kind in _TRACE_ALIASES:
+            return _TRACE_ALIASES[kind]
+        return TraceKind.STEP if kind.startswith("step_") else TraceKind.FINISHED
 
 
 def hash_file(path: Path) -> str:
@@ -153,10 +180,33 @@ class Orchestrator:
         return self.task.id
 
     def emit(self, kind: str, detail: str = "", **payload: Any) -> None:
+        self._trace(kind, detail, **payload)
         if self._observer is not None:
             self._observer(
                 TaskEvent(kind=kind, task_id=self.task.id, detail=detail, payload=payload)
             )
+
+    def _trace(self, kind: str, detail: str = "", **payload: Any) -> None:
+        """Record an event on the task, bounded and scrubbed.
+
+        Every event the observer already received is also recorded, so the trace
+        and the live activity feed cannot disagree about what happened -- the
+        failure mode of an audit log kept separately from the thing it audits.
+        """
+
+        try:
+            step_id = str(payload.pop("step", "") or payload.get("step_id", "") or "")
+            self.task.record(
+                TraceEvent(
+                    _trace_kind(kind),
+                    self._clock(),
+                    detail[:500],
+                    step_id=step_id,
+                    **payload,
+                )
+            )
+        except Exception:  # a trace that cannot be written must not stop the work
+            logger.debug("could not record trace event %s", kind, exc_info=True)
 
     def set_observer(self, observer: Observer | None) -> None:
         """Attach or replace the progress observer.
