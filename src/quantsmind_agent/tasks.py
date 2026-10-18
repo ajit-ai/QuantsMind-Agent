@@ -61,6 +61,8 @@ __all__ = [
     "TaskReport",
     "TaskStatus",
     "ToolExecutionRecord",
+    "VerificationOutcome",
+    "VerificationRecord",
     "can_transition",
     "migrate",
     "plan_digest",
@@ -68,7 +70,11 @@ __all__ = [
 ]
 
 #: Bumped when a stored task record needs migrating on read.
-SCHEMA_VERSION = 1
+#:
+#: v2 adds ``verification``: the outcome of verifying a finished task. A record
+#: written by v1 loads with no verification record, which reads as "never
+#: verified" rather than "verified by an absence of evidence".
+SCHEMA_VERSION = 2
 
 #: Bumped when the *canonical form* of a plan changes.
 #:
@@ -275,6 +281,29 @@ class CheckStatus(StrEnum):
     SKIPPED = "skipped"
     NOT_RUN = "not_run"
     BLOCKED = "blocked"
+
+
+class VerificationOutcome(StrEnum):
+    """What verification established about a finished task.
+
+    Three outcomes, because two of them are easy to confuse and the confusion is
+    the whole risk: a check that could not run (``SKIPPED``, ``BLOCKED`` because
+    of policy, a timeout) has established *nothing*. Reporting that as a pass
+    would be the one failure mode a verification feature cannot have.
+
+    ``INCONCLUSIVE`` is therefore not a softer ``PASS``; it is a distinct answer,
+    and by default it stops the task from being reported as verified.
+    """
+
+    PASS = "pass"
+    FAIL = "fail"
+    INCONCLUSIVE = "inconclusive"
+
+    @property
+    def verified(self) -> bool:
+        """Whether this outcome may be described as "verified"."""
+
+        return self is VerificationOutcome.PASS
 
 
 class PlanRejected(ValueError):
@@ -514,6 +543,56 @@ def plan_digest(plan: Plan) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationRecord:
+    """The outcome of verifying one task, kept beside the evidence.
+
+    Stored on the task rather than derived on demand, because "was this verified?"
+    has to be answerable months later from the record alone -- after the checks
+    have been pruned, the workspace moved, or the tool that ran them is gone.
+    ``reasons`` says *why* in words a user can read, so an ``inconclusive`` never
+    has to be explained after the fact.
+    """
+
+    outcome: VerificationOutcome = VerificationOutcome.INCONCLUSIVE
+    criteria_total: int = 0
+    criteria_verified: int = 0
+    check_ids: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+    ran_at: float = 0.0
+
+    @property
+    def verified(self) -> bool:
+        return self.outcome.verified
+
+    def describe(self) -> str:
+        if self.outcome is VerificationOutcome.PASS:
+            return f"verified ({self.criteria_verified}/{self.criteria_total} criteria)"
+        detail = f" -- {'; '.join(self.reasons)}" if self.reasons else ""
+        return f"not verified: {self.outcome.value}{detail}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "outcome": str(self.outcome),
+            "criteria_total": self.criteria_total,
+            "criteria_verified": self.criteria_verified,
+            "check_ids": list(self.check_ids),
+            "reasons": list(self.reasons),
+            "ran_at": self.ran_at,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> VerificationRecord:
+        return cls(
+            outcome=VerificationOutcome(str(payload.get("outcome", "inconclusive"))),
+            criteria_total=int(payload.get("criteria_total", 0) or 0),
+            criteria_verified=int(payload.get("criteria_verified", 0) or 0),
+            check_ids=tuple(str(item) for item in payload.get("check_ids") or []),
+            reasons=tuple(str(item) for item in payload.get("reasons") or []),
+            ran_at=float(payload.get("ran_at", 0.0) or 0.0),
+        )
 
 
 # __PART3__
@@ -918,6 +997,7 @@ class Task:
     checks: list[CheckResult] = field(default_factory=list)
     repairs: list[RepairAttempt] = field(default_factory=list)
     recovery: list[RecoveryDecision] = field(default_factory=list)
+    verification: VerificationRecord | None = None
     steps_executed: int = 0
     checks_run: int = 0
     active_seconds: float = 0.0
@@ -997,6 +1077,7 @@ class Task:
             "checks": [item.to_dict() for item in self.checks],
             "repairs": [item.to_dict() for item in self.repairs],
             "recovery": [item.to_dict() for item in self.recovery],
+            "verification": self.verification.to_dict() if self.verification else None,
             "steps_executed": self.steps_executed,
             "checks_run": self.checks_run,
             "active_seconds": self.active_seconds,
@@ -1040,6 +1121,11 @@ class Task:
             checks=[CheckResult.from_dict(item) for item in migrated.get("checks") or []],
             repairs=[RepairAttempt.from_dict(item) for item in migrated.get("repairs") or []],
             recovery=[RecoveryDecision.from_dict(item) for item in migrated.get("recovery") or []],
+            verification=(
+                VerificationRecord.from_dict(migrated["verification"])
+                if isinstance(migrated.get("verification"), dict)
+                else None
+            ),
             steps_executed=int(migrated.get("steps_executed", 0) or 0),
             checks_run=int(migrated.get("checks_run", 0) or 0),
             active_seconds=float(migrated.get("active_seconds", 0.0) or 0.0),
@@ -1053,10 +1139,14 @@ class Task:
 def migrate(payload: object) -> dict[str, Any]:
     """Bring a stored record up to :data:`SCHEMA_VERSION`.
 
-    Version 1 is the first task schema, so today this is a guard rather than a
-    rewrite: a record claiming a *newer* schema than this build understands is
-    refused, because half-reading a future record is how a task silently loses its
-    approval scope.
+    A record claiming a *newer* schema than this build understands is refused,
+    because half-reading a future record is how a task silently loses its approval
+    scope.
+
+    v1 -> v2 adds ``verification``. A v1 record has none, and the key is added
+    explicitly rather than left to a default in the dataclass: the difference
+    between "this task was verified and the record was truncated" and "this task
+    was never verified" should not depend on how the loader happens to behave.
     """
 
     if not isinstance(payload, dict):
@@ -1068,6 +1158,8 @@ def migrate(payload: object) -> dict[str, Any]:
     if version > SCHEMA_VERSION:
         raise PlanRejected([f"task record schema {version} is newer than this build"])
     migrated = dict(payload)
+    if version < 2:
+        migrated["verification"] = None
     migrated["schema_version"] = SCHEMA_VERSION
     return migrated
 

@@ -76,6 +76,7 @@ class TaskSummary:
         "steps_done",
         "steps_total",
         "updated_at",
+        "verification",
         "workspace",
     )
 
@@ -94,6 +95,10 @@ class TaskSummary:
         self.status = status if status in {item.value for item in TaskStatus} else TaskStatus.DRAFT
         self.updated_at = float(payload.get("updated_at", 0.0) or 0.0)
         self.workspace = str(payload.get("workspace", ""))
+        verification = payload.get("verification")
+        self.verification = (
+            str((verification or {}).get("outcome", "")) if isinstance(verification, dict) else ""
+        )
         self.steps_done = done
         self.steps_total = len(steps)
 

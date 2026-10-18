@@ -70,6 +70,9 @@ class TaskView:
     can_pause: bool
     can_cancel: bool
     interrupted: bool = False
+    verification: str = ""
+    criteria_verified: int = 0
+    criteria_total: int = 0
 
     @classmethod
     def of(cls, task: Task, *, interrupted: bool = False) -> TaskView:
@@ -97,17 +100,32 @@ class TaskView:
             can_pause=not task.terminal and task.status is not TaskStatus.PAUSED,
             can_cancel=not task.terminal,
             interrupted=interrupted,
+            verification=(task.verification.outcome.value if task.verification is not None else ""),
+            criteria_verified=(
+                task.verification.criteria_verified if task.verification is not None else 0
+            ),
+            criteria_total=(
+                task.verification.criteria_total if task.verification is not None else 0
+            ),
         )
 
     def describe(self) -> str:
-        """One honest line, for the status bar and for logs."""
+        """One honest line, for the status bar and for logs.
+
+        Execution and verification are reported separately on purpose: "steps
+        done" and "verified" are different claims, and joining them into one
+        status is how an unverified task ends up described as a success.
+        """
 
         if self.interrupted:
             return f"{self.objective} -- interrupted, outcome unknown"
         parts = [self.objective, self.status.value]
         if self.step_total:
             parts.append(f"{self.step_done}/{self.step_total} steps")
-        if self.checks_failed:
+        if self.criteria_total:
+            verdict = self.verification or "not verified"
+            parts.append(f"verification: {verdict}")
+        elif self.checks_failed:
             parts.append(f"{self.checks_failed} check(s) failed")
         return " -- ".join(parts)
 

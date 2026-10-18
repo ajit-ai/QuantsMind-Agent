@@ -47,6 +47,7 @@ class TaskWorker(QObject):
 
     progressed = Signal(object)  # AdvanceResult
     task_event = Signal(object)  # TaskEvent
+    verifying = Signal(object)  # VerificationOutcome
     failed = Signal(str)
     finished = Signal()
 
@@ -58,7 +59,13 @@ class TaskWorker(QObject):
         self._orchestrator.set_observer(self._on_event)
 
     def run(self, limit: int = 25) -> None:
-        """Advance until the task stops making progress."""
+        """Advance until the task stops making progress.
+
+        Verification runs here, on the worker thread, because that is the thread
+        that owns the task: running the project's checks on the GUI thread would
+        freeze the window for as long as the suite takes, which is the exact
+        reason execution left it in the first place.
+        """
 
         try:
             for _ in range(limit):
@@ -66,6 +73,11 @@ class TaskWorker(QObject):
                     break
                 result: AdvanceResult = self._orchestrator.advance()
                 self.progressed.emit(result)
+                if result.action == "verifying":
+                    # The steps are done and the task promised evidence. Run it,
+                    # then let the next advance settle on what was found.
+                    self.verifying.emit(self._orchestrator.verify_current())
+                    continue
                 if result.action in {"finished", "blocked", "cancelled", "paused", "waiting"}:
                     break
         except Exception as exc:
@@ -89,6 +101,7 @@ class TaskWorkerBridge(QObject):
 
     progressed = Signal(object)
     task_event = Signal(object)
+    verifying = Signal(object)  # VerificationOutcome
     failed = Signal(str)
     finished = Signal()
 
@@ -100,6 +113,7 @@ class TaskWorkerBridge(QObject):
         self._worker.moveToThread(self._thread)
         self._worker.progressed.connect(self.progressed.emit)
         self._worker.task_event.connect(self.task_event.emit)
+        self._worker.verifying.connect(self.verifying.emit)
         self._worker.failed.connect(self.failed.emit)
         self._worker.finished.connect(self.finished.emit)
         self._worker.finished.connect(self._thread.quit)
@@ -353,6 +367,7 @@ class TaskPanel(QWidget):
         self._bridge = TaskWorkerBridge(self._orchestrator)
         self._bridge.progressed.connect(self._on_progress)
         self._bridge.task_event.connect(self._on_event)
+        self._bridge.verifying.connect(self._on_verified)
         self._bridge.failed.connect(self._on_failed)
         self._bridge.finished.connect(self._on_finished)
         self.run_button.setEnabled(False)
@@ -420,6 +435,14 @@ class TaskPanel(QWidget):
     def _on_progress(self, result: AdvanceResult) -> None:
         if result.reason:
             self.status.setText(f"{result.action}: {result.reason}")
+        self.refresh()
+
+    def _on_verified(self, outcome: Any) -> None:
+        """Say what verification found, in the same words the record uses."""
+
+        orchestrator = self._orchestrator
+        record = getattr(orchestrator.task, "verification", None) if orchestrator else None
+        self.status.setText(record.describe() if record is not None else f"verified: {outcome}")
         self.refresh()
 
     def _on_event(self, event: TaskEvent) -> None:
