@@ -100,6 +100,26 @@ def orchestrator_for(
     )
 
 
+def approved_orchestrator(
+    project: Path,
+    task: Task,
+    registry: WritingRegistry | None = None,
+    store: TaskStore | None = None,
+) -> Orchestrator:
+    """An orchestrator whose task already has an approved plan.
+
+    Verification runs the project's commands, so it is gated the same way step
+    execution is: these tests are about how check outcomes are *recorded*, not
+    about the authorisation gate, which has its own tests.
+    """
+
+    orchestrator = orchestrator_for(project, task, registry, store)
+    plan = plan_for(write_step("noop", "a.py"))
+    orchestrator.submit_plan(plan)
+    orchestrator.approve(approval_for_plan(plan, str(project), approved=True))
+    return orchestrator
+
+
 # __PART2__
 
 
@@ -312,7 +332,7 @@ class TestRecovery:
 class TestVerificationReporting:
     def test_a_passing_check_is_recorded_as_passed(self, project: Path) -> None:
         task = Task(id="t1", objective="verify", workspace=str(project))
-        orchestrator = orchestrator_for(project, task)
+        orchestrator = approved_orchestrator(project, task)
 
         results = orchestrator.verify([Check(id="ok", argv=("python", "-c", "print('fine')"))])
 
@@ -321,7 +341,7 @@ class TestVerificationReporting:
 
     def test_a_failing_check_is_not_a_pass(self, project: Path) -> None:
         task = Task(id="t1", objective="verify", workspace=str(project))
-        orchestrator = orchestrator_for(project, task)
+        orchestrator = approved_orchestrator(project, task)
 
         results = orchestrator.verify(
             [Check(id="bad", argv=("python", "-c", "raise SystemExit(3)"))]
@@ -332,7 +352,7 @@ class TestVerificationReporting:
 
     def test_a_check_that_cannot_run_is_skipped_not_passed(self, project: Path) -> None:
         task = Task(id="t1", objective="verify", workspace=str(project))
-        orchestrator = orchestrator_for(project, task)
+        orchestrator = approved_orchestrator(project, task)
 
         results = orchestrator.verify([Check(id="absent", argv=("definitely-not-installed",))])
 
@@ -341,7 +361,7 @@ class TestVerificationReporting:
 
     def test_a_blocked_command_is_reported_as_blocked(self, project: Path) -> None:
         task = Task(id="t1", objective="verify", workspace=str(project))
-        orchestrator = orchestrator_for(project, task)
+        orchestrator = approved_orchestrator(project, task)
 
         results = orchestrator.verify([Check(id="danger", argv=("format", "C:"))])
 
@@ -351,7 +371,7 @@ class TestVerificationReporting:
         import time as _time
 
         task = Task(id="t1", objective="verify", workspace=str(project))
-        orchestrator = orchestrator_for(project, task)
+        orchestrator = approved_orchestrator(project, task)
         started = _time.monotonic()
 
         results = orchestrator.verify(
@@ -364,7 +384,7 @@ class TestVerificationReporting:
 
     def test_the_report_lists_checks_that_could_not_run(self, project: Path) -> None:
         task = Task(id="t1", objective="verify", workspace=str(project))
-        orchestrator = orchestrator_for(project, task)
+        orchestrator = approved_orchestrator(project, task)
         orchestrator.verify([Check(id="absent", argv=("definitely-not-installed",))])
 
         report = orchestrator.report()

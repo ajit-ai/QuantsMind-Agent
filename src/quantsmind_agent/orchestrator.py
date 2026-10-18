@@ -185,7 +185,7 @@ class Orchestrator:
             max_steps=self.task.budget.max_steps,
         )
         self.task.plan = validated
-        self.task.status = TaskStatus.AWAITING_APPROVAL
+        self.task.move_to(TaskStatus.AWAITING_APPROVAL)
         for step in validated.steps:
             self.task.step_status.setdefault(step.id, StepStatus.PENDING)
         self.emit("plan_ready", validated.objective, steps=len(validated.steps))
@@ -193,15 +193,30 @@ class Orchestrator:
         return validated
 
     def approve(self, approval: ApprovalRecord) -> None:
-        """Record the user's decision about the current plan."""
+        """Record the user's decision about the current plan.
+
+        The plan digest is checked here so a stale approval is refused at the
+        point it is offered rather than silently failing closed later, and the
+        workspace is checked for the same reason: an approval granted against a
+        different workspace is not this task's approval, and saying so at
+        approval time is clearer than watching every subsequent step be refused.
+        """
 
         plan = self.task.plan
         if plan is None:
             raise PlanRejected(["there is no plan to approve"])
         if approval.plan_digest != plan.digest:
             raise PlanRejected(["that approval was granted for a different plan"])
+        if not approval.covers_workspace(self.task.workspace):
+            raise PlanRejected(
+                [
+                    "that approval was granted for a different workspace or scope",
+                    f"approved for: {approval.workspace or '(no workspace)'}",
+                    f"this task runs in: {self.task.workspace}",
+                ]
+            )
         self.task.approval = approval
-        self.task.status = TaskStatus.APPROVED if approval.approved else TaskStatus.CANCELLED
+        self.task.move_to(TaskStatus.APPROVED if approval.approved else TaskStatus.CANCELLED)
         self.emit(
             "approved" if approval.approved else "rejected",
             approval.reason or "the user decided",
@@ -210,10 +225,18 @@ class Orchestrator:
         self.persist()
 
     def cancel(self, reason: str = "") -> None:
-        """Stop the task. No further action is taken after this."""
+        """Stop the task. No further action is taken after this.
 
+        A terminal task is left alone. Cancelling work that already finished
+        would relabel a completed task as one the user stopped, which is a lie
+        about what happened and would hide a real result from the history.
+        """
+
+        if self.task.terminal:
+            logger.debug("task %s is already %s; not cancelling", self.task.id, self.task.status)
+            return
         self._cancel_requested = True
-        self.task.status = TaskStatus.CANCELLED
+        self.task.move_to(TaskStatus.CANCELLED)
         self.emit("cancelled", reason)
         self.persist()
 
@@ -223,7 +246,7 @@ class Orchestrator:
         if self.task.terminal:
             return
         self._paused = True
-        self.task.status = TaskStatus.PAUSED
+        self.task.move_to(TaskStatus.PAUSED)
         self.emit("paused", "")
         self.persist()
 
@@ -233,11 +256,11 @@ class Orchestrator:
         if self.task.status is not TaskStatus.PAUSED:
             return
         if self.task.approved_plan is None:
-            self.task.status = TaskStatus.AWAITING_APPROVAL
+            self.task.move_to(TaskStatus.AWAITING_APPROVAL)
             self.emit("approval_required", "the plan changed while the task was paused")
         else:
             self._paused = False
-            self.task.status = TaskStatus.APPROVED
+            self.task.move_to(TaskStatus.APPROVED)
             self.emit("resumed", "")
         self.persist()
 
@@ -260,6 +283,8 @@ class Orchestrator:
 
         plan = self.task.approved_plan
         if plan is None:
+            return None
+        if self._time_budget_spent():
             return None
         if self.task.steps_executed >= self.task.budget.max_steps:
             return None
@@ -321,7 +346,7 @@ class Orchestrator:
         )
         if not verdict.allowed:
             self.task.set_status(step.id, StepStatus.BLOCKED)
-            self.task.status = TaskStatus.BLOCKED
+            self.task.move_to(TaskStatus.BLOCKED)
             self.emit("blocked", verdict.reason, step=step.id)
             self.persist()
             return AdvanceResult(
@@ -338,7 +363,7 @@ class Orchestrator:
 
         started = self._clock()
         self.task.set_status(step.id, StepStatus.RUNNING)
-        self.task.status = TaskStatus.RUNNING
+        self.task.move_to(TaskStatus.RUNNING)
         before = self._snapshot(step)
 
         try:
@@ -400,12 +425,20 @@ class Orchestrator:
         A check that could not run is recorded as skipped, blocked or not run --
         never as a pass. The report is built from these records, so a missing
         tool shows up as unverified rather than as success.
+
+        Verification runs commands, so it is gated the same way step execution
+        is: there must be an approved plan. Running a project's test suite for a
+        plan nobody approved would be executing the task's verification without
+        the authorisation the task was designed to require.
         """
 
+        if self.task.approved_plan is None:
+            self.emit("verification_refused", "there is no approved plan to verify")
+            return []
         if self.task.checks_run >= self.task.budget.max_checks_per_task:
             self.emit("budget_exhausted", "verification budget spent", resource="checks")
             return []
-        self.task.status = TaskStatus.VERIFYING
+        self.task.move_to(TaskStatus.VERIFYING)
         results = run_checks(
             checks,
             workspace_root=self.task.workspace,
@@ -441,7 +474,7 @@ class Orchestrator:
                 rationale="repair budget exhausted",
             )
             self.task.repairs.append(attempt)
-            self.task.status = TaskStatus.BLOCKED
+            self.task.move_to(TaskStatus.BLOCKED)
             self.emit("repair_refused", "the repair budget for this step is spent", step=step.id)
             self.persist()
             return attempt
@@ -457,7 +490,7 @@ class Orchestrator:
                 rationale=f"repair introduces steps outside the approved plan: {added}",
             )
             self.task.repairs.append(attempt)
-            self.task.status = TaskStatus.BLOCKED
+            self.task.move_to(TaskStatus.BLOCKED)
             self.emit(
                 "repair_refused",
                 f"the repair adds steps that were not approved: {added}",
@@ -474,7 +507,7 @@ class Orchestrator:
             rationale=rationale,
         )
         self.task.repairs.append(attempt)
-        self.task.status = TaskStatus.REPAIRING
+        self.task.move_to(TaskStatus.REPAIRING)
         self.task.set_status(step.id, StepStatus.PENDING)
         self.emit("repair_admitted", rationale, step=step.id, attempt=attempt.attempt)
         self.persist()
@@ -496,7 +529,7 @@ class Orchestrator:
                     approved=item.approved,
                 )
                 break
-        self.task.status = TaskStatus.VERIFYING if ok else TaskStatus.FAILED
+        self.task.move_to(TaskStatus.VERIFYING if ok else TaskStatus.FAILED)
         self.emit("repair_finished", detail, ok=ok, attempt=attempt.attempt)
         self.persist()
 
@@ -611,25 +644,28 @@ class Orchestrator:
 
         statuses = [self.task.status_of(step.id) for step in plan.steps]
         if any(status is StepStatus.BLOCKED for status in statuses):
-            self.task.status = TaskStatus.BLOCKED
+            self.task.move_to(TaskStatus.BLOCKED)
             reason = "a step was blocked by policy"
         elif any(status is StepStatus.FAILED for status in statuses):
-            self.task.status = TaskStatus.FAILED
+            self.task.move_to(TaskStatus.FAILED)
             reason = "a step failed"
         elif all(status in (StepStatus.SUCCEEDED, StepStatus.SKIPPED) for status in statuses):
             if self.task.checks_run and any(
                 check.status is CheckStatus.FAILED for check in self.task.checks
             ):
-                self.task.status = TaskStatus.FAILED
+                self.task.move_to(TaskStatus.FAILED)
                 reason = "verification failed"
+            elif self._time_budget_spent():
+                self.task.move_to(TaskStatus.FAILED)
+                reason = "the active-time budget was exhausted"
             elif self.task.steps_executed >= self.task.budget.max_steps:
-                self.task.status = TaskStatus.FAILED
+                self.task.move_to(TaskStatus.FAILED)
                 reason = "the step budget was exhausted"
             else:
-                self.task.status = TaskStatus.COMPLETED
+                self.task.move_to(TaskStatus.COMPLETED)
                 reason = "every step completed"
         else:
-            self.task.status = TaskStatus.BLOCKED
+            self.task.move_to(TaskStatus.BLOCKED)
             reason = "no step is eligible and none failed"
 
         self.report()
@@ -638,6 +674,17 @@ class Orchestrator:
         return AdvanceResult("finished", self.task.status, reason=reason)
 
     # -- helpers ----------------------------------------------------------
+    def _time_budget_spent(self) -> bool:
+        """Whether the task has used the active time it was allowed.
+
+        The seconds budget was accumulated on every step but never compared to
+        anything, so a plan whose tools each ran quickly enough could keep going
+        for as long as its step count allowed. A budget nobody checks is not a
+        bound, it is a number in a report.
+        """
+
+        return self.task.active_seconds >= self.task.budget.max_active_seconds
+
     def _tool_names(self) -> set[str]:
         try:
             return set(self._registry.names)

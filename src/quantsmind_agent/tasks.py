@@ -39,12 +39,16 @@ from enum import StrEnum
 from typing import Any
 
 __all__ = [
+    "ALLOWED_TRANSITIONS",
+    "DIGEST_VERSION",
     "SCHEMA_VERSION",
+    "TERMINAL_STATUSES",
     "AcceptanceCriterion",
     "ApprovalRecord",
     "CheckResult",
     "CheckStatus",
     "FileChangeRecord",
+    "IllegalTransition",
     "Plan",
     "PlanRejected",
     "PlannedStep",
@@ -57,6 +61,7 @@ __all__ = [
     "TaskReport",
     "TaskStatus",
     "ToolExecutionRecord",
+    "can_transition",
     "migrate",
     "plan_digest",
     "validate_plan",
@@ -65,16 +70,24 @@ __all__ = [
 #: Bumped when a stored task record needs migrating on read.
 SCHEMA_VERSION = 1
 
+#: Bumped when the *canonical form* of a plan changes.
+#:
+#: The digest is what an approval is bound to, so a change to which fields are
+#: hashed invalidates every approval already granted -- which is exactly what
+#: should happen, and is why the version is hashed in rather than assumed.
+DIGEST_VERSION = 1
+
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
 class TaskStatus(StrEnum):
     """Lifecycle of a task.
 
-    Transitions are enforced by the orchestrator; this enum only names them.
     ``PAUSED`` is distinct from ``BLOCKED``: a paused task is waiting for the user
     and can be resumed, a blocked task has hit a stop condition and needs a
     decision before anything else happens.
+
+    The legal moves between these are :data:`ALLOWED_TRANSITIONS`, not prose.
     """
 
     DRAFT = "draft"
@@ -88,6 +101,128 @@ class TaskStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+#: Statuses from which no further work happens.
+TERMINAL_STATUSES: frozenset[TaskStatus] = frozenset(
+    {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+)
+
+#: Every legal move in the task lifecycle, and nothing else.
+#:
+#: This table exists because the transitions used to be implied by whichever
+#: method happened to assign ``task.status``. That is how ``cancel()`` came to be
+#: able to overwrite ``COMPLETED`` with ``CANCELLED``: nothing said it could not,
+#: so it could, and a finished task could be relabelled as one the user stopped.
+#: A lifecycle that is written down can be tested; a lifecycle that is a side
+#: effect can only be discovered by accident.
+#:
+#: ``CANCELLED`` is reachable from everywhere non-terminal because the user's
+#: right to stop work does not depend on where the work had got to.
+#:
+#: ``AWAITING_APPROVAL`` is reachable from every non-terminal state because
+#: re-proposing a plan is how a task recovers: the plan changed, or the workspace
+#: moved, or a block turned out to need a different approach. The previous
+#: approval stops applying the moment the plan changes, so the task must be able
+#: to ask again.
+#:
+#: ``COMPLETED -> VERIFYING`` exists so a finished task can still have its
+#: acceptance criteria checked afterwards. Verification is evidence, and evidence
+#: can arrive after the work did; a task is not lying about having been verified
+#: when it goes back to running checks.
+#:
+#: ``REPAIRING`` is reachable from ``APPROVED`` and from ``FAILED`` because a
+#: repair is how a task recovers: it can be proposed before anything has run (the
+#: first attempt is wrong on inspection) or after a step failed. What a repair
+#: may contain is bounded separately -- it cannot introduce steps outside the
+#: approved plan -- so admitting one is not the same as widening the task.
+#:
+#: ``FAILED -> BLOCKED`` is the repair budget running out. A task that failed and
+#: then spent its repair allowance is not merely failed, it is waiting for
+#: somebody to decide what to do, which is what ``BLOCKED`` means.
+ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
+    TaskStatus.DRAFT: frozenset({TaskStatus.AWAITING_APPROVAL, TaskStatus.CANCELLED}),
+    TaskStatus.AWAITING_APPROVAL: frozenset(
+        {TaskStatus.APPROVED, TaskStatus.AWAITING_APPROVAL, TaskStatus.CANCELLED}
+    ),
+    TaskStatus.APPROVED: frozenset(
+        {
+            TaskStatus.RUNNING,
+            TaskStatus.VERIFYING,
+            TaskStatus.REPAIRING,
+            TaskStatus.PAUSED,
+            TaskStatus.BLOCKED,
+            TaskStatus.AWAITING_APPROVAL,
+            TaskStatus.CANCELLED,
+        }
+    ),
+    TaskStatus.RUNNING: frozenset(
+        {
+            TaskStatus.RUNNING,
+            TaskStatus.VERIFYING,
+            TaskStatus.REPAIRING,
+            TaskStatus.PAUSED,
+            TaskStatus.BLOCKED,
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.AWAITING_APPROVAL,
+            TaskStatus.CANCELLED,
+        }
+    ),
+    TaskStatus.VERIFYING: frozenset(
+        {
+            TaskStatus.VERIFYING,
+            TaskStatus.REPAIRING,
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.BLOCKED,
+            TaskStatus.AWAITING_APPROVAL,
+            TaskStatus.CANCELLED,
+        }
+    ),
+    TaskStatus.REPAIRING: frozenset(
+        {
+            TaskStatus.VERIFYING,
+            TaskStatus.RUNNING,
+            TaskStatus.FAILED,
+            TaskStatus.BLOCKED,
+            TaskStatus.AWAITING_APPROVAL,
+            TaskStatus.CANCELLED,
+        }
+    ),
+    TaskStatus.PAUSED: frozenset(
+        {TaskStatus.APPROVED, TaskStatus.AWAITING_APPROVAL, TaskStatus.CANCELLED}
+    ),
+    TaskStatus.BLOCKED: frozenset({TaskStatus.AWAITING_APPROVAL, TaskStatus.CANCELLED}),
+    TaskStatus.COMPLETED: frozenset({TaskStatus.VERIFYING}),
+    TaskStatus.FAILED: frozenset({TaskStatus.REPAIRING, TaskStatus.BLOCKED}),
+    TaskStatus.CANCELLED: frozenset(),
+}
+
+
+class IllegalTransition(ValueError):
+    """A move the lifecycle does not allow.
+
+    Raised rather than logged and ignored: an illegal transition means some code
+    path believes it may do something the lifecycle forbids, and swallowing that
+    would hide the very defect the table exists to expose.
+    """
+
+    def __init__(self, current: TaskStatus, target: TaskStatus, *, detail: str = "") -> None:
+        self.current = current
+        self.target = target
+        message = f"a task cannot go from {current.value} to {target.value}"
+        if detail:
+            message = f"{message}: {detail}"
+        super().__init__(message)
+
+
+def can_transition(current: TaskStatus, target: TaskStatus) -> bool:
+    """Whether ``current -> target`` is a legal move. Staying put is legal."""
+
+    if current is target:
+        return True
+    return target in ALLOWED_TRANSITIONS.get(current, frozenset())
 
 
 class StepStatus(StrEnum):
@@ -344,10 +479,20 @@ class Plan:
 
 
 def plan_digest(plan: Plan) -> str:
-    """A stable digest of exactly what the user approved."""
+    """A stable digest of exactly what the user approved.
+
+    The canonical form is explicit JSON over the fields that can change what
+    execution does -- objective, every step in order, the acceptance criteria and
+    the scope -- with ``sort_keys`` and no whitespace so that two equal plans
+    cannot hash differently because of dictionary ordering or formatting. The
+    digest version is inside the payload: if the canonical form ever changes,
+    every approval bound to the old form must stop matching rather than silently
+    keep working against a definition that no longer exists.
+    """
 
     payload = json.dumps(
         {
+            "digest_version": DIGEST_VERSION,
             "objective": plan.objective,
             "steps": [step.to_dict() for step in plan.steps],
             "criteria": [item.to_dict() for item in plan.acceptance_criteria],
@@ -389,7 +534,7 @@ class ApprovalRecord:
 
         if not self.approved:
             return False
-        if _normalise_workspace(workspace) != _normalise_workspace(self.workspace):
+        if not self.covers_workspace(workspace):
             return False
         if not self.scope_paths:
             return True
@@ -398,6 +543,18 @@ class ApprovalRecord:
             target == _normalise_path(scope) or target.startswith(_normalise_path(scope) + "/")
             for scope in self.scope_paths
         )
+
+    def covers_workspace(self, workspace: str) -> bool:
+        """Whether this record was decided about ``workspace`` at all.
+
+        Deliberately independent of whether the answer was yes. A *rejection* is
+        also a decision made about one workspace, and refusing to record it
+        because it was negative would be refusing to hear "no" -- which would
+        leave the task approved-looking rather than stopped. Whether the decision
+        authorises anything is applied by :meth:`covers`.
+        """
+
+        return _normalise_workspace(workspace) == _normalise_workspace(self.workspace)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -761,19 +918,35 @@ class Task:
     def set_status(self, step_id: str, status: StepStatus) -> None:
         self.step_status[step_id] = status
 
+    def move_to(self, status: TaskStatus, *, detail: str = "") -> None:
+        """Move to a new lifecycle status, refusing a move the table forbids.
+
+        Every product code path changes status through here rather than by
+        assignment, so the lifecycle is a property of the record instead of a
+        property of whoever wrote last.
+        """
+
+        current = self.status
+        if not can_transition(current, status):
+            raise IllegalTransition(current, status, detail=detail)
+        self.status = status
+
     @property
     def terminal(self) -> bool:
-        return self.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
+        return self.status in TERMINAL_STATUSES
 
     @property
     def approved_plan(self) -> Plan | None:
-        """The plan, but only while an approval for that exact plan stands.
+        """The plan, but only while an *approving* decision for it stands.
 
         A digest mismatch means the plan moved after approval, so there is no
-        approved plan and every execution path fails closed.
+        approved plan and every execution path fails closed. A negative decision
+        counts as no decision to execute: without this check a rejected task
+        still reported an approved plan, which is a false statement about what
+        the user agreed to even though the lifecycle stopped execution anyway.
         """
 
-        if self.plan is None or self.approval is None:
+        if self.plan is None or self.approval is None or not self.approval.approved:
             return None
         if self.approval.plan_digest != self.plan.digest:
             return None

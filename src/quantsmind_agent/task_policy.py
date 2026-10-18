@@ -363,6 +363,8 @@ class TaskPolicy:
         approval = task.approval
         if approval is None:
             return PolicyVerdict(False, "there is no approval on this task", kind)
+        plan = task.approved_plan
+        declared = plan.scope_paths if plan is not None else ()
         targets = _target_arguments(step)
         if not targets:
             return PolicyVerdict(True, "", kind)
@@ -371,6 +373,17 @@ class TaskPolicy:
                 return PolicyVerdict(
                     False,
                     f"the approval does not cover {target}",
+                    kind,
+                )
+            # The plan's own scope is a second, narrower bound that the approval
+            # cannot widen. Checking only the approval would mean a plan that
+            # said "src only" was enforced only if the user had also narrowed the
+            # approval by hand -- the narrower of the two, not the wider, is what
+            # actually limits the work.
+            if declared and not _within_any(target, declared):
+                return PolicyVerdict(
+                    False,
+                    f"{target} is outside the scope the plan declared ({', '.join(declared)})",
                     kind,
                 )
         return PolicyVerdict(True, "", kind)
@@ -406,6 +419,37 @@ def _escapes(path: str, root: str) -> bool:
         lowered = text.lower()
         return not (lowered == base or lowered.startswith(base + "/"))
     return ".." in text.split("/")
+
+
+def _within_any(path: str, scopes: tuple[str, ...]) -> bool:
+    """Whether ``path`` is inside one of the workspace-relative ``scopes``.
+
+    Compared after collapsing ``.``/``..`` segments, so a scope cannot be walked
+    out of by spelling a path that starts inside it and ends somewhere else.
+    """
+
+    target = _collapse(str(path or ""))
+    if not target:
+        return False
+    return any(
+        target == _collapse(scope) or target.startswith(_collapse(scope) + "/") for scope in scopes
+    )
+
+
+def _collapse(path: str) -> str:
+    """A relative path reduced to its real segments, without a leading ``/``."""
+
+    text = str(path or "").replace("\\", "/")
+    parts: list[str] = []
+    for segment in text.split("/"):
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(segment)
+    return "/".join(parts).lower()
 
 
 def approval_for_plan(
