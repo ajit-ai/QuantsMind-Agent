@@ -139,6 +139,8 @@ class TaskPanel(QWidget):
     plan_requested = Signal(str)  # objective
     approval_requested = Signal(bool)  # approved
     run_requested = Signal()
+    pause_requested = Signal()
+    cancel_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -189,15 +191,15 @@ class TaskPanel(QWidget):
         run_row = QHBoxLayout()
         self.run_button = QPushButton("Run")
         self.run_button.setEnabled(False)
-        self.run_button.clicked.connect(self._on_run)
+        self.run_button.clicked.connect(self.run_requested.emit)
         run_row.addWidget(self.run_button)
         self.pause_button = QPushButton("Pause")
         self.pause_button.setEnabled(False)
-        self.pause_button.clicked.connect(self._on_pause)
+        self.pause_button.clicked.connect(self.pause_requested.emit)
         run_row.addWidget(self.pause_button)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
-        self.cancel_button.clicked.connect(self._on_cancel)
+        self.cancel_button.clicked.connect(self.cancel_requested.emit)
         run_row.addWidget(self.cancel_button)
         layout.addLayout(run_row)
 
@@ -215,6 +217,16 @@ class TaskPanel(QWidget):
         layout.addWidget(self.status)
 
     # -- wiring -----------------------------------------------------------
+    @property
+    def orchestrator(self) -> Orchestrator | None:
+        """The orchestrator this panel drives, if one is attached.
+
+        Exposed so the window can ask whether a task exists without reaching for
+        the panel's private state.
+        """
+
+        return self._orchestrator
+
     def attach(self, orchestrator: Orchestrator | None) -> None:
         """Point the panel at a task, releasing any previous worker."""
 
@@ -236,11 +248,18 @@ class TaskPanel(QWidget):
             self.refresh()
 
     def shutdown(self) -> None:
-        """Stop and release the worker thread. Safe to call more than once."""
+        """Stop the worker and cancel the task. Safe to call more than once.
+
+        Closing the window has to *end* the task, not merely stop rendering it:
+        a task left approved and running would claim to be in progress after the
+        application that owned it had gone.
+        """
 
         if self._bridge is not None:
             self._bridge.shutdown()
             self._bridge = None
+        if self._orchestrator is not None and not self._orchestrator.task.terminal:
+            self._orchestrator.cancel("the application closed")
 
     # -- interaction ------------------------------------------------------
     def _on_propose(self) -> None:
@@ -251,8 +270,13 @@ class TaskPanel(QWidget):
     def _on_decide(self, approved: bool) -> None:
         self.approval_requested.emit(approved)
 
-    def _on_run(self) -> None:
+    def start_worker(self) -> None:
         if self._orchestrator is None:
+            return
+        if self._bridge is not None and self._bridge.running:
+            # A second press (a double click, a queued signal) must not replace a
+            # live bridge: the old thread would be orphaned, nothing would join
+            # it, and it would keep the process alive after the window closed.
             return
         self._bridge = TaskWorkerBridge(self._orchestrator)
         self._bridge.progressed.connect(self._on_progress)
@@ -265,13 +289,13 @@ class TaskPanel(QWidget):
         self.status.setText("Running...")
         self._bridge.start()
 
-    def _on_pause(self) -> None:
+    def request_pause(self) -> None:
         if self._bridge is not None:
             self._bridge.pause()
         elif self._orchestrator is not None:
             self._orchestrator.pause()
 
-    def _on_cancel(self) -> None:
+    def request_cancel(self) -> None:
         if self._bridge is not None:
             self._bridge.cancel()
         elif self._orchestrator is not None:

@@ -11,15 +11,18 @@ import re
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from PySide6.QtCore import Qt, QThread, QTimer, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -31,9 +34,11 @@ from quantsmind_agent.gui.approval import ApprovalBridge, ApprovalDialog
 from quantsmind_agent.gui.conversation import ConversationView
 from quantsmind_agent.gui.settings_dialog import SettingsDialog
 from quantsmind_agent.gui.sidebar import Sidebar
+from quantsmind_agent.gui.task_panel import TaskPanel
 from quantsmind_agent.gui.worker import AgentWorkerBridge
 from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.permissions import ApprovalOutcome
+from quantsmind_agent.tasks import PlanRejected, Task, TaskStatus
 from quantsmind_agent.version import APP_NAME, __version__
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -148,18 +153,51 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(10, 12, 10, 10)
         right_layout.setSpacing(8)
 
+        # Chat and Task are two views of the same project, not two applications:
+        # the switcher replaces the pane rather than adding a window, so the
+        # conversation, the tool activity and the task share one status bar and
+        # one workspace.
+        self._view_switch = QButtonGroup(self)
+        self._view_switch.setExclusive(True)
+        switcher = QHBoxLayout()
+        switcher.setSpacing(6)
+        for index, caption in enumerate(("Chat", "Task")):
+            button = QPushButton(caption)
+            button.setCheckable(True)
+            button.setObjectName("ViewTab")
+            button.setChecked(index == 0)
+            self._view_switch.addButton(button, index)
+            self._view_switch.idClicked.connect(self._on_view_changed)
+            switcher.addWidget(button)
+        switcher.addStretch(1)
+        right_layout.addLayout(switcher)
+
+        self._views = QStackedWidget()
+        right_layout.addWidget(self._views, stretch=1)
+
+        chat_page = QWidget()
+        chat_layout = QVBoxLayout(chat_page)
+        chat_layout.setContentsMargins(0, 0, 0, 0)
+        chat_layout.setSpacing(8)
+
         self.conversation = ConversationView()
-        right_layout.addWidget(self.conversation, stretch=1)
+        chat_layout.addWidget(self.conversation, stretch=1)
 
         self.activity_heading = QLabel("Tool activity")
         self.activity_heading.setObjectName("SectionLabel")
-        right_layout.addWidget(self.activity_heading)
+        chat_layout.addWidget(self.activity_heading)
 
         self.activity = ActivityView()
         self.activity.setMaximumHeight(190)
-        right_layout.addWidget(self.activity)
+        chat_layout.addWidget(self.activity)
 
-        right_layout.addWidget(self._composer())
+        chat_layout.addWidget(self._composer())
+        self._views.addWidget(chat_page)
+
+        self.task_panel = TaskPanel()
+        self._views.addWidget(self.task_panel)
+        self._connect_task_panel()
+
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -185,6 +223,168 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+O"), self, self._on_open_workspace)
         QShortcut(QKeySequence("Ctrl+K"), self, self.sidebar.settings_requested.emit)
         QShortcut(QKeySequence("Ctrl+N"), self, self._on_new_conversation)
+
+    # -- v0.4 tasks ----------------------------------------------------------
+    def _connect_task_panel(self) -> None:
+        """Wire the task panel to the orchestrator.
+
+        Approval stays a hard gate: the panel can only *ask*, and the decision
+        is recorded as an :class:`ApprovalRecord` bound to this plan's digest and
+        this workspace. Nothing here executes a tool, and nothing here can widen
+        a scope the user did not grant.
+        """
+
+        panel = self.task_panel
+        panel.plan_requested.connect(self._on_task_plan_requested)
+        panel.approval_requested.connect(self._on_task_approval)
+        panel.run_requested.connect(self._on_task_run)
+        panel.cancel_requested.connect(self._on_task_cancel)
+        panel.pause_requested.connect(self._on_task_pause)
+
+    def _on_view_changed(self, index: int) -> None:
+        self._views.setCurrentIndex(index)
+        if index == 1:
+            self.task_panel.refresh()
+
+    def show_task_view(self) -> None:
+        """Bring the task workflow into view, from anywhere in the window."""
+
+        self._views.setCurrentIndex(1)
+        checked = self._view_switch.checkedButton()
+        if checked is not None:
+            checked.setChecked(True)
+
+    @property
+    def task_orchestrator(self) -> Any:
+        """The orchestrator the panel is driving, if any."""
+
+        return self.task_panel.orchestrator
+
+    def _on_task_plan_requested(self, objective: str) -> None:
+        """Plan generation happens in the conversation, not behind the panel.
+
+        The panel cannot invent a plan, so "Propose plan" sends the objective to
+        the agent in the chat view and switches there. When the model answers
+        with a plan block, :meth:`submit_task_plan` validates it and offers it
+        for approval. This keeps one model-call path in the application instead of
+        adding a second one that only tasks use.
+        """
+
+        self.show_chat_view()
+        prompt = (
+            "Propose a plan for this change. Reply with one fenced ```json block "
+            'containing {"objective", "steps", "acceptance_criteria"} where each '
+            'step has {"id", "description", "tool", "arguments", "depends_on", '
+            '"risk", "expected_paths"}. Use only the tools you have.'
+        )
+        self.input.setPlainText(objective.strip())
+        self.input.setPlaceholderText(prompt)
+
+    def show_chat_view(self) -> None:
+        self._views.setCurrentIndex(0)
+        checked = self._view_switch.checkedButton()
+        if checked is not None:
+            checked.setChecked(True)
+
+    def submit_task_plan(self, plan: Any) -> None:
+        """Offer a proposed plan for review. Never approves it."""
+
+        self._pending_plan = plan
+        self.show_task_view()
+        self.task_panel.show_plan(plan)
+        self.task_panel.status.setText("Plan ready for review. Nothing runs until you approve it.")
+
+    def _on_task_approval(self, approved: bool) -> None:
+        plan = self._pending_plan
+        if plan is None:
+            self.task_panel.status.setText("There is no plan to approve.")
+            return
+        workspace = self._context.workspace
+        if workspace is None:
+            self.task_panel.status.setText("Open a project before running a task.")
+            return
+        orchestrator = self._build_orchestrator(plan, str(workspace.root))
+        if not approved:
+            orchestrator.cancel("the user rejected the plan")
+            self.task_panel.attach(orchestrator)
+            self._pending_plan = None
+            return
+        from quantsmind_agent.task_policy import approval_for_plan
+
+        try:
+            orchestrator.approve(approval_for_plan(plan, str(workspace.root), approved=True))
+        except PlanRejected as exc:
+            self.task_panel.status.setText(f"That approval was refused: {exc}")
+            return
+        self.task_panel.attach(orchestrator)
+        self._pending_plan = None
+
+    def _build_orchestrator(self, plan: Any, workspace_root: str) -> Any:
+        """An orchestrator bound to the *live* registry, policy and store.
+
+        The registry is resolved through the context on every call rather than
+        captured, because the application rebuilds its tools whenever the
+        workspace or configuration changes -- holding one would run a task against
+        a stale agent with no tools.
+        """
+
+        from quantsmind_agent.orchestrator import Orchestrator
+        from quantsmind_agent.task_policy import TaskPolicy
+        from quantsmind_agent.task_store import TaskStore
+
+        task = Task(
+            id=uuid4().hex[:12],
+            objective=str(plan.objective),
+            workspace=workspace_root,
+            conversation_id=self._context.session.id,
+        )
+        store = TaskStore(self._context.paths.data_dir / "tasks")
+        orchestrator = Orchestrator(
+            task,
+            registry=self._context.tools,
+            policy=TaskPolicy(workspace=self._context.workspace),
+            store=store,
+            workspace=self._context.workspace,
+        )
+        orchestrator.submit_plan(plan)
+        return orchestrator
+
+    def _on_task_run(self) -> None:
+        orchestrator = self.task_orchestrator
+        if orchestrator is None:
+            self.task_panel.status.setText("There is no task to run.")
+            return
+        task = orchestrator.task
+        if task.terminal or orchestrator.cancelled:
+            # A cancelled or finished task is not resumed by pressing Run. The
+            # policy would refuse the step anyway, but flipping the status back
+            # to approved would report a cancelled task as live.
+            self.task_panel.status.setText(f"This task is {task.status.value}.")
+            return
+        if task.approved_plan is None:
+            self.task_panel.status.setText("Approve the plan before running it.")
+            return
+        task.status = TaskStatus.APPROVED
+        self.task_panel.start_worker()
+
+    def _on_task_cancel(self) -> None:
+        orchestrator = self.task_orchestrator
+        if orchestrator is not None:
+            orchestrator.cancel("cancelled from the task panel")
+            self.task_panel.refresh()
+
+    def _on_task_pause(self) -> None:
+        orchestrator = self.task_orchestrator
+        if orchestrator is not None:
+            orchestrator.pause()
+            self.task_panel.refresh()
+
+    def _release_task(self) -> None:
+        """Stop any running task worker and detach the panel."""
+
+        self._pending_plan = None
+        self.task_panel.shutdown()
+        self.task_panel.attach(None)
 
     def _composer(self) -> QWidget:
         panel = QWidget()
@@ -331,6 +531,9 @@ class MainWindow(QMainWindow):
         self._refresh_from_context()
         self.conversation.append_notice("Started a new conversation.")
         self._refresh_conversations()
+        # A task is not part of the conversation, and a new conversation must not
+        # leave a running one behind.
+        self._release_task()
 
     def _refresh_conversations(self) -> None:
         """Mirror the stored conversations into the sidebar list."""
@@ -759,6 +962,9 @@ class MainWindow(QMainWindow):
         # Deny first: a waiting worker must be released before the thread is
         # asked to quit, or the turn would block on an unanswered dialog.
         self.cancel_pending_approval()
+        # A task is stopped, not merely hidden: the window closing is the end of
+        # the work, and the record must say so.
+        self._release_task()
         # Then stop consuming events and the timer that drains them, so a closed
         # window neither keeps a 50ms timer alive nor keeps mutating its own
         # widgets on the agent's thread boundary.

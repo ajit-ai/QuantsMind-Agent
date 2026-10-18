@@ -55,11 +55,31 @@ shipping platform. The model still proposes; the application decides.
 - **A task panel.** `gui/task_panel.py` shows the plan for review, step statuses,
   changed files, check outcomes and the report, runs the orchestrator on a worker
   thread, and disables controls that are not valid for the task's real state.
+- **The task workflow is reachable from the application.** The main window gains
+  a **Chat / Task** switcher and a task view beside the conversation, and the
+  whole path works from the launched application: describe the change, review the
+  plan, approve it, watch the steps run, read the checks and the report.
+  Planning happens in the conversation -- the panel cannot invent a plan -- so
+  there is one model-call path in the application rather than two.
 - **`docs/source/releases/v0.4.rst`** documents the lifecycle, the policy
   semantics, budgets, recovery, and what this milestone deliberately is not.
 
 ### Fixed
 
+- **The task worker ran on the GUI thread.** The bridge called `worker.run()`
+  directly after starting its `QThread`, so the whole task executed inline on the
+  thread that was meant to be drawing. The bridge now starts the worker from the
+  thread, which is what the class was for.
+- **Pressing Run twice orphaned a thread.** A second press replaced the live
+  worker bridge without stopping the first, so a thread kept running with
+  nothing left to join it. The panel now refuses to start a second worker while
+  one is live.
+- **Run resurrected a cancelled task.** Pressing Run on a cancelled task set its
+  status back to "approved", reporting a stopped task as live. Run now refuses
+  for any terminal or cancelled task.
+- **Closing the window did not cancel the task.** The task was left approved and
+  running, claiming to be in progress after the application that owned it had
+  gone. Closing now stops the worker, cancels the task and joins the thread.
 - **A failed step stayed eligible for execution**, so it would re-run until the
   step budget was exhausted -- unbounded retry wearing a budget's clothes.
   Retrying is now the repair controller's decision, made with the failure

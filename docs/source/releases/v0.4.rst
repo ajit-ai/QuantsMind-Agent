@@ -231,14 +231,31 @@ before reversing it.
 The task panel
 ==============
 
-A panel beside the conversation shows the objective, the plan for review, the
-step list with statuses, the files that changed, check outcomes, and the final
-report. It runs the orchestrator on a worker thread, so a slow step cannot freeze
-the window, and it shuts the thread down when the window closes.
+The task workflow lives in the application window, beside the conversation: a
+**Chat / Task** switcher at the top of the right pane, and the task view in the
+second page of a stacked widget. It is not a separate window, so the
+conversation, the tool activity and the task share one workspace, one status bar
+and one shutdown.
+
+Planning happens in the conversation. The panel cannot invent a plan, so
+"Propose plan" sends your objective to the agent in the chat view and switches
+there; when the model answers with a plan, it is validated and offered for
+review in the task view. That keeps **one** model-call path in the application
+instead of adding a second one only tasks use.
+
+The panel shows the objective, the plan, the step list with statuses, the files
+that changed, check outcomes and the final report. It runs the orchestrator on a
+worker thread, so a slow step cannot freeze the window, and shutting the window
+down stops the thread, cancels the task and joins it.
 
 Every control reflects real state: Run is disabled without a matching approval,
 Pause is disabled once the task is terminal, and Reject sits next to Approve
 because "approve everything" is not a choice.
+
+**Approving the plan is not approving every operation.** A task's steps go
+through the same permission broker as the chat, so a mutating step still asks,
+and the approval you give for a plan is bound to that plan's digest, your
+workspace and the scope you granted.
 
 Known limitations
 =================

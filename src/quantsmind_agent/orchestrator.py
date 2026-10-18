@@ -394,9 +394,7 @@ class Orchestrator:
         )
 
     # -- verification and repair ------------------------------------------
-    def verify(
-        self, checks: list[Check], *, timeout_seconds: int = 300
-    ) -> list[CheckResult]:
+    def verify(self, checks: list[Check], *, timeout_seconds: int = 300) -> list[CheckResult]:
         """Run the project's declared checks and record every outcome.
 
         A check that could not run is recorded as skipped, blocked or not run --
