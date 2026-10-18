@@ -9,7 +9,82 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-10-18
+## [0.7.0] - 2026-10-18
+
+Reliable Agent Execution. Three capabilities that existed without a consumer now
+have one, and a task can be explained after the fact.
+
+### Added
+
+- **Structured planning, end to end.** `TaskPlanner` requests the structured-output
+  path with a versioned schema, validates the answer here regardless of what the
+  provider enforced, and runs the existing semantic validation — unique step ids,
+  known tools, resolvable dependencies, no cycles, nothing outside the workspace.
+  "Propose plan" now goes through this rather than asking a model for a fenced
+  JSON block in prose.
+- **No empty-plan outcome.** A model that failed, refused, or returned something
+  unreadable produces reasons the user can read. An empty plan would look like a
+  plan nobody can act on.
+- **A streaming retry policy.** `streaming.py` answers "what is already true"
+  rather than "which endpoint": nothing dispatched may be served again; partial
+  output, a complete response, cancellation, an expired deadline, and
+  authentication, configuration and protocol failures may not.
+- **An execution trace on every task.** Every event the orchestrator already
+  emitted is recorded on the task, bounded to 200 entries, scalar fields only,
+  with redaction applied before anything is written. It lives on the record rather
+  than beside it, so a trace cannot disagree with the state it describes.
+- **`scripts/live_provider_check.py`.** Opt-in validation through the shipped path:
+  text, structured output, streaming, and a full plan proposal against a real
+  workspace. Never part of ordinary CI.
+- **The available tools go into the planning prompt.** A live check caught a model
+  proposing a step with a tool that did not exist; refusing it was correct, but
+  telling the model what it has is the better fix.
+
+### Fixed
+
+- **The router re-raised the first endpoint's failure after serving a second one.**
+  A stream that had already been delivered fell out of the loop and re-raised the
+  earlier error.
+- **Authentication failures fell through to a fallback endpoint on a stream** —
+  exactly the credential concealment the v0.6 policy existed to prevent.
+- **A stream that failed after delivering text could have been restarted**
+  elsewhere. It is now refused, and the interruption is recorded.
+- **A planner request carried no model name**, which an endpoint refuses with an
+  opaque HTTP 400. The planner now takes the configured model and refuses early,
+  with a stated reason, when there is none.
+- **Streams were not closed when a caller walked away mid-stream.**
+
+### Validation
+
+- **1477 passed, 3 skipped** (symlink tests, Windows) across unit, integration and
+  security; **155 GUI tests**
+- ruff, ruff-format, mypy (132 files), documentation normalisation and secret
+  scanning clean; Sphinx builds with zero warnings
+- Packaged application: smoke, desktop acceptance, MSI build and installation
+  verification
+- **Live provider, OpenRouter / `openai/gpt-4o-mini`:** text, native structured
+  output, streamed response, and a three-step structured plan using only real
+  tools — all four passed
+
+### Known limitations
+
+- Routing is not exercised against a live second endpoint: the fallback policy is
+  proven with deterministic fakes, because doing it for real would mean
+  deliberately failing a live request.
+- Cancellation of an in-flight HTTP request is still not supported by the adapter;
+  a cancelled turn discards a late answer rather than aborting the call.
+- The trace is not yet shown in the GUI beyond the task history row; it is
+  available on the record and in the persisted JSON.
+- Structured planning requires an endpoint that supports JSON output; one that
+  does not produces a stated refusal rather than a degraded plan.
+
+### Compatibility
+
+Task records move to schema version 3, which adds the trace. Records from v0.5 and
+v0.6 load unchanged, with an empty trace. Plans written before structured planning
+have no schema version and still validate.
+
+
 
 Three capabilities that existed but had no consumer are now reachable. Each one
 was deferred from v0.5 because it was easy to build badly.
@@ -80,6 +155,148 @@ was deferred from v0.5 because it was easy to build badly.
   proposal still parses JSON out of prose rather than requesting it.
 - No live provider call was performed for this release; everything was exercised
   with simulated providers.
+
+Three capabilities that existed but had no consumer are now reachable. Each one
+was deferred from v0.5 because it was easy to build badly.
+
+### Added
+
+- **Verification in the real lifecycle.** A task whose plan carries acceptance
+  criteria is verified when its steps finish, and the verdict decides whether the
+  task completes. Three outcomes: `pass`, `fail`, and `inconclusive` — which is
+  not a softer pass but the answer "we could not tell". A task whose checks all
+  passed is still inconclusive when no passing check names its criteria.
+- **A recorded verdict.** `VerificationRecord` on the task, so "was this
+  verified?" stays answerable after the checks are gone. Task schema v2 adds the
+  field; a v1 record reads as *never verified*, not as verified by absence of
+  evidence.
+- **Provider routing and fallback.** `ProviderRouter` implements the same
+  `ModelProvider` protocol as a single adapter, so nothing above the gateway
+  changes. Only rate limits and server errors move to another endpoint;
+  authentication failures, configuration mistakes, timeouts, connection failures
+  and protocol errors stop immediately. Attempts are bounded, the order is the
+  configured order, and capabilities are the intersection across endpoints.
+- **Structured output through the existing gateway.** A request carries a schema;
+  the adapter sends `response_format` when the endpoint declares support; the
+  response carries the parsed payload and whether the guarantee was `native`
+  (provider-constrained) or `parsed` (extracted here). The schema is validated by
+  this application every time, whichever path produced the data.
+- **`routing` configuration.** Off unless configured, and no router is built when
+  there is a single endpoint.
+- **Documentation.** `architecture/v0.6-behaviour.rst` describes what each of the
+  three does and, where the distinction matters, which of two similar behaviours
+  this is.
+
+### Changed
+
+- A task that promised evidence no longer settles to `COMPLETED` before its checks
+  run; it parks in `VERIFYING`. Settling first and verifying afterwards would
+  report "verified" about a task nobody had checked at the moment anyone might be
+  looking.
+- The task view reports steps done and the verification verdict separately,
+  because joining them is how an unverified task gets described as a success.
+- Task records are schema version 2.
+
+### Security notes
+
+- Verification commands go through the same command policy as every other
+  command; a refused check makes the task inconclusive, never successful.
+- Verification does not run without an approved plan, does not widen plan,
+  workspace or scope, and does not get a fresh time or check budget.
+- Fallback never bypasses configured policy: a fallback endpoint is one the user
+  configured. Timeout and connection failures never fall back, because the
+  provider may have finished the work and lost the response.
+- Structured output is untrusted input: parsed and validated before use, never
+  interpreted as instructions. Neither routing attempt records nor
+  structured-output errors carry prompt text or credentials.
+
+### Known limitations
+
+- Inconclusive verification settles to `BLOCKED`. There is no way yet to accept an
+  inconclusive task as good enough without a repair; that is a policy decision,
+  not a missing implementation.
+- Streaming is not retried across endpoints. A stream that fails part-way has
+  already produced output for the caller, so it is not a retryable shape.
+- The structured-output schema subset is small: object, array, string, number,
+  integer, boolean, null, with `required`, `properties`, `items` and `enum`.
+  A dependency such as `jsonschema` would validate more, at the cost of a package
+  in the shipped application for a guarantee nothing currently needs.
+- Structured output is exposed at the gateway and adapter; the conversation's plan
+  proposal still parses JSON out of prose rather than requesting it.
+- No live provider call was performed for this release; everything was exercised
+  with simulated providers.
+## [0.6.0] - 2026-10-18
+
+Three capabilities that existed but had no consumer are now reachable. Each one
+was deferred from v0.5 because it was easy to build badly.
+
+### Added
+
+- **Verification in the real lifecycle.** A task whose plan carries acceptance
+  criteria is verified when its steps finish, and the verdict decides whether the
+  task completes. Three outcomes: `pass`, `fail`, and `inconclusive` ΓÇö which is
+  not a softer pass but the answer "we could not tell". A task whose checks all
+  passed is still inconclusive when no passing check names its criteria.
+- **A recorded verdict.** `VerificationRecord` on the task, so "was this
+  verified?" stays answerable after the checks are gone. Task schema v2 adds the
+  field; a v1 record reads as *never verified*, not as verified by absence of
+  evidence.
+- **Provider routing and fallback.** `ProviderRouter` implements the same
+  `ModelProvider` protocol as a single adapter, so nothing above the gateway
+  changes. Only rate limits and server errors move to another endpoint;
+  authentication failures, configuration mistakes, timeouts, connection failures
+  and protocol errors stop immediately. Attempts are bounded, the order is the
+  configured order, and capabilities are the intersection across endpoints.
+- **Structured output through the existing gateway.** A request carries a schema;
+  the adapter sends `response_format` when the endpoint declares support; the
+  response carries the parsed payload and whether the guarantee was `native`
+  (provider-constrained) or `parsed` (extracted here). The schema is validated by
+  this application every time, whichever path produced the data.
+- **`routing` configuration.** Off unless configured, and no router is built when
+  there is a single endpoint.
+- **Documentation.** `architecture/v0.6-behaviour.rst` describes what each of the
+  three does and, where the distinction matters, which of two similar behaviours
+  this is.
+
+### Changed
+
+- A task that promised evidence no longer settles to `COMPLETED` before its checks
+  run; it parks in `VERIFYING`. Settling first and verifying afterwards would
+  report "verified" about a task nobody had checked at the moment anyone might be
+  looking.
+- The task view reports steps done and the verification verdict separately,
+  because joining them is how an unverified task gets described as a success.
+- Task records are schema version 2.
+
+### Security notes
+
+- Verification commands go through the same command policy as every other
+  command; a refused check makes the task inconclusive, never successful.
+- Verification does not run without an approved plan, does not widen plan,
+  workspace or scope, and does not get a fresh time or check budget.
+- Fallback never bypasses configured policy: a fallback endpoint is one the user
+  configured. Timeout and connection failures never fall back, because the
+  provider may have finished the work and lost the response.
+- Structured output is untrusted input: parsed and validated before use, never
+  interpreted as instructions. Neither routing attempt records nor
+  structured-output errors carry prompt text or credentials.
+
+### Known limitations
+
+- Inconclusive verification settles to `BLOCKED`. There is no way yet to accept an
+  inconclusive task as good enough without a repair; that is a policy decision,
+  not a missing implementation.
+- Streaming is not retried across endpoints. A stream that fails part-way has
+  already produced output for the caller, so it is not a retryable shape.
+- The structured-output schema subset is small: object, array, string, number,
+  integer, boolean, null, with `required`, `properties`, `items` and `enum`.
+  A dependency such as `jsonschema` would validate more, at the cost of a package
+  in the shipped application for a guarantee nothing currently needs.
+- Structured output is exposed at the gateway and adapter; the conversation's plan
+  proposal still parses JSON out of prose rather than requesting it.
+- No live provider call was performed for this release; everything was exercised
+  with simulated providers.
+
 ## [0.5.0] - 2026-10-18
 
 The milestone is the application's shape rather than a new feature: the security
