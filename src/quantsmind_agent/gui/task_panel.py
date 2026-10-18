@@ -20,13 +20,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
@@ -142,6 +143,8 @@ class TaskPanel(QWidget):
     run_requested = Signal()
     pause_requested = Signal()
     cancel_requested = Signal()
+    #: A task id picked from the history list.
+    history_selected = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -216,6 +219,49 @@ class TaskPanel(QWidget):
         self.status = QLabel("No task.")
         self.status.setStyleSheet("color:#6a7280;font-size:11px;")
         layout.addWidget(self.status)
+
+        # History is evidence, not a menu. A task that was interrupted shows as
+        # such rather than as failed, because whether its last step took effect is
+        # exactly what the user cannot tell from here.
+        self.history = QListWidget()
+        self.history.setMaximumHeight(90)
+        self.history.setToolTip("Previous and interrupted tasks")
+        self.history.itemSelectionChanged.connect(self._on_history_selected)
+        layout.addWidget(self.history)
+        #: The summary behind each row, so selection can be acted upon.
+        self._history_summaries: dict[str, Any] = {}
+
+    # -- history -----------------------------------------------------------
+    def set_history(self, summaries: Any, *, interrupted_ids: frozenset[str] = frozenset()) -> None:
+        """Show stored tasks, newest first, marking the interrupted ones."""
+
+        self._history_summaries = {str(item.id): item for item in summaries}
+        self.history.clear()
+        for item in summaries:
+            mark = "! " if str(item.id) in interrupted_ids else ""
+            label = f"{mark}{item.objective} [{item.status}]"
+            entry = QListWidgetItem(label)
+            entry.setData(Qt.ItemDataRole.UserRole, str(item.id))
+            entry.setToolTip(str(item.workspace))
+            self.history.addItem(entry)
+
+    def selected_task_id(self) -> str | None:
+        """The task the user picked from the history, if any."""
+
+        rows = self.history.selectedItems()
+        if not rows:
+            return None
+        return str(rows[0].data(Qt.ItemDataRole.UserRole))
+
+    def summary_for(self, task_id: str) -> Any:
+        """The stored summary behind a history row."""
+
+        return self._history_summaries.get(task_id)
+
+    def _on_history_selected(self) -> None:
+        task_id = self.selected_task_id()
+        if task_id is not None:
+            self.history_selected.emit(task_id)
 
     # -- wiring -----------------------------------------------------------
     @property

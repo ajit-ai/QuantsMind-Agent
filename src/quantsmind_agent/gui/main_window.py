@@ -38,7 +38,7 @@ from quantsmind_agent.gui.worker import AgentWorkerBridge
 from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.permissions import ApprovalOutcome
 from quantsmind_agent.services import TaskService
-from quantsmind_agent.tasks import PlanRejected
+from quantsmind_agent.tasks import PlanRejected, TaskStatus
 from quantsmind_agent.version import APP_NAME, __version__
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -252,6 +252,7 @@ class MainWindow(QMainWindow):
         panel.run_requested.connect(self._on_task_run)
         panel.cancel_requested.connect(self._on_task_cancel)
         panel.pause_requested.connect(self._on_task_pause)
+        panel.history_selected.connect(self._on_task_history_selected)
 
     def _on_view_changed(self, index: int) -> None:
         self._views.setCurrentIndex(index)
@@ -391,30 +392,49 @@ class MainWindow(QMainWindow):
         and the only thing the application may do about it automatically is say so.
         """
 
-        workspace = self._context.workspace
-        interrupted = self._task_service.interrupted_tasks(workspace)
+        self._refresh_task_history()
+        interrupted = self._interrupted()
         if not interrupted:
             return
         newest = interrupted[0]
         self.task_panel.status.setText(
             f"{len(interrupted)} task(s) were interrupted when the application closed. "
-            f"{newest.describe()}"
+            f"{newest.describe()} Select it in the list to review."
         )
         for item in interrupted:
             logger.warning("interrupted task %s: %s", item.task.id, item.describe())
 
-    def _resume_interrupted(self, item: Any) -> None:
-        """Adopt an interrupted task for inspection, without running it."""
+    def _interrupted(self) -> list[Any]:
+        """Tasks that were mid-flight when the application last closed."""
+
+        return self._task_service.interrupted_tasks(self._context.workspace)
+
+    def _refresh_task_history(self) -> None:
+        """Fill the panel's history list from the store."""
+
+        interrupted = frozenset(str(item.task.id) for item in self._interrupted())
+        self.task_panel.set_history(self._task_service.history(), interrupted_ids=interrupted)
+
+    def _on_task_history_selected(self, task_id: str) -> None:
+        """Adopt a stored task for inspection, without running it."""
 
         workspace = self._context.workspace
         if workspace is None:
             self.task_panel.status.setText("Open the task's project before continuing it.")
             return
-        orchestrator = self._task_service.adopt(item.task, workspace)
+        task = self._task_service.store.load(task_id)
+        if task is None:
+            self.task_panel.status.setText("That task could not be read.")
+            return
+        orchestrator = self._task_service.adopt(task, workspace)
         self.task_panel.attach(orchestrator)
-        self.task_panel.status.setText(
-            "This task was interrupted. Review it, then approve again to continue."
-        )
+        if task.status is TaskStatus.PAUSED and task.plan is not None:
+            self.task_panel.status.setText(
+                "This task was interrupted and its outcome is unknown. "
+                "Review the steps, then approve again to continue."
+            )
+        else:
+            self.task_panel.refresh()
 
     def _composer(self) -> QWidget:
         panel = QWidget()
