@@ -260,6 +260,27 @@ class MainWindow(QMainWindow):
 
         return self.task_panel.orchestrator
 
+    def describe_structure(self) -> dict[str, Any]:
+        """What this window is made of, as data rather than pixels.
+
+        The acceptance harness watches the process from the outside, so it can
+        prove a window appeared but not what is inside it. This is how the
+        *shipped binary* is shown to carry the task workflow, rather than only
+        the source tree: the same code path that draws the window reports its
+        own composition.
+        """
+
+        return {
+            "title": self.windowTitle(),
+            "views": [
+                str(button.text()) for button in self._view_switch.buttons() if button is not None
+            ],
+            "current_view": ("Chat", "Task")[self._views.currentIndex()]
+            if 0 <= self._views.currentIndex() <= 1
+            else f"index {self._views.currentIndex()}",
+            "task_panel": self.task_panel.describe_controls(),
+        }
+
     def _on_task_plan_requested(self, objective: str) -> None:
         """Plan generation happens in the conversation, not behind the panel.
 

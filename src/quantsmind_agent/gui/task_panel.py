@@ -18,6 +18,7 @@ everything" is not a choice.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import (
@@ -226,6 +227,31 @@ class TaskPanel(QWidget):
         """
 
         return self._orchestrator
+
+    def describe_controls(self) -> dict[str, Any]:
+        """The panel's controls and whether they are usable right now.
+
+        Reported as data so the *packaged* application can be inspected from the
+        inside: an outside harness can see that a window appeared, but not that
+        it carries the task workflow.
+        """
+
+        return {
+            "controls": {
+                button.text(): {"enabled": button.isEnabled(), "visible": button.isVisible()}
+                for button in (
+                    self.plan_button,
+                    self.approve_button,
+                    self.reject_button,
+                    self.run_button,
+                    self.pause_button,
+                    self.cancel_button,
+                )
+            },
+            "status": self.status.text(),
+            "task_attached": self._orchestrator is not None,
+            "worker_running": self._bridge is not None and self._bridge.running,
+        }
 
     def attach(self, orchestrator: Orchestrator | None) -> None:
         """Point the panel at a task, releasing any previous worker."""

@@ -6,6 +6,7 @@ without opening a window.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -324,6 +325,39 @@ class TestConversationCommands:
 
 
 class TestStartup:
+    def test_describing_the_window_reports_the_views_without_running_them(
+        self, capsys: pytest.CaptureFixture[str], tmp_path: Path
+    ) -> None:
+        """The acceptance harness cannot see inside the process; this flag can.
+
+        It is how the *packaged* application is shown to carry the task workflow
+        rather than only the source tree, so the report has to name the real
+        views and the real controls.
+        """
+
+        project = tmp_path / "project"
+        project.mkdir()
+        main(
+            [
+                "--workspace",
+                str(project),
+                "--config-dir",
+                str(tmp_path / "config"),
+                "--describe-window",
+                "--no-log-file",
+            ]
+        )
+        report = json.loads(capsys.readouterr().out)
+        assert report["views"] == ["Chat", "Task"]
+        assert report["current_view"] == "Chat"
+        controls = report["task_panel"]["controls"]
+        assert {"Propose plan", "Approve", "Reject", "Run", "Pause", "Cancel"} == set(controls)
+        # Nothing may be runnable before a plan has been approved.
+        assert controls["Approve"]["enabled"] is False
+        assert controls["Run"]["enabled"] is False
+        assert report["task_panel"]["task_attached"] is False
+        assert report["task_panel"]["worker_running"] is False
+
     def test_context_starts_without_a_project(self, config_manager: ConfigManager) -> None:
         context = ApplicationContext.create(
             paths=config_manager.paths, config_manager=config_manager

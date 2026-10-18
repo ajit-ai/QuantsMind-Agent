@@ -61,6 +61,12 @@ shipping platform. The model still proposes; the application decides.
   plan, approve it, watch the steps run, read the checks and the report.
   Planning happens in the conversation -- the panel cannot invent a plan -- so
   there is one model-call path in the application rather than two.
+- **The packaged application is inspected, not assumed.** `--describe-window`
+  builds the real window and prints its views and controls as JSON, and the
+  acceptance harness asserts against it: the shipped binary must offer Chat and
+  Task, must carry the review and run controls, and must have Run and Approve
+  disabled before a plan is approved. A window title alone never proved the task
+  workflow existed in the executable.
 - **`docs/source/releases/v0.4.rst`** documents the lifecycle, the policy
   semantics, budgets, recovery, and what this milestone deliberately is not.
 
