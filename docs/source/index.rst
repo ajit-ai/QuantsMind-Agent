@@ -71,6 +71,7 @@ application rather than by the model.
    architecture/events
    architecture/security-boundaries
    architecture/persistence-and-recovery
+   architecture/v0.6-behaviour
    architecture/adr/index
 
 .. toctree::

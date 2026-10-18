@@ -9,6 +9,77 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-18
+
+Three capabilities that existed but had no consumer are now reachable. Each one
+was deferred from v0.5 because it was easy to build badly.
+
+### Added
+
+- **Verification in the real lifecycle.** A task whose plan carries acceptance
+  criteria is verified when its steps finish, and the verdict decides whether the
+  task completes. Three outcomes: `pass`, `fail`, and `inconclusive` — which is
+  not a softer pass but the answer "we could not tell". A task whose checks all
+  passed is still inconclusive when no passing check names its criteria.
+- **A recorded verdict.** `VerificationRecord` on the task, so "was this
+  verified?" stays answerable after the checks are gone. Task schema v2 adds the
+  field; a v1 record reads as *never verified*, not as verified by absence of
+  evidence.
+- **Provider routing and fallback.** `ProviderRouter` implements the same
+  `ModelProvider` protocol as a single adapter, so nothing above the gateway
+  changes. Only rate limits and server errors move to another endpoint;
+  authentication failures, configuration mistakes, timeouts, connection failures
+  and protocol errors stop immediately. Attempts are bounded, the order is the
+  configured order, and capabilities are the intersection across endpoints.
+- **Structured output through the existing gateway.** A request carries a schema;
+  the adapter sends `response_format` when the endpoint declares support; the
+  response carries the parsed payload and whether the guarantee was `native`
+  (provider-constrained) or `parsed` (extracted here). The schema is validated by
+  this application every time, whichever path produced the data.
+- **`routing` configuration.** Off unless configured, and no router is built when
+  there is a single endpoint.
+- **Documentation.** `architecture/v0.6-behaviour.rst` describes what each of the
+  three does and, where the distinction matters, which of two similar behaviours
+  this is.
+
+### Changed
+
+- A task that promised evidence no longer settles to `COMPLETED` before its checks
+  run; it parks in `VERIFYING`. Settling first and verifying afterwards would
+  report "verified" about a task nobody had checked at the moment anyone might be
+  looking.
+- The task view reports steps done and the verification verdict separately,
+  because joining them is how an unverified task gets described as a success.
+- Task records are schema version 2.
+
+### Security notes
+
+- Verification commands go through the same command policy as every other
+  command; a refused check makes the task inconclusive, never successful.
+- Verification does not run without an approved plan, does not widen plan,
+  workspace or scope, and does not get a fresh time or check budget.
+- Fallback never bypasses configured policy: a fallback endpoint is one the user
+  configured. Timeout and connection failures never fall back, because the
+  provider may have finished the work and lost the response.
+- Structured output is untrusted input: parsed and validated before use, never
+  interpreted as instructions. Neither routing attempt records nor
+  structured-output errors carry prompt text or credentials.
+
+### Known limitations
+
+- Inconclusive verification settles to `BLOCKED`. There is no way yet to accept an
+  inconclusive task as good enough without a repair; that is a policy decision,
+  not a missing implementation.
+- Streaming is not retried across endpoints. A stream that fails part-way has
+  already produced output for the caller, so it is not a retryable shape.
+- The structured-output schema subset is small: object, array, string, number,
+  integer, boolean, null, with `required`, `properties`, `items` and `enum`.
+  A dependency such as `jsonschema` would validate more, at the cost of a package
+  in the shipped application for a guarantee nothing currently needs.
+- Structured output is exposed at the gateway and adapter; the conversation's plan
+  proposal still parses JSON out of prose rather than requesting it.
+- No live provider call was performed for this release; everything was exercised
+  with simulated providers.
 ## [0.5.0] - 2026-10-18
 
 The milestone is the application's shape rather than a new feature: the security
