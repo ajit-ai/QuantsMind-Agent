@@ -9,6 +9,74 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-18
+
+The milestone is the application's shape rather than a new feature: the security
+decisions moved out of the widgets, the task lifecycle became a written contract,
+and three subsystems that were implemented but unreachable are now wired in.
+
+### Added
+
+- **A written task state machine.** `ALLOWED_TRANSITIONS` in `tasks.py` maps every
+  status to the ones it may legally become, `Task.move_to()` is the only path
+  product code uses, and an illegal move raises instead of being logged. The
+  lifecycle used to be implied by whichever method assigned `task.status`.
+- **A security test layer.** `tests/security/` asserts the authorization
+  invariants as negative cases -- no approval, rejection, plan modification,
+  workspace change, unregistered tool, scope escape, path traversal, duplicate run,
+  cancellation and persistence failure -- by driving the orchestrator and checking
+  what reached the tool registry.
+- **An application service layer.** `services.TaskService` owns the task store,
+  builds orchestrators against the live registry, records approval decisions,
+  reports interrupted work and answers what is true. The window asks and renders.
+- **Declared provider capabilities.** `ProviderCapabilities` is declared by the
+  adapter, narrowed per preset, and consulted before tool schemas are attached or
+  a stream is opened. An endpoint that declares nothing is treated as unknown
+  rather than assumed capable.
+- **A shared provider contract suite.** `tests/integration/test_provider_contract.py`
+  covers valid requests, tool-call parsing, streaming, usage metadata, HTTP status
+  classification, timeouts, transport failures, malformed bodies and missing
+  credentials, over a stub transport.
+- **Recovery, wired in.** Interrupted tasks are found at startup, reported, and
+  marked in the panel's history list. They are never resumed automatically.
+- **Task history in the interface.** Stored tasks are listed; interrupted ones are
+  marked rather than shown as failed; selecting one adopts it for inspection.
+- **Documentation.** `architecture/task-lifecycle.rst`,
+  `architecture/persistence-and-recovery.rst` and
+  `roadmap/v0.5-implementation.rst`, with Mermaid diagrams rendered through a
+  docs-only `sphinxcontrib-mermaid` dependency.
+
+### Fixed
+
+- **`cancel()` could overwrite a completed task**, relabelling finished work as
+  work the user stopped.
+- **A rejected task still reported an approved plan**, because `approved_plan`
+  asked whether an approval existed rather than whether it was approving.
+- **`approve()` checked the plan digest but not the workspace**, so an approval
+  granted elsewhere was accepted and then failed closed at every step.
+- **A plan's declared scope was never enforced** -- only the approval's scope was,
+  so a plan that said "src only" was limited only if the user had also narrowed the
+  approval by hand. The narrower of the two now applies.
+- **The active-time budget was accumulated and never compared to anything.**
+- **Verification could run on a task with no approved plan.** Verification runs
+  commands, so it is now gated like step execution.
+- **A task whose record could not be written carried on anyway.** Execution now
+  stops, reports why, and refuses further advances.
+- **The window assigned `task.status = APPROVED` directly**, undoing the v0.4 fix
+  that stopped Run reviving a cancelled task -- from the one layer that should not
+  be making authorisation decisions.
+
+### Known limitations
+
+- No live provider call was performed; the stored OpenRouter credential is
+  expired. Everything was exercised with simulated providers.
+- `Orchestrator.verify()` still has no product caller; acceptance criteria are not
+  yet checked automatically when the last step finishes.
+- The approval dialog does not yet show a structured summary of affected files,
+  tools and external systems.
+- Provider capabilities are not yet displayed in the settings dialog, and
+  `structured_output` has no runtime consumer.
+
 ## [0.4.0] - 2026-10-17
 
 **Controlled autonomous coding.** v0.4 lets the agent carry out a bounded piece
