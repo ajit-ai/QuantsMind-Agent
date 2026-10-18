@@ -93,6 +93,7 @@ application rather than by the model.
    testing/acceptance-v0.2
    testing/platform-acceptance-matrix
    testing/native-gui-acceptance
+   testing/live-provider-validation-v0.5
    known-issues
 
 .. toctree::
