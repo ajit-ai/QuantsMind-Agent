@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from quantsmind_agent.code_tools import build_code_tools
 from quantsmind_agent.command_tools import build_command_tools
-from quantsmind_agent.config import ConfigManager
+from quantsmind_agent.config import ConfigManager, Configuration
 from quantsmind_agent.context import ContextEngine
 from quantsmind_agent.conversations import (
     ConversationStore,
@@ -378,7 +378,7 @@ class ApplicationContext:
                 registry.register_all(build_git_tools(self.workspace))
 
         self.gateway = ModelGateway(
-            build_provider(config.provider, api_key=self.config_manager.api_key_value),
+            self._build_model_provider(config),
             event_bus=self.events,
             session_id=session.id,
             default_timeout=config.provider.timeout_seconds,
@@ -399,6 +399,37 @@ class ApplicationContext:
             request_options=self._request_options,
             cancel_event=self._cancel,
         )
+
+    # -- workspace ---------------------------------------------------------
+    def _build_model_provider(self, config: Configuration) -> Any:
+        """The configured provider, or a router over several.
+
+        Routing is built only when it has been configured *and* has somewhere to
+        go. With one endpoint a router would add a layer and change nothing, so
+        the single-provider path stays exactly as it was.
+        """
+
+        routing = config.routing
+        primary = build_provider(config.provider, api_key=self.config_manager.api_key_value)
+        if not routing.enabled or not routing.fallbacks:
+            return primary
+
+        from quantsmind_agent.routing import ProviderRouter, RouteCandidate, RoutingPolicy
+
+        candidates = [
+            RouteCandidate(
+                provider=primary, model=config.provider.model, label=config.provider.name
+            )
+        ]
+        for index, fallback in enumerate(routing.fallbacks, start=1):
+            candidates.append(
+                RouteCandidate(
+                    provider=build_provider(fallback, api_key=self.config_manager.api_key_value),
+                    model=fallback.model,
+                    label=f"{fallback.name or fallback.base_url}#{index}",
+                )
+            )
+        return ProviderRouter(candidates, policy=RoutingPolicy(max_attempts=routing.max_attempts))
 
     # -- workspace ---------------------------------------------------------
     def _restore_workspace(self) -> None:

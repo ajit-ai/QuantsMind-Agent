@@ -214,6 +214,32 @@ class LoggingSettings(BaseModel):
     backup_count: int = Field(default=3, ge=0)
 
 
+class RoutingSettings(BaseModel):
+    """Which endpoint answers, and when another one may take over.
+
+    Off unless it is configured. With ``fallbacks`` empty the router is never
+    built and the application behaves exactly as it did before routing existed --
+    an unconfigured feature that changes nothing is the only safe default for
+    something that can move a user's request to a different service.
+    """
+
+    model_config = ConfigDict(validate_assignment=True)
+
+    enabled: bool = False
+    #: Hard bound on endpoints tried for one request, including the first.
+    max_attempts: int = Field(default=2, ge=1, le=5)
+    #: Additional endpoints, tried in the order written here.
+    fallbacks: list[ProviderSettings] = Field(default_factory=list)
+
+    @field_validator("fallbacks")
+    @classmethod
+    def _needs_real_endpoints(cls, value: list[ProviderSettings]) -> list[ProviderSettings]:
+        for entry in value:
+            if not entry.base_url.strip():
+                raise ValueError("every fallback needs a base URL")
+        return value
+
+
 class Configuration(BaseModel):
     """The complete, persisted application configuration (secret-free)."""
 
@@ -223,6 +249,7 @@ class Configuration(BaseModel):
     provider: ProviderSettings = Field(default_factory=ProviderSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    routing: RoutingSettings = Field(default_factory=RoutingSettings)
     last_workspace: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -236,6 +263,7 @@ class Configuration(BaseModel):
             "provider": self.provider.model_dump(mode="json"),
             "agent": self.agent.model_dump(mode="json"),
             "logging": self.logging.model_dump(mode="json"),
+            "routing": self.routing.model_dump(mode="json"),
         }
         for name, values in sections.items():
             sections[name] = {key: value for key, value in values.items() if value is not None}

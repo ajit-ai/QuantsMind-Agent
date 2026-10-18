@@ -32,7 +32,13 @@ from quantsmind_agent.errors import (
     NetworkError,
     QuantsMindError,
 )
-from quantsmind_agent.llm import ChatRequest, ChatResponse, ProviderCapabilities, StreamChunk
+from quantsmind_agent.llm import (
+    ChatRequest,
+    ChatResponse,
+    ProviderCapabilities,
+    StreamChunk,
+    parse_structured,
+)
 from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.schema import ToolCall
 
@@ -248,6 +254,19 @@ class OpenAICompatProvider:
             payload["tool_choice"] = "auto"
         if request.stop:
             payload["stop"] = request.stop
+        if request.structured is not None:
+            # The native constrained-output form is only requested when the
+            # endpoint has declared it. Otherwise the request still goes out and
+            # the answer is parsed and validated by the application, which the
+            # response records as "parsed" rather than "native".
+            payload["response_format"] = (
+                {
+                    "type": "json_schema",
+                    "json_schema": {"name": "response", "schema": request.structured.schema},
+                }
+                if request.structured.native
+                else {"type": "json_object"}
+            )
         return payload
 
     # -- ModelProvider ----------------------------------------------------
@@ -314,7 +333,7 @@ class OpenAICompatProvider:
         finally:
             self._close_http(client)
 
-        return self.parse_completion(body, fallback_model=request.model)
+        return self.parse_completion(body, fallback_model=request.model, request=request)
 
     def stream(self, request: ChatRequest) -> Iterator[StreamChunk]:
         """Yield response increments from an SSE stream."""
@@ -342,7 +361,9 @@ class OpenAICompatProvider:
 
     # -- parsing ----------------------------------------------------------
     @staticmethod
-    def parse_completion(body: Any, *, fallback_model: str = "") -> ChatResponse:
+    def parse_completion(
+        body: Any, *, fallback_model: str = "", request: ChatRequest | None = None
+    ) -> ChatResponse:
         """Convert an OpenAI chat-completion body into a :class:`ChatResponse`."""
 
         if not isinstance(body, dict):
@@ -376,14 +397,28 @@ class OpenAICompatProvider:
         raw_usage = body.get("usage")
         usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
 
+        text = content if isinstance(content, str) else ""
+        structured: Any = None
+        structured_mode = ""
+        wanted = getattr(request, "structured", None)
+        if wanted is not None:
+            # Parsed and validated here, whatever the endpoint did or did not
+            # enforce. A malformed or off-schema answer raises rather than
+            # arriving as an empty result, because "no data" and "bad data" must
+            # not look the same to the caller.
+            structured = parse_structured(text, wanted.schema)
+            structured_mode = "native" if wanted.native else "parsed"
+
         return ChatResponse(
-            content=content if isinstance(content, str) else "",
+            content=text,
             model=str(body.get("model") or fallback_model),
             tool_calls=tool_calls,
             finish_reason=choice.get("finish_reason"),
             prompt_tokens=_as_int(usage.get("prompt_tokens")),
             completion_tokens=_as_int(usage.get("completion_tokens")),
             raw=body,
+            structured=structured,
+            structured_mode=structured_mode,
         )
 
     @staticmethod
