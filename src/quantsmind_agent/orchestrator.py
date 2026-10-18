@@ -141,6 +141,10 @@ class Orchestrator:
         self._observer = observer
         self._cancel_requested = False
         self._paused = False
+        #: Set when the record could not be written. Execution stops rather than
+        #: continuing with no way to recover what it did.
+        self._persist_failed = False
+        self._persist_error = ""
 
     @property
     def task_id(self) -> str:
@@ -163,12 +167,31 @@ class Orchestrator:
         self._observer = observer
 
     def persist(self) -> None:
-        """Write the task now, so an interruption loses at most one action."""
+        """Write the task now, so an interruption loses at most one action.
+
+        A store that cannot be written is a fail-safe, not a hiccup. Execution
+        evidence and the authorisation behind it live in this record: if the
+        record cannot be saved, then continuing would mean running work whose
+        approval and effects cannot be recovered afterwards -- a crash would
+        leave an unknown amount of the plan done with no record of what. So the
+        task is stopped, loudly, rather than allowed to run unrecorded.
+        """
 
         if self._store is None:
             return
         self.task.updated_at = self._clock()
-        self._store.save(self.task)
+        try:
+            self._store.save(self.task)
+        except Exception as exc:
+            self._persist_failed = True
+            self._persist_error = str(exc)
+            logger.error("task %s could not be persisted: %s", self.task.id, exc)
+            self.emit("persist_failed", str(exc))
+            if not self.task.terminal:
+                self.task.move_to(TaskStatus.FAILED, detail="its record could not be saved")
+            return
+        self._persist_failed = False
+        self._persist_error = ""
 
     # -- lifecycle --------------------------------------------------------
     def submit_plan(self, plan: Plan) -> Plan:
@@ -269,6 +292,20 @@ class Orchestrator:
         return self._cancel_requested
 
     @property
+    def persistence_failed(self) -> bool:
+        """Whether the task's record could not be written.
+
+        When this is true the task is stopped. Continuing would execute work whose
+        authorisation and effects could not be recovered from disk afterwards.
+        """
+
+        return self._persist_failed
+
+    @property
+    def persistence_error(self) -> str:
+        return self._persist_error
+
+    @property
     def paused(self) -> bool:
         return self._paused
 
@@ -332,6 +369,12 @@ class Orchestrator:
 
         if self._cancel_requested or self.task.status is TaskStatus.CANCELLED:
             return AdvanceResult("cancelled", self.task.status, reason="cancelled by the user")
+        if self._persist_failed:
+            return AdvanceResult(
+                "blocked",
+                self.task.status,
+                reason=f"execution stopped: this task's record could not be saved ({self._persist_error})",
+            )
         if self._paused or self.task.status is TaskStatus.PAUSED:
             return AdvanceResult("paused", self.task.status, reason="paused")
         if self.task.terminal:

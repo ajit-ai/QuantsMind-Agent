@@ -140,10 +140,22 @@ TERMINAL_STATUSES: frozenset[TaskStatus] = frozenset(
 #: ``FAILED -> BLOCKED`` is the repair budget running out. A task that failed and
 #: then spent its repair allowance is not merely failed, it is waiting for
 #: somebody to decide what to do, which is what ``BLOCKED`` means.
+#:
+#: ``DRAFT``/``AWAITING_APPROVAL -> FAILED`` is the persistence fail-safe. A task
+#: whose record cannot be written cannot proceed, and leaving it reading "waiting
+#: for approval" would be a status that promises a future the application cannot
+#: honour.
 ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
-    TaskStatus.DRAFT: frozenset({TaskStatus.AWAITING_APPROVAL, TaskStatus.CANCELLED}),
+    TaskStatus.DRAFT: frozenset(
+        {TaskStatus.AWAITING_APPROVAL, TaskStatus.FAILED, TaskStatus.CANCELLED}
+    ),
     TaskStatus.AWAITING_APPROVAL: frozenset(
-        {TaskStatus.APPROVED, TaskStatus.AWAITING_APPROVAL, TaskStatus.CANCELLED}
+        {
+            TaskStatus.APPROVED,
+            TaskStatus.AWAITING_APPROVAL,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }
     ),
     TaskStatus.APPROVED: frozenset(
         {
