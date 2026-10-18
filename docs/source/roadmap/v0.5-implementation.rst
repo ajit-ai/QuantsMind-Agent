@@ -1,0 +1,108 @@
+.. _v0.5-implementation:
+
+
+=========================
+v0.5.0 implementation plan
+==========================
+
+What this milestone set out to do, what is done and verified, what is deliberately
+not done, and what would come next. Written so the gap between the specification
+and the product is visible rather than implied.
+
+Completed and verified
+======================
+
+**An explicit task state machine.** ``ALLOWED_TRANSITIONS`` in ``tasks.py`` is the
+authority; ``Task.move_to`` is the only path product code uses. Before this, the
+lifecycle was implied by whichever method assigned ``task.status``, which is how
+``cancel()`` came to be able to overwrite a completed task with "cancelled" and
+how a rejected task still reported ``approved_plan``.
+
+**Authorisation invariants tested as negative cases.** ``tests/security/`` (27
+tests) drives the orchestrator and asserts on what reached the tool registry, for
+every case the specification lists: no approval, rejection, plan modification,
+workspace change, unregistered tool, scope escape, traversal, duplicate run,
+cancellation and persistence failure.
+
+**Approval binding at the point of decision.** ``approve()`` now checks the
+workspace, not only the digest, so an approval granted elsewhere is refused when
+it is offered instead of failing closed later at every step.
+
+**A plan's declared scope is enforced.** Previously only the approval's scope
+mattered, so a plan that said "src only" was limited only if the user also
+narrowed the approval by hand. The narrower of the two bounds now applies.
+
+**A real time budget.** ``max_active_seconds`` was accumulated on every step and
+compared to nothing.
+
+**Provider capabilities that are read.** ``ProviderCapabilities`` is declared by
+the adapter, narrowed per preset, and consulted by ``AgentCore`` before it attaches
+tool schemas or opens a stream. ``tests/integration/test_provider_contract.py``
+(20 tests) is a shared contract suite over valid requests, tool-call parsing,
+streaming, usage metadata, HTTP status classification, timeouts, transport
+failures, malformed bodies and missing credentials.
+
+**An application service layer.** ``services.py`` holds ``TaskService``, which
+owns the store, builds orchestrators, and answers what is true about the task. The
+window asks and renders. It no longer constructs a store, a policy, an orchestrator
+or an approval record -- and no longer contains a line that assigns task status.
+
+**Recovery wired in.** ``recovery.py`` was implemented and tested but never called
+from ``src/``. ``TaskService.interrupted_tasks`` finds interrupted work at startup,
+reports it, and marks it in the panel's history list without resuming it.
+
+**Persistence fail-safe.** A task whose record cannot be written stops, reports
+why, and refuses further advances.
+
+**Task history in the interface.** Stored tasks are listed, interrupted ones
+marked, selection adopts for inspection without resuming.
+
+Verified
+--------
+
+1506 passed, 3 skipped (symlink tests, Windows) in 297s across unit, integration,
+security and GUI layers; ruff, ruff-format, mypy (123 files), documentation and
+secret-scan all clean; packaged application 14/14 smoke, 8/8 desktop acceptance,
+7/7 MSI build, 23/23 install verification.
+
+Known limitations
+=================
+
+* **No live provider call was made.** The stored OpenRouter credential is
+  expired. Everything above was exercised with simulated providers; the contract
+  suite proves the adapter's behaviour against a stub transport, not against a live
+  API. See ``--check-config`` and the settings dialog for the procedure.
+* **Automatic routing and fallback are not implemented.** They were optional in
+  the specification and are deferred; nothing silently moves work between a local
+  and a hosted endpoint.
+* **Verification is invoked explicitly, not automatically after the last step.**
+  ``Orchestrator.verify`` exists and is tested, but no product path calls it yet --
+  the same wiring gap that recovery had. Wiring it is the first item of v0.6.
+* **The approval dialog does not yet show a full effects summary.** It shows the
+  operation, its arguments and a warning for blocking operations; a structured
+  "which files, which tools, which external systems" disclosure is not built.
+* **Provider diagnostics in the UI are minimal.** Capabilities are exposed through
+  the service and gateway; the settings dialog does not yet display them.
+* **Structured output is declared but unused.** ``structured_output`` is a real
+  capability flag with no runtime consumer yet; plan generation still parses text.
+
+Deferred, with reasons
+======================
+
+* **A task-history screen beyond a list.** The panel lists and adopts; a dedicated
+  diff-and-compare view was not built.
+* **Bounded repair driven by the model.** ``repair()`` is implemented, budgeted and
+  scope-bound, but nothing proposes a repair automatically.
+* **A migration ladder beyond the first version for tasks.** Task records are at
+  ``SCHEMA_VERSION = 1``; the migration path exists and refuses future versions,
+  but there is no historical ladder to walk yet.
+
+Next
+====
+
+1. Call ``verify`` from the task runner so acceptance criteria are checked
+   automatically when the last step finishes.
+2. Show declared provider capabilities in the settings dialog, and an effects
+   summary in the approval dialog.
+3. Use ``structured_output`` where an endpoint supports it, falling back to text
+   parsing where it does not -- and say which path was used.

@@ -247,3 +247,34 @@ Related
 * :doc:`../security`
 * :doc:`workspace`, :doc:`permissions`
 * :doc:`adr/0004-workspace-isolation`
+
+Plan approval is a binding, not a flag
+======================================
+
+Since v0.5 an approval is checked at the moment it is offered, not only later when
+a step runs. `Orchestrator.approve` refuses an approval whose plan digest does
+not match the plan in hand, and refuses one granted for a different workspace --
+so the user is told at the point of decision rather than watching every later step
+fail closed.
+
+Two further bounds are enforced at execution time:
+
+* A plan's own `scope_paths` are enforced, not only the approval's. If a plan
+  said "src only" and the user approved the whole workspace, the narrower bound
+  still applies: the plan cannot be widened by approving it broadly.
+* A *negative* decision counts as a decision. `approved_plan` returns nothing
+  for a rejected task, so a rejection cannot leave the record claiming to be
+  authorised.
+
+These are covered in `tests/security/test_authorization_invariants.py`, which
+drives the orchestrator and asserts on what reached the tool registry rather than
+on what the policy said about it.
+
+Persistence failure is a security event
+=======================================
+
+A task's approval and the evidence of its effects are stored in the same record.
+If that record cannot be written, the task stops and refuses to continue. Running
+work whose authorisation could not be recovered -- and whose side effects could
+not be reconstructed after a crash -- would be executing outside the boundary this
+document describes.

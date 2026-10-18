@@ -59,6 +59,7 @@ application rather than by the model.
 
    architecture/overview
    architecture/agent-core
+   architecture/task-lifecycle
    architecture/model-gateway
    architecture/context-engine
    architecture/tool-system
@@ -69,6 +70,7 @@ application rather than by the model.
    architecture/gui
    architecture/events
    architecture/security-boundaries
+   architecture/persistence-and-recovery
    architecture/adr/index
 
 .. toctree::
