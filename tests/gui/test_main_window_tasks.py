@@ -178,6 +178,25 @@ class TestProjectEvidenceReachesTheTask:
         assert window.task_panel.workspace_snapshot is None
         assert window._pending_snapshot is None
 
+    def test_a_late_scan_does_not_replace_the_plans_snapshot(self, opened: GuiHarness) -> None:
+        from quantsmind_agent.workspace_intel import WorkspaceSnapshot
+
+        window = opened.window
+        planned = WorkspaceSnapshot(
+            workspace=workspace_root(opened), project_kind="python-package", digest="planned"
+        )
+        later = WorkspaceSnapshot(
+            workspace=workspace_root(opened), project_kind="python-package", digest="later"
+        )
+
+        window.submit_task_plan(read_plan(), snapshot=planned)
+        window._on_workspace_scan_finished(later)
+        window._on_task_approval(True)
+
+        orchestrator = window.task_orchestrator
+        assert orchestrator is not None
+        assert orchestrator.task.workspace_snapshot["digest"] == "planned"
+
 
 class TestApprovalIsAHardGate:
     def test_nothing_runs_when_the_approval_is_missing(

@@ -724,7 +724,11 @@ class MainWindow(QMainWindow):
             # the next plan.
             return
         self.task_panel.show_workspace(snapshot)
-        self._pending_snapshot = snapshot
+        if self._pending_plan is None:
+            # A plan already carries the snapshot it was offered with. A scan
+            # finishing afterwards updates the panel but must not replace that
+            # evidence with facts the planner never saw.
+            self._pending_snapshot = snapshot
 
     def _on_workspace_scan_failed(self, message: str) -> None:
         if self._context.workspace is None:
