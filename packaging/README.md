@@ -9,8 +9,9 @@ v0.8.0 onward.
 ## Policy
 
 1. Every release receives its own `packaging/vX.Y.Z/` directory.
-2. A release record is immutable once published. It is never overwritten or
-   reused for another version.
+2. A release record becomes immutable when release finalization is complete.
+   Completing the current release's record after the artifact is built and
+   published is part of finalization, not a rewrite of history.
 3. MSI binaries remain GitHub Release assets. They are not committed to Git.
 4. Git stores the release metadata and SHA-256 checksums; the artifact itself
    lives in the GitHub Release.
@@ -18,7 +19,7 @@ v0.8.0 onward.
 6. Historical records contain only verified information. A value that cannot be
    verified is left out, not guessed.
 7. Every future release creates its packaging record as part of release
-   finalization.
+   finalization and completes it after the artifact exists.
 8. A release is not fully finalized until its packaging record and the published
    GitHub artifact agree.
 
