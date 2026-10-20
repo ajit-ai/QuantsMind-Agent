@@ -129,6 +129,21 @@ That writes ``MANIFEST.json`` (the whole matrix, including platforms that were
 **not** built, so an absent platform cannot be mistaken for a forgotten one) and
 ``SHA256SUMS``, which ``sha256sum -c`` can check.
 
+Packaging history
+=================
+
+Every release has a permanent record in Git under ``packaging/vX.Y.Z/``:
+``README.md``, ``BUILD-METADATA.json`` and ``checksums.sha256``. The MSI remains a
+GitHub Release asset; Git stores the metadata and checksum that identify it.
+
+The policy is documented in ``packaging/README.md``. ``packaging/v0.7.0/`` is the
+historical baseline, reconstructed when the policy was introduced in v0.8.0.
+``packaging/v0.8.0/`` is the first record produced under it.
+
+A release is not finalized until its packaging record and the published GitHub
+artifact agree. The annotated tag identifies the source release commit and is
+never moved when artifact metadata is added in a follow-up commit.
+
 Installing
 ==========
 

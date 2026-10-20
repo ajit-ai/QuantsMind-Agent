@@ -159,6 +159,8 @@ class TaskPanel(QWidget):
     cancel_requested = Signal()
     #: A task id picked from the history list.
     history_selected = Signal(str)
+    #: The user asked to continue an inspected session.
+    resume_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -242,8 +244,82 @@ class TaskPanel(QWidget):
         self.history.setToolTip("Previous and interrupted tasks")
         self.history.itemSelectionChanged.connect(self._on_history_selected)
         layout.addWidget(self.history)
+        #: The session being inspected, and what may be done with it. Read-only
+        #: until the user asks otherwise.
+        self.timeline = QPlainTextEdit()
+        self.timeline.setReadOnly(True)
+        self.timeline.setMaximumHeight(120)
+        self.timeline.setPlaceholderText("Select a previous task to see what happened to it.")
+        layout.addWidget(self.timeline)
+        self.resume_button = QPushButton("Continue this task")
+        self.resume_button.setEnabled(False)
+        self.resume_button.clicked.connect(self.resume_requested.emit)
+        layout.addWidget(self.resume_button)
         #: The summary behind each row, so selection can be acted upon.
         self._history_summaries: dict[str, Any] = {}
+
+    # -- inspection --------------------------------------------------------
+    @property
+    def worker_running(self) -> bool:
+        """Whether a worker thread is currently executing this task."""
+
+        return bool(self._bridge is not None and self._bridge.running)
+
+    def show_timeline(self, task: Any) -> None:
+        """Render a stored task's plan, checkpoints and trace as one timeline.
+
+        Bounded by construction: the trace is already capped on the record, and
+        only the most recent entries are rendered, so a long-running session does
+        not become a wall of text the window has to lay out.
+        """
+
+        lines: list[str] = [f"{task.objective}  [{task.status.value}]", ""]
+        plan = task.plan
+        if plan is not None:
+            lines.append("Plan:")
+            for step in plan.steps:
+                state = task.status_of(step.id).value
+                lines.append(f"  {step.id}: {step.tool} -- {state}")
+            lines.append("")
+        checkpoints = list(getattr(task, "checkpoints", []) or [])
+        if checkpoints:
+            last = checkpoints[-1]
+            lines.append(
+                f"Checkpoint: {len(last.get('completed_steps', []))} step(s) done"
+                + (
+                    f", interrupted during {last.get('in_flight_step')}"
+                    if last.get("in_flight_step")
+                    else ""
+                )
+            )
+            lines.append("")
+        trace = list(getattr(task, "trace", []) or [])[-40:]
+        if trace:
+            lines.append("Timeline:")
+            lines.extend(f"  {event.describe()}" for event in trace)
+        verification = getattr(task, "verification", None)
+        if verification is not None:
+            lines.append("")
+            lines.append(f"Verification: {verification.describe()}")
+        self.timeline.setPlainText("\n".join(lines))
+
+    def set_history_actions(
+        self, *, verdict: Any = None, inspecting_id: str = "", running: bool = False
+    ) -> None:
+        """Enable continuing only when the verdict says it is safe, and idle.
+
+        A refusal is shown as a disabled button with the reason, rather than a
+        button that fails when pressed: the user asked "can this continue", and
+        the answer should be visible before they try.
+        """
+
+        allowed = bool(verdict is not None and getattr(verdict, "resumable", False))
+        self.resume_button.setEnabled(allowed and not running)
+        if verdict is None:
+            self.resume_button.setToolTip("Select a previous task first.")
+            return
+        self.resume_button.setToolTip(verdict.describe())
+        self.resume_button.setText("Continue this task" if allowed else "Cannot continue")
 
     # -- history -----------------------------------------------------------
     def set_history(self, summaries: Any, *, interrupted_ids: frozenset[str] = frozenset()) -> None:

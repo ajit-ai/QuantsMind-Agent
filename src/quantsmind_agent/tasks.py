@@ -41,6 +41,8 @@ from typing import Any
 __all__ = [
     "ALLOWED_TRANSITIONS",
     "DIGEST_VERSION",
+    "MAX_CHECKPOINTS",
+    "MAX_TRACE_EVENTS",
     "SCHEMA_VERSION",
     "TERMINAL_STATUSES",
     "AcceptanceCriterion",
@@ -75,7 +77,8 @@ __all__ = [
 #: written by v1 loads with no verification record, which reads as "never
 #: verified" rather than "verified by an absence of evidence".
 #: v3 adds `trace`: the ordered record of how a task reached its state.
-SCHEMA_VERSION = 3
+#: v4 adds `checkpoints`: the execution boundaries a session may resume from.
+SCHEMA_VERSION = 4
 
 #: Bumped when the *canonical form* of a plan changes.
 #:
@@ -565,6 +568,8 @@ class TraceKind(StrEnum):
     PROVIDER = "provider"
     VERIFICATION_STARTED = "verification_started"
     VERIFICATION = "verification"
+    CHECKPOINT = "checkpoint"
+    RECOVERY = "recovery"
     CANCELLED = "cancelled"
     PAUSED = "paused"
     FINISHED = "finished"
@@ -643,6 +648,10 @@ class TraceEvent:
 #: How many trace events a task keeps. Enough to diagnose a failure; small enough
 #: that history does not grow without bound.
 MAX_TRACE_EVENTS = 200
+
+#: How many checkpoints a session keeps. A handful is enough to explain where
+#: an interrupted run got to, and the list cannot grow without bound.
+MAX_CHECKPOINTS = 50
 
 
 @dataclass(frozen=True, slots=True)
@@ -1099,6 +1108,8 @@ class Task:
     recovery: list[RecoveryDecision] = field(default_factory=list)
     verification: VerificationRecord | None = None
     trace: list[TraceEvent] = field(default_factory=list)
+    #: Execution boundaries this application has confirmed, newest last.
+    checkpoints: list[Any] = field(default_factory=list)
     steps_executed: int = 0
     checks_run: int = 0
     active_seconds: float = 0.0
@@ -1188,6 +1199,7 @@ class Task:
             "recovery": [item.to_dict() for item in self.recovery],
             "verification": self.verification.to_dict() if self.verification else None,
             "trace": [item.to_dict() for item in self.trace],
+            "checkpoints": [dict(item) for item in self.checkpoints if isinstance(item, dict)],
             "steps_executed": self.steps_executed,
             "checks_run": self.checks_run,
             "active_seconds": self.active_seconds,
@@ -1241,6 +1253,9 @@ class Task:
                 for item in migrated.get("trace") or []
                 if isinstance(item, dict)
             ],
+            checkpoints=[
+                dict(item) for item in migrated.get("checkpoints") or [] if isinstance(item, dict)
+            ],
             steps_executed=int(migrated.get("steps_executed", 0) or 0),
             checks_run=int(migrated.get("checks_run", 0) or 0),
             active_seconds=float(migrated.get("active_seconds", 0.0) or 0.0),
@@ -1262,6 +1277,10 @@ def migrate(payload: object) -> dict[str, Any]:
     explicitly rather than left to a default in the dataclass: the difference
     between "this task was verified and the record was truncated" and "this task
     was never verified" should not depend on how the loader happens to behave.
+
+    v3 -> v4 adds ``checkpoints``. A record written before sessions existed has
+    no known execution boundaries, so it loads with an empty list rather than an
+    invented checkpoint that a resume might treat as fact.
     """
 
     if not isinstance(payload, dict):
@@ -1277,6 +1296,8 @@ def migrate(payload: object) -> dict[str, Any]:
         migrated["verification"] = None
     if version < 3:
         migrated["trace"] = []
+    if version < 4:
+        migrated["checkpoints"] = []
     migrated["schema_version"] = SCHEMA_VERSION
     return migrated
 

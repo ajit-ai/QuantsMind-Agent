@@ -2,7 +2,7 @@
 
 Run as part of the packaging gate::
 
-    python scripts/verify_version.py dist/quantsmind_agent-0.2.0-py3-none-any.whl
+    python scripts/verify_version.py dist/quantsmind_agent-0.8.0-py3-none-any.whl
 
 The version is read from the wheel's ``METADATA`` rather than by importing the
 package, because the build job installs only ``build`` -- not the project. That
@@ -19,7 +19,7 @@ import zipfile
 from pathlib import Path
 
 #: Keep in step with ``pyproject.toml`` and ``quantsmind_agent.version``.
-EXPECTED_VERSION = "0.2.0"
+EXPECTED_VERSION = "0.8.0"
 
 
 def wheel_version(wheel: Path) -> str:

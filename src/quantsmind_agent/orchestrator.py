@@ -40,6 +40,7 @@ from typing import Any
 
 from quantsmind_agent.task_policy import PolicyVerdict, TaskPolicy, classify
 from quantsmind_agent.tasks import (
+    MAX_CHECKPOINTS,
     AcceptanceCriterion,
     ApprovalRecord,
     CheckResult,
@@ -79,6 +80,8 @@ _TRACE_ALIASES: dict[str, TraceKind] = {
     "persist_failed": TraceKind.PERSISTENCE_FAILED,
     "blocked": TraceKind.STEP,
     "repair_admitted": TraceKind.STEP,
+    "resumed": TraceKind.RECOVERY,
+    "resumed_after_review": TraceKind.RECOVERY,
 }
 
 
@@ -299,6 +302,34 @@ class Orchestrator:
         )
         self.persist()
 
+    def record_checkpoint(self) -> None:
+        """Write a checkpoint at the current, confirmed boundary.
+
+        Called after a step's outcome has been recorded, never before: a
+        checkpoint that claims a step completed before it did is how a resumed
+        session skips work that never ran. Persisted with the task, so it
+        survives a crash at the same moment the step's own record does.
+        """
+
+        from quantsmind_agent.sessions import checkpoint_for
+
+        if self.task.terminal and self.task.status is not TaskStatus.COMPLETED:
+            return
+        mark = checkpoint_for(self.task, at=self._clock())
+        if self.task.checkpoints and self.task.checkpoints[-1] == mark.to_dict():
+            return
+        self.task.checkpoints.append(mark.to_dict())
+        del self.task.checkpoints[:-MAX_CHECKPOINTS]
+        self.task.record(
+            TraceEvent(
+                TraceKind.CHECKPOINT,
+                mark.at,
+                mark.describe(),
+                completed=len(mark.completed_steps),
+            )
+        )
+        self.persist()
+
     def cancel(self, reason: str = "") -> None:
         """Stop the task. No further action is taken after this.
 
@@ -504,6 +535,11 @@ class Orchestrator:
             changed=[item.path for item in changes],
         )
         self.persist()
+        if result.ok:
+            # Only after the outcome is recorded and written. A checkpoint that
+            # claimed this step was done before it was would let a resumed
+            # session skip work that never happened.
+            self.record_checkpoint()
         return StepOutcome(
             step.id,
             executed=True,

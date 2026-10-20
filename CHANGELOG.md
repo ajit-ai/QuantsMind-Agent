@@ -9,6 +9,88 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-20
+
+Durable Sessions. A task can now be interrupted, inspected and -- when the
+evidence supports it -- continued, without re-running work whose outcome nobody
+recorded.
+
+### Added
+
+- **Checkpoints at confirmed boundaries.** `Orchestrator.record_checkpoint` writes
+  a checkpoint after a step's outcome has been recorded, never before, so a
+  resumed session cannot skip work that did not run. It carries the session id,
+  plan digest, completed steps, any in-flight step and the workspace, is bounded
+  to 50 entries, and is persisted with the task rather than beside it.
+- **Three recovery answers.** `RecoveryService` classifies an interrupted session
+  as `SAFE_TO_RESUME`, `REQUIRES_REVIEW` or `NOT_RESUMABLE`, collecting every
+  reason rather than stopping at the first. Thin or contradictory evidence
+  resolves against continuing.
+- **Resume through the service, not around it.** `TaskService.resume` recomputes
+  the verdict at the moment of resuming, refuses with `RecoveryRefused` when it
+  is not safe, and records the refusal as a `RECOVERY` trace event. A successful
+  resume moves the task through the legal interrupted boundary and persists the
+  result.
+- **Task history and a timeline in the GUI.** Stored tasks are listed newest
+  first, interrupted ones are marked, and selecting one renders its plan, last
+  checkpoint, recent trace and verification outcome. Selecting history is a read:
+  nothing runs until "Continue this task" is pressed, and that button is enabled
+  only when the verdict allows it.
+- **Interrupted tasks are reported, not relabelled.** `TaskService.interrupted_tasks`
+  returns tasks that were mid-flight when the application closed, with the
+  existing read-only analysis of what they had done; they are not marked failed
+  and not resumed automatically.
+- **A permanent packaging history.** Every release now records its version, tag,
+  release commit, artifact name, size and SHA-256 under `packaging/vX.Y.Z/`.
+  Installers remain GitHub Release assets. `packaging/v0.7.0/` is the historical
+  baseline, reconstructed from the published release; `packaging/v0.8.0/` is the
+  first record produced under the policy.
+
+### Fixed
+
+- **A missing or stale approval is not authority to continue.** Recovery now
+  requires a standing approval whose plan digest still matches; no approval or a
+  mismatched digest sends the session to review.
+- **Sessions stopped during verification or repair need review.** Those stages
+  may have run commands whose outcome nobody recorded, so they are treated like a
+  step in flight rather than like a clean pause.
+- **Blocked, awaiting-approval and draft tasks are classified** instead of being
+  treated as empty sessions that could continue.
+- **A refusal leaves evidence.** The refusal verdict and timestamp are saved on
+  the task before `RecoveryRefused` is raised, so the next inspection sees that
+  recovery was attempted and why it stopped.
+- **A stored session without a checkpoint no longer disappears from recovery.**
+  The verdict rebuilds a boundary from the task's own record; `latest_checkpoint`
+  skips unreadable entries instead of treating the whole session as unstarted.
+- **The unattended GUI test no longer opens a modal dialog.** Its fixture now
+  carries a real approval and an in-flight step, so the refusal path it asserts
+  is the path it exercises.
+
+### Changed
+
+- **Task records are schema version 4**, adding `checkpoints`. Records from v0.3
+  through v0.7 load with an empty checkpoint list, because inventing a boundary a
+  previous build never recorded is exactly how resume would repeat work.
+
+### Validation
+
+- **1670 passed, 3 skipped** (symlink tests, Windows) across unit, integration,
+  security and GUI.
+- ruff, ruff-format, mypy (153 files), documentation normalisation and secret
+  scanning clean; the Sphinx build completes with zero warnings.
+- No live-provider run is claimed: this milestone changes local records and
+  decisions, and every path is exercised with deterministic fakes.
+
+### Known limitations
+
+- A checkpoint records what this application knows about itself. It is not a
+  crash-consistent snapshot of an external system, and recovery does not pretend
+  otherwise.
+- Recovery does not probe the world to discover whether an in-flight step landed;
+  it classifies the uncertainty and asks the user.
+- The GUI timeline is a bounded read-only view; editing, comparing and exporting
+  sessions are not part of this milestone.
+
 ## [0.7.0] - 2026-10-18
 
 Reliable Agent Execution. Three capabilities that existed without a consumer now

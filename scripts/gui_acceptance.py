@@ -42,6 +42,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -370,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         timeout=max(120.0, args.timeout),
         env=_desktop_env(),
     )
-    structure: dict = {}
+    structure: dict[str, Any] = {}
     if described.returncode == 0:
         try:
             structure = json.loads(described.stdout)

@@ -25,7 +25,19 @@ import pytest
 
 from quantsmind_agent.orchestrator import Orchestrator
 from quantsmind_agent.permissions import ApprovalOutcome
-from quantsmind_agent.tasks import Plan, PlannedStep, RiskLevel, TaskStatus
+from quantsmind_agent.sessions import Checkpoint
+from quantsmind_agent.task_store import TaskStore
+from quantsmind_agent.tasks import (
+    ApprovalRecord,
+    Plan,
+    PlannedStep,
+    RiskLevel,
+    StepStatus,
+    Task,
+    TaskStatus,
+    TraceEvent,
+    TraceKind,
+)
 from tests.fakes import FakeModelProvider, text_response
 from tests.gui.harness import GuiHarness
 
@@ -344,3 +356,95 @@ class TestPlanGenerationUsesStructuredOutput:
 
         assert window.task_orchestrator is None
         assert window.task_panel.run_button.isEnabled() is False
+
+
+def stored_session(store: TaskStore, workspace: Path, task_id: str = "sess1") -> Task:
+    """A stored, interrupted session as a crash would leave it."""
+
+    plan = Plan(
+        objective="update the greeting",
+        steps=(
+            PlannedStep(
+                id="write",
+                description="write it",
+                tool="write_file",
+                arguments={"path": "a.py", "content": "hi\n"},
+            ),
+        ),
+    )
+    task = Task(id=task_id, objective=plan.objective, workspace=str(workspace))
+    task.plan = plan
+    task.move_to(TaskStatus.AWAITING_APPROVAL)
+    task.approval = ApprovalRecord(
+        plan_digest=plan.digest, workspace=str(workspace), approved=True, decided_at=1.0
+    )
+    task.move_to(TaskStatus.APPROVED)
+    task.set_status("write", StepStatus.SUCCEEDED)
+    task.move_to(TaskStatus.RUNNING)
+    task.move_to(TaskStatus.PAUSED)
+    task.record(TraceEvent(TraceKind.STEP, 1.0, "wrote a.py", step_id="write"))
+    task.checkpoints.append(
+        Checkpoint(
+            session_id=task_id, plan_digest=plan.digest, completed_steps=("write",)
+        ).to_dict()
+    )
+    store.save(task)
+    return task
+
+
+class TestWindowIntegration:
+    def test_selecting_history_does_not_start_execution(self, opened: Any) -> None:
+        window = opened.window
+        workspace = opened.context.workspace
+        assert workspace is not None
+        store = TaskStore(window._task_service.store.root)
+        stored_session(store, workspace.root)
+
+        window._on_task_history_selected("sess1")
+
+        assert window._inspecting is not None
+        assert window.task_panel.timeline.toPlainText()
+
+    def test_an_unreadable_record_says_so(self, opened: Any) -> None:
+        window = opened.window
+
+        window._on_task_history_selected("does-not-exist")
+
+        assert "could not be read" in window.task_panel.status.text()
+        assert window._inspecting is None
+
+    def test_a_refused_resume_explains_itself(self, opened: Any) -> None:
+        window = opened.window
+        workspace = opened.context.workspace
+        assert workspace is not None
+        store = TaskStore(window._task_service.store.root)
+        task = stored_session(store, workspace.root)
+        # A step was in flight when the process died: its outcome is unknown, so
+        # continuing is not the application's decision to make.
+        task.set_status("write", StepStatus.RUNNING)
+        assert task.plan is not None
+        task.checkpoints[-1] = Checkpoint(
+            session_id=task.id, plan_digest=task.plan.digest, in_flight_step="write"
+        ).to_dict()
+        store.save(task)
+        window._inspecting = task
+
+        window._on_task_resume()
+
+        assert "cannot continue" in window.task_panel.status.text().lower()
+
+    def test_a_completed_session_is_never_offered_a_resume(self, opened: Any) -> None:
+        window = opened.window
+        workspace = opened.context.workspace
+        assert workspace is not None
+        store = TaskStore(window._task_service.store.root)
+        task = stored_session(store, workspace.root)
+        task.move_to(TaskStatus.APPROVED)
+        task.move_to(TaskStatus.RUNNING)
+        task.move_to(TaskStatus.COMPLETED)
+        store.save(task)
+
+        verdict = window._verdict_for(task)
+
+        assert verdict.resumable is False
+        assert "complete" in verdict.describe()

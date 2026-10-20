@@ -1,0 +1,9 @@
+{
+  "record_type": "release",
+  "version": "0.8.0",
+  "platform": "windows-x64",
+  "artifact": "QuantsMindAgent-0.8.0-x64.msi",
+  "build_status": "pending",
+  "release_status": "pending",
+  "note": "The tagged source release commit carries this record. Artifact size, SHA-256, release commit and publication URLs are completed after the MSI is built and published."
+}

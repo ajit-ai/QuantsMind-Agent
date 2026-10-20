@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QStackedWidget,
@@ -39,6 +40,7 @@ from quantsmind_agent.gui.worker import AgentWorkerBridge
 from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.permissions import ApprovalOutcome
 from quantsmind_agent.services import TaskService
+from quantsmind_agent.sessions import RecoveryVerdict
 from quantsmind_agent.tasks import PlanRejected, TaskStatus
 from quantsmind_agent.version import APP_NAME, __version__
 
@@ -102,6 +104,8 @@ class MainWindow(QMainWindow):
         #: proposal is never an approval: it is shown, and nothing runs until the
         #: user says so.
         self._pending_plan: Any = None
+        #: The stored task being inspected from history, if any. Read-only.
+        self._inspecting: Any = None
         #: Releases the agent-event subscription. ``None`` once released.
         self._unsubscribe_events: Callable[[], None] | None = None
         self._build()
@@ -260,6 +264,7 @@ class MainWindow(QMainWindow):
         panel.cancel_requested.connect(self._on_task_cancel)
         panel.pause_requested.connect(self._on_task_pause)
         panel.history_selected.connect(self._on_task_history_selected)
+        panel.resume_requested.connect(self._on_task_resume)
 
     def _on_view_changed(self, index: int) -> None:
         self._views.setCurrentIndex(index)
@@ -463,25 +468,83 @@ class MainWindow(QMainWindow):
         self.task_panel.set_history(self._task_service.history(), interrupted_ids=interrupted)
 
     def _on_task_history_selected(self, task_id: str) -> None:
-        """Adopt a stored task for inspection, without running it."""
+        """Open a stored task for inspection. Never starts execution.
 
+        Opening history is a read: it shows what happened, and the buttons that
+        could run something are disabled until the user asks for a resume and is
+        told what resuming would do.
+        """
+
+        task = self._task_service.store.load(task_id)
+        if task is None:
+            self._inspecting = None
+            self.task_panel.status.setText("That task's record could not be read.")
+            self.task_panel.set_history_actions()
+            self._refresh_task_history()
+            return
+        self._inspecting = task
+        self.task_panel.show_timeline(task)
+        verdict = self._verdict_for(task)
+        self.task_panel.set_history_actions(
+            verdict=verdict,
+            inspecting_id=task.id,
+            running=bool(self.task_panel.worker_running),
+        )
+        self.show_task_view()
+
+    def _verdict_for(self, task: Any) -> Any:
+        """Whether the selected task may continue, computed against the world now."""
+
+        from quantsmind_agent.sessions import RecoveryDecision
+
+        if task.status is TaskStatus.COMPLETED:
+            return RecoveryVerdict(
+                RecoveryDecision.NOT_RESUMABLE, ("this task is already complete",)
+            )
+        return self._task_service.recovery_verdict(task, self._context.workspace)
+
+    def _on_task_resume(self) -> None:
+        """Resume the inspected task, after an explicit confirmation.
+
+        The confirmation is not ceremony: continuing may re-run an operation whose
+        outcome is unknown, and that is the user's call, not the application's.
+        """
+
+        task = self._inspecting
+        if task is None:
+            return
         workspace = self._context.workspace
         if workspace is None:
             self.task_panel.status.setText("Open the task's project before continuing it.")
             return
-        task = self._task_service.store.load(task_id)
-        if task is None:
-            self.task_panel.status.setText("That task could not be read.")
+        verdict = self._verdict_for(task)
+        if not verdict.resumable:
+            self.task_panel.status.setText(f"This task cannot continue. {verdict.describe()}.")
+            self.task_panel.set_history_actions(verdict=verdict, inspecting_id=task.id)
             return
-        orchestrator = self._task_service.adopt(task, workspace)
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Continue this task?")
+        box.setText(
+            f"{task.objective}\n\n{verdict.describe()}\n\n"
+            "Continuing may run tools again. Nothing runs without your approval."
+        )
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        if box.exec() != QMessageBox.StandardButton.Yes:
+            self.task_panel.status.setText("Not continued.")
+            return
+
+        from quantsmind_agent.services import RecoveryRefused
+
+        try:
+            orchestrator = self._task_service.resume(task, workspace)
+        except RecoveryRefused as exc:
+            self.task_panel.status.setText(f"Cannot continue. {exc.verdict.describe()}.")
+            return
+        self._inspecting = None
         self.task_panel.attach(orchestrator)
-        if task.status is TaskStatus.PAUSED and task.plan is not None:
-            self.task_panel.status.setText(
-                "This task was interrupted and its outcome is unknown. "
-                "Review the steps, then approve again to continue."
-            )
-        else:
-            self.task_panel.refresh()
+        self.task_panel.status.setText(verdict.describe())
 
     def _composer(self) -> QWidget:
         panel = QWidget()

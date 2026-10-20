@@ -31,14 +31,47 @@ from typing import Any
 
 from quantsmind_agent.orchestrator import Orchestrator, TaskEvent
 from quantsmind_agent.recovery import RecoveryReport, analyse_task, renewed_approval
+from quantsmind_agent.sessions import (
+    RecoveryService,
+    RecoveryVerdict,
+    latest_checkpoint,
+)
 from quantsmind_agent.task_policy import TaskPolicy, approval_for_plan
 from quantsmind_agent.task_store import TaskStore, TaskSummary
-from quantsmind_agent.tasks import Plan, StepStatus, Task, TaskStatus, can_transition
+from quantsmind_agent.tasks import (
+    Plan,
+    StepStatus,
+    Task,
+    TaskStatus,
+    TraceEvent,
+    TraceKind,
+    can_transition,
+)
 from quantsmind_agent.workspace import Workspace
 
-__all__ = ["INTERRUPTED_STATUSES", "InterruptedTask", "TaskService", "TaskView"]
+__all__ = [
+    "INTERRUPTED_STATUSES",
+    "InterruptedTask",
+    "RecoveryRefused",
+    "TaskService",
+    "TaskView",
+]
 
 logger = logging.getLogger(__name__)
+
+
+class RecoveryRefused(RuntimeError):
+    """Raised when a resume is asked for and the decision is not "safe".
+
+    Carries the verdict so the interface can explain itself rather than printing
+    a bare refusal: the user needs to know whether to fix something, look at the
+    history, or accept that the work cannot continue.
+    """
+
+    def __init__(self, verdict: RecoveryVerdict) -> None:
+        super().__init__(verdict.describe())
+        self.verdict = verdict
+
 
 #: Statuses meaning "this task was mid-flight when the process went away". A task
 #: in one of these at startup did not finish, and the honest description of its
@@ -287,14 +320,94 @@ class TaskService:
             found.append(InterruptedTask(task=task, report=report))
         return found
 
+    # -- recovery ----------------------------------------------------------
+    def recovery_service(self, workspace: Workspace | None = None) -> RecoveryService:
+        """A recovery decision service bound to the world as it is now.
+
+        Built per call rather than once, because the tools and the open project
+        are exactly the facts that decide the answer, and both can change between
+        one question and the next.
+        """
+
+        registry = self._registry_factory(workspace) if workspace is not None else None
+        names = set(getattr(registry, "names", ()) or ())
+        return RecoveryService(
+            known_tools=frozenset(names),
+            current_workspace=str(workspace.root) if workspace is not None else "",
+        )
+
+    def recovery_verdict(self, task: Task, workspace: Workspace | None = None) -> RecoveryVerdict:
+        """Whether a stored task may continue, and why."""
+
+        return self.recovery_service(workspace).decide(task, checkpoint=latest_checkpoint(task))
+
+    def resume(self, task: Task, workspace: Workspace) -> Orchestrator:
+        """Continue an interrupted task, but only when that has been decided.
+
+        The verdict is recomputed here rather than trusted from the caller: the
+        tools, the workspace or the plan may have changed between asking and doing,
+        and a resume is exactly where an optimistic assumption costs the user a
+        repeated side effect.
+        """
+
+        verdict = self.recovery_verdict(task, workspace)
+        if not verdict.resumable:
+            # A refusal is evidence too. Keep it on the record even though there
+            # is no orchestrator yet, so the next person asking why is not met
+            # with a task that looks as though nobody tried.
+            now = self._clock() if self._clock is not None else (task.updated_at or time.time())
+            task.record(
+                TraceEvent(
+                    TraceKind.RECOVERY,
+                    now,
+                    verdict.describe(),
+                    decision=str(verdict.decision),
+                )
+            )
+            task.updated_at = now
+            self._store.save(task)
+            raise RecoveryRefused(verdict)
+
+        orchestrator = self.adopt(task, workspace)
+        # A crash can leave the record claiming it is still running. Move it
+        # through the legal stopped state before approving it again, so the
+        # timeline shows that the interruption happened instead of pretending it
+        # did not. A task already at a stopped or approved boundary is left as it
+        # is, because moving it would invent an event.
+        if task.status is TaskStatus.RUNNING:
+            task.move_to(TaskStatus.PAUSED, detail="the session was interrupted")
+        if task.status is TaskStatus.PAUSED:
+            task.move_to(
+                TaskStatus.APPROVED
+                if task.approved_plan is not None
+                else TaskStatus.AWAITING_APPROVAL,
+                detail="continuing from a checkpoint",
+            )
+        orchestrator.emit(
+            "resumed_after_review" if task.approval is not None else "resumed",
+            verdict.describe(),
+            decision=str(verdict.decision),
+        )
+        orchestrator.persist()
+        return orchestrator
+
     def adopt(self, task: Task, workspace: Workspace) -> Orchestrator:
         """Bring a stored task back under management, *without* resuming it.
 
         Adopting is not resuming: the caller gets an orchestrator to inspect and
         decide about. Execution continues only through the approval path, which an
         interrupted task has not been given.
+
+        Adopting a task that is already under management returns the manager that
+        is already there. Building a second one would leave two objects driving
+        the same record -- which is how a resume starts an execution nobody
+        intended.
         """
 
+        existing = self._orchestrator
+        if existing is not None and existing.task.id == task.id:
+            existing.task = task
+            return existing
         orchestrator = self._build(task, workspace)
         self._orchestrator = orchestrator
         return orchestrator

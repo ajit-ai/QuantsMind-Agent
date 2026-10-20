@@ -163,8 +163,8 @@ jobs:
 
       # Read the version from the built wheel rather than importing the package:
       # this job installs only `build`, not the project itself.
-      - name: Verify the wheel reports version 0.7.0
-        run: python scripts/verify_version.py dist/quantsmind_agent-0.7.0-py3-none-any.whl
+      - name: Verify the wheel reports version 0.8.0
+        run: python scripts/verify_version.py dist/quantsmind_agent-0.8.0-py3-none-any.whl
 
       - name: Verify the wheel installs and imports
         run: |
