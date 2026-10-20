@@ -20,7 +20,10 @@ The tag was not moved when this artifact metadata was added.
 | Installer scope | per-user, no elevation |
 | Code signed | no |
 | Build status | built and verified |
-| Release status | pending publication |
+| Release status | published |
+| Released | 2026-10-20 |
+| Release | https://github.com/ajit-ai/QuantsMind-Agent/releases/tag/v0.9.0 |
+| MSI asset | https://github.com/ajit-ai/QuantsMind-Agent/releases/download/v0.9.0/QuantsMindAgent-0.9.0-x64.msi |
 
 ## Build
 
@@ -41,12 +44,13 @@ Performed against the artifact recorded here:
   reinstall without duplication, uninstall, and the real user profile left
   byte-identical;
 - desktop GUI acceptance: 8/8 passed;
-- installed window title: `QuantsMind-Agent 0.9.0`.
+- installed window title: `QuantsMind-Agent 0.9.0`;
+- published asset: downloaded from GitHub and matched the recorded byte size and
+  SHA-256; GitHub reports the same digest.
 
 The installer is unsigned, so Windows SmartScreen will warn on first run.
 
 ## Publication
 
-The GitHub Release and asset URLs are recorded after publication. The MSI remains
-a GitHub Release asset; it is not committed to Git. See `checksums.sha256` for the
-artifact line in `sha256sum -c` format.
+The MSI is a GitHub Release asset; it is not committed to Git. See
+`checksums.sha256` for the artifact line in `sha256sum -c` format.
