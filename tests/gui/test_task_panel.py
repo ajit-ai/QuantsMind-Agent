@@ -21,7 +21,7 @@ from typing import Any, ClassVar
 import pytest
 from PySide6.QtWidgets import QPushButton
 
-from quantsmind_agent.gui.task_panel import TaskPanel
+from quantsmind_agent.gui.task_panel import TaskPanel, WorkspaceScanBridge
 from quantsmind_agent.orchestrator import Orchestrator
 from quantsmind_agent.task_policy import TaskPolicy, approval_for_plan
 from quantsmind_agent.tasks import Plan, PlannedStep, RiskLevel, Task, TaskStatus
@@ -157,6 +157,81 @@ class TestPanelControlsReflectState:
         assert panel.pause_button.isEnabled() is False
         assert panel.cancel_button.isEnabled() is False
         panel.shutdown()
+
+
+class TestProjectSummary:
+    def test_the_panel_shows_the_bounded_project_facts(self, qapp: object) -> None:
+        from quantsmind_agent.verification import Check
+        from quantsmind_agent.workspace_intel import WorkspaceSnapshot
+
+        panel = TaskPanel()
+        snapshot = WorkspaceSnapshot(
+            workspace="C:/projects/acme",
+            project_kind="python-package",
+            file_count=12,
+            ecosystems=("python",),
+            manifests=("pyproject.toml",),
+            checks=(Check(id="pytest", argv=("python", "-m", "pytest")),),
+        )
+
+        panel.show_workspace(snapshot)
+
+        summary = panel.project_summary.text()
+        assert "acme" in summary
+        assert "python-package" in summary
+        assert "12 file(s)" in summary
+        assert "pytest" in summary
+        assert panel.workspace_snapshot is snapshot
+        panel.shutdown()
+
+    def test_closing_the_project_clears_the_summary(self, qapp: object) -> None:
+        from quantsmind_agent.workspace_intel import WorkspaceSnapshot
+
+        panel = TaskPanel()
+        panel.show_workspace(WorkspaceSnapshot(workspace="C:/projects/acme"))
+
+        panel.show_workspace(None)
+
+        assert panel.project_summary.text() == "No project open."
+        assert panel.workspace_snapshot is None
+        panel.shutdown()
+
+    def test_refresh_is_requested_rather_than_run_in_the_widget(self, qapp: object) -> None:
+        panel = TaskPanel()
+        requested: list[bool] = []
+        panel.workspace_refresh_requested.connect(lambda: requested.append(True))
+
+        panel.project_refresh.click()
+
+        assert requested == [True]
+        panel.shutdown()
+
+    def test_a_refresh_runs_on_the_scan_thread(self, qapp: object) -> None:
+        from quantsmind_agent.workspace_intel import WorkspaceSnapshot
+
+        class StubIntelligence:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def refresh_snapshot(self) -> WorkspaceSnapshot:
+                self.calls += 1
+                return WorkspaceSnapshot(workspace="C:/projects/acme", file_count=1)
+
+        intelligence = StubIntelligence()
+        bridge = WorkspaceScanBridge(intelligence)
+        results: list[WorkspaceSnapshot] = []
+        bridge.finished.connect(results.append)
+        bridge.start()
+
+        deadline = time.monotonic() + 5
+        while not results and time.monotonic() < deadline:
+            qapp.processEvents()  # type: ignore[attr-defined]
+            time.sleep(0.01)
+        qapp.processEvents()  # type: ignore[attr-defined]
+
+        assert intelligence.calls == 1
+        assert results and results[0].file_count == 1
+        bridge.shutdown()
 
 
 def test_placeholder_removed() -> None:

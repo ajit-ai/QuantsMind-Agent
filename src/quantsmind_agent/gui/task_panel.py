@@ -37,9 +37,78 @@ from PySide6.QtWidgets import (
 from quantsmind_agent.orchestrator import AdvanceResult, Orchestrator, TaskEvent
 from quantsmind_agent.tasks import Plan, StepStatus, TaskStatus
 
-__all__ = ["TaskPanel", "TaskWorker", "TaskWorkerBridge"]
+__all__ = [
+    "TaskPanel",
+    "TaskWorker",
+    "TaskWorkerBridge",
+    "WorkspaceScanBridge",
+    "WorkspaceScanWorker",
+]
 
 logger = logging.getLogger(__name__)
+
+
+class WorkspaceScanWorker(QObject):
+    """Rebuilds a workspace snapshot away from the GUI thread.
+
+    Discovery reads the filesystem. It is bounded, but a monorepo is still a
+    monorepo: doing this in a click handler would freeze the window for as long
+    as the walk takes.
+    """
+
+    finished = Signal(object)  # WorkspaceSnapshot
+    failed = Signal(str)
+
+    def __init__(self, intelligence: Any) -> None:
+        super().__init__()
+        self._intelligence = intelligence
+
+    def run(self) -> None:
+        try:
+            snapshot = self._intelligence.refresh_snapshot()
+        except Exception as exc:  # discovery failure is a result, not a crash
+            logger.exception("workspace scan failed")
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(snapshot)
+
+
+class WorkspaceScanBridge(QObject):
+    """Owns the scan thread and re-exposes its result to the window."""
+
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, intelligence: Any) -> None:
+        super().__init__()
+        self._thread = QThread()
+        self._worker = WorkspaceScanWorker(intelligence)
+        self._worker.moveToThread(self._thread)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.started.connect(self._worker.run)
+
+    @property
+    def running(self) -> bool:
+        return self._thread.isRunning()
+
+    def start(self) -> None:
+        if self._thread.isRunning():
+            return
+        self._thread.start()
+
+    def shutdown(self, wait_ms: int = 10000) -> None:
+        if self._thread.isRunning():
+            self._thread.quit()
+            self._thread.wait(wait_ms)
+
+    def _on_finished(self, snapshot: Any) -> None:
+        self.finished.emit(snapshot)
+
+    def _on_failed(self, message: str) -> None:
+        self.failed.emit(message)
 
 
 class TaskWorker(QObject):
@@ -161,11 +230,14 @@ class TaskPanel(QWidget):
     history_selected = Signal(str)
     #: The user asked to continue an inspected session.
     resume_requested = Signal()
+    #: The user asked for the project summary to be rebuilt from disk.
+    workspace_refresh_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._orchestrator: Orchestrator | None = None
         self._bridge: TaskWorkerBridge | None = None
+        self._workspace_snapshot: Any = None
         self._build()
 
     def _build(self) -> None:
@@ -176,6 +248,24 @@ class TaskPanel(QWidget):
         title = QLabel("Task")
         title.setStyleSheet("font-weight:600;")
         layout.addWidget(title)
+
+        # The project summary belongs here rather than in a third top-level tab:
+        # planning is project-aware, and the facts a plan is made against should
+        # be visible beside the plan without becoming a separate application.
+        project_box = QGroupBox("Project")
+        project_layout = QVBoxLayout(project_box)
+        project_layout.setContentsMargins(8, 6, 8, 6)
+        self.project_summary = QLabel("No project open.")
+        self.project_summary.setWordWrap(True)
+        self.project_summary.setStyleSheet("color:#4a5260;font-size:11px;")
+        project_layout.addWidget(self.project_summary)
+        project_row = QHBoxLayout()
+        self.project_refresh = QPushButton("Refresh project")
+        self.project_refresh.clicked.connect(self.workspace_refresh_requested.emit)
+        project_row.addWidget(self.project_refresh)
+        project_row.addStretch(1)
+        project_layout.addLayout(project_row)
+        layout.addWidget(project_box)
 
         self.objective = QLineEdit()
         self.objective.setPlaceholderText("One bounded change, e.g. fix the failing cart test")
@@ -264,6 +354,30 @@ class TaskPanel(QWidget):
         """Whether a worker thread is currently executing this task."""
 
         return bool(self._bridge is not None and self._bridge.running)
+
+    def show_workspace(self, snapshot: Any) -> None:
+        """Show the bounded project facts the next plan will be made against."""
+
+        self._workspace_snapshot = snapshot
+        if snapshot is None:
+            self.project_summary.setText("No project open.")
+            return
+        lines = [snapshot.summary()]
+        if getattr(snapshot, "ecosystems", ()):
+            lines.append("Ecosystems: " + ", ".join(snapshot.ecosystems))
+        if getattr(snapshot, "manifests", ()):
+            lines.append("Manifests: " + ", ".join(snapshot.manifests[:4]))
+        if getattr(snapshot, "checks", ()):
+            lines.append("Checks: " + ", ".join(snapshot.check_ids[:6]))
+        if not getattr(snapshot, "complete", True):
+            lines.append("Summary is partial; Refresh to rebuild it.")
+        self.project_summary.setText("\n".join(lines))
+
+    @property
+    def workspace_snapshot(self) -> Any:
+        """The snapshot currently displayed, or ``None``."""
+
+        return self._workspace_snapshot
 
     def show_timeline(self, task: Any) -> None:
         """Render a stored task's plan, checkpoints and trace as one timeline.
@@ -387,6 +501,11 @@ class TaskPanel(QWidget):
             "status": self.status.text(),
             "task_attached": self._orchestrator is not None,
             "worker_running": self._bridge is not None and self._bridge.running,
+            "project": {
+                "summary": self.project_summary.text(),
+                "has_snapshot": self._workspace_snapshot is not None,
+                "refresh_enabled": self.project_refresh.isEnabled(),
+            },
         }
 
     def attach(self, orchestrator: Orchestrator | None) -> None:

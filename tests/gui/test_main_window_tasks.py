@@ -141,6 +141,44 @@ class TestTheTaskWorkflowIsReachable:
         assert window.task_panel.run_button.isEnabled() is True
 
 
+class TestProjectEvidenceReachesTheTask:
+    def test_the_snapshot_the_plan_was_offered_with_is_recorded(self, opened: GuiHarness) -> None:
+        from quantsmind_agent.workspace_intel import WorkspaceSnapshot
+
+        window = opened.window
+        snapshot = WorkspaceSnapshot(
+            workspace=workspace_root(opened),
+            project_kind="python-package",
+            file_count=7,
+            digest="digest-from-the-plan",
+        )
+
+        window.submit_task_plan(read_plan(), snapshot=snapshot)
+        window._on_task_approval(True)
+
+        orchestrator = window.task_orchestrator
+        assert orchestrator is not None
+        task = orchestrator.task
+        assert task.workspace_snapshot is not None
+        assert task.workspace_snapshot["digest"] == "digest-from-the-plan"
+        assert task.workspace_snapshot["project_kind"] == "python-package"
+        assert window._pending_snapshot is None
+
+    def test_a_scan_from_the_previous_project_is_ignored(self, opened: GuiHarness) -> None:
+        from quantsmind_agent.workspace_intel import WorkspaceSnapshot
+
+        window = opened.window
+        window.task_panel.show_workspace(None)
+        window._pending_snapshot = None
+
+        window._on_workspace_scan_finished(
+            WorkspaceSnapshot(workspace="C:/somewhere/else", file_count=99)
+        )
+
+        assert window.task_panel.workspace_snapshot is None
+        assert window._pending_snapshot is None
+
+
 class TestApprovalIsAHardGate:
     def test_nothing_runs_when_the_approval_is_missing(
         self, qapp: object, opened: GuiHarness

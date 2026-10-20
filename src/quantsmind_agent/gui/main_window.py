@@ -35,7 +35,7 @@ from quantsmind_agent.gui.approval import ApprovalBridge, ApprovalDialog
 from quantsmind_agent.gui.conversation import ConversationView
 from quantsmind_agent.gui.settings_dialog import SettingsDialog
 from quantsmind_agent.gui.sidebar import Sidebar
-from quantsmind_agent.gui.task_panel import TaskPanel
+from quantsmind_agent.gui.task_panel import TaskPanel, WorkspaceScanBridge
 from quantsmind_agent.gui.worker import AgentWorkerBridge
 from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.permissions import ApprovalOutcome
@@ -91,6 +91,11 @@ class MainWindow(QMainWindow):
         #: which made every security decision in the product a line of widget code.
         #: Holds the current plan-proposal thread so it can be joined on close.
         self._plan_thread: threading.Thread | None = None
+        #: The bounded snapshot the pending plan was proposed against. Carried
+        #: to the task record so the evidence and the plan cannot disagree.
+        self._pending_snapshot: Any = None
+        #: The one background workspace scan, when one is running.
+        self._workspace_bridge: WorkspaceScanBridge | None = None
         self._task_service = TaskService(
             data_dir=context.paths.data_dir,
             # Resolved per call rather than captured: the application rebuilds its
@@ -265,6 +270,7 @@ class MainWindow(QMainWindow):
         panel.pause_requested.connect(self._on_task_pause)
         panel.history_selected.connect(self._on_task_history_selected)
         panel.resume_requested.connect(self._on_task_resume)
+        panel.workspace_refresh_requested.connect(self._on_workspace_refresh_requested)
 
     def _on_view_changed(self, index: int) -> None:
         self._views.setCurrentIndex(index)
@@ -331,16 +337,21 @@ class MainWindow(QMainWindow):
 
         def ask() -> None:
             try:
-                proposal = self._planner().propose(text)
+                # Discovery runs here, on the planning thread, and its bounded
+                # rendering travels with the request. The GUI never walks the
+                # project to draw a plan.
+                snapshot = self._context.workspace_snapshot()
+                project_context = snapshot.format_for_prompt() if snapshot is not None else ""
+                proposal = self._planner(project_context=project_context).propose(text)
             except Exception as exc:  # a planner that raises is still just a failure
                 self._proposal_failed(str(exc))
                 return
-            self._proposal_ready(proposal)
+            self._proposal_ready(proposal, snapshot)
 
         self._plan_thread = threading.Thread(target=ask, name="plan-proposal", daemon=True)
         self._plan_thread.start()
 
-    def _planner(self) -> Any:
+    def _planner(self, *, project_context: str = "") -> Any:
         """A planner bound to the live gateway, workspace and tool set."""
 
         from quantsmind_agent.planner import TaskPlanner
@@ -350,16 +361,17 @@ class MainWindow(QMainWindow):
             gateway=self._context.gateway,
             known_tools=frozenset(self._context.tools.names),
             workspace=str(workspace.root) if workspace is not None else "",
+            project_context=project_context,
             model=self._context.config_manager.config.provider.model,
         )
 
-    def _proposal_ready(self, proposal: Any) -> None:
+    def _proposal_ready(self, proposal: Any, snapshot: Any = None) -> None:
         """Called with whatever the model produced."""
 
         if not proposal.ok:
             self._proposal_failed("; ".join(proposal.problems[:3]))
             return
-        self.submit_task_plan(proposal.plan)
+        self.submit_task_plan(proposal.plan, snapshot=snapshot)
 
     def _proposal_failed(self, reason: str) -> None:
         self.task_panel.status.setText(f"No usable plan: {reason}")
@@ -372,10 +384,11 @@ class MainWindow(QMainWindow):
         if checked is not None:
             checked.setChecked(True)
 
-    def submit_task_plan(self, plan: Any) -> None:
+    def submit_task_plan(self, plan: Any, *, snapshot: Any = None) -> None:
         """Offer a proposed plan for review. Never approves it."""
 
         self._pending_plan = plan
+        self._pending_snapshot = snapshot
         self.show_task_view()
         self.task_panel.show_plan(plan)
         self.task_panel.status.setText("Plan ready for review. Nothing runs until you approve it.")
@@ -389,14 +402,22 @@ class MainWindow(QMainWindow):
         if workspace is None:
             self.task_panel.status.setText("Open a project before running a task.")
             return
+        snapshot = self._pending_snapshot
+        if snapshot is None:
+            # An externally submitted plan has no snapshot of its own. Reuse
+            # whatever the background scan already built; never walk the
+            # filesystem here, on the GUI thread.
+            intelligence = self._context.workspace_intel
+            snapshot = intelligence.cached_snapshot if intelligence is not None else None
         try:
-            orchestrator = self._task_service.propose(plan, workspace)
+            orchestrator = self._task_service.propose(plan, workspace, snapshot=snapshot)
             orchestrator = self._task_service.decide(approved)
         except PlanRejected as exc:
             self.task_panel.status.setText(f"That decision was refused: {exc}")
             return
         self.task_panel.attach(orchestrator)
         self._pending_plan = None
+        self._pending_snapshot = None
         self._show_interrupted_if_any()
 
     def _on_task_run(self) -> None:
@@ -432,6 +453,7 @@ class MainWindow(QMainWindow):
         """Stop any running task worker and detach the panel."""
 
         self._pending_plan = None
+        self._pending_snapshot = None
         self.task_panel.shutdown()
         self.task_panel.attach(None)
         self._task_service.release()
@@ -647,7 +669,67 @@ class MainWindow(QMainWindow):
         self.sidebar.set_status(self._status_text())
         self._status_model.setText(f"{provider.model} @ {provider.base_url}")
         self._status_workspace.setText(str(workspace.root) if workspace else "No project open")
+        self._refresh_workspace_summary()
         self._update_session_counts()
+
+    def _refresh_workspace_summary(self) -> None:
+        """Paint whatever project facts are already known; never scan here."""
+
+        workspace = self._context.workspace
+        if workspace is None:
+            self.task_panel.show_workspace(None)
+            return
+        intelligence = self._context.workspace_intel
+        snapshot = intelligence.cached_snapshot if intelligence is not None else None
+        self.task_panel.show_workspace(snapshot)
+        if snapshot is None:
+            self.task_panel.project_summary.setText(
+                f"{workspace.root.name or str(workspace.root)} is open. "
+                "Refresh project to summarise it."
+            )
+
+    def _on_workspace_refresh_requested(self) -> None:
+        self._start_workspace_scan()
+
+    def _stop_workspace_scan(self) -> None:
+        """Stop the background scan, if any, and detach its result."""
+
+        bridge = self._workspace_bridge
+        self._workspace_bridge = None
+        if bridge is not None:
+            bridge.shutdown()
+
+    def _start_workspace_scan(self) -> None:
+        """Rebuild the snapshot on a worker thread, never in a click handler."""
+
+        intelligence = self._context.workspace_intel
+        if intelligence is None:
+            self.task_panel.project_summary.setText("Open a project first.")
+            return
+        if self._workspace_bridge is not None and self._workspace_bridge.running:
+            return
+        self._stop_workspace_scan()
+        self.task_panel.project_summary.setText("Scanning project…")
+        bridge = WorkspaceScanBridge(intelligence)
+        bridge.finished.connect(self._on_workspace_scan_finished)
+        bridge.failed.connect(self._on_workspace_scan_failed)
+        self._workspace_bridge = bridge
+        bridge.start()
+
+    def _on_workspace_scan_finished(self, snapshot: Any) -> None:
+        workspace = self._context.workspace
+        if workspace is None or str(snapshot.workspace) != str(workspace.root):
+            # The user changed projects while the scan was running. The facts
+            # belong to the old one, so they must not be shown or carried into
+            # the next plan.
+            return
+        self.task_panel.show_workspace(snapshot)
+        self._pending_snapshot = snapshot
+
+    def _on_workspace_scan_failed(self, message: str) -> None:
+        if self._context.workspace is None:
+            return
+        self.task_panel.project_summary.setText(f"Project scan failed: {message}")
 
     # -- workspace ---------------------------------------------------------
     def _on_open_workspace(self, directory: str | None = None) -> None:
@@ -660,6 +742,7 @@ class MainWindow(QMainWindow):
         chosen = directory or self.sidebar.chosen_directory
         if not chosen:
             return
+        self._stop_workspace_scan()
         try:
             self._context.open_workspace(chosen)
         except QuantsMindError as exc:
@@ -669,8 +752,11 @@ class MainWindow(QMainWindow):
         self.sidebar.set_error("")
         self.conversation.append_notice(f"Project opened: {chosen}")
         self._refresh_from_context()
+        self._start_workspace_scan()
 
     def _on_close_workspace(self) -> None:
+        self._stop_workspace_scan()
+        self._pending_snapshot = None
         self._context.close_workspace()
         self.conversation.append_notice("Project closed.")
         self._refresh_from_context()
@@ -1125,6 +1211,7 @@ class MainWindow(QMainWindow):
         # A task is stopped, not merely hidden: the window closing is the end of
         # the work, and the record must say so.
         self._release_task()
+        self._stop_workspace_scan()
         # Then stop consuming events and the timer that drains them, so a closed
         # window neither keeps a 50ms timer alive nor keeps mutating its own
         # widgets on the agent's thread boundary.
