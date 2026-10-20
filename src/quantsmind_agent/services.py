@@ -225,12 +225,18 @@ class TaskService:
         return TaskView.of(self._orchestrator.task, interrupted=interrupted)
 
     # -- planning ----------------------------------------------------------
-    def propose(self, plan: Plan, workspace: Workspace) -> Orchestrator:
+    def propose(
+        self, plan: Plan, workspace: Workspace, *, snapshot: Any | None = None
+    ) -> Orchestrator:
         """Validate a plan, attach it to a task, and wait for approval.
 
         Planning happens in the conversation; this is the single door a validated
         plan comes through, so there is one path from "the model proposed this" to
         "the user may approve this".
+
+        ``snapshot`` is the bounded workspace description the plan was proposed
+        against, when one is available. It becomes part of the task's evidence;
+        it never becomes part of its authorisation.
         """
 
         task = Task(
@@ -238,6 +244,11 @@ class TaskService:
             objective=plan.objective,
             workspace=str(workspace.root),
         )
+        if snapshot is not None:
+            if hasattr(snapshot, "to_dict"):
+                task.workspace_snapshot = dict(snapshot.to_dict())
+            elif isinstance(snapshot, dict):
+                task.workspace_snapshot = dict(snapshot)
         orchestrator = self._build(task, workspace)
         orchestrator.submit_plan(plan)
         self._orchestrator = orchestrator

@@ -267,6 +267,19 @@ class Orchestrator:
         for step in validated.steps:
             self.task.step_status.setdefault(step.id, StepStatus.PENDING)
         self.emit("plan_ready", validated.objective, steps=len(validated.steps))
+        snapshot = self.task.workspace_snapshot
+        if isinstance(snapshot, dict) and snapshot:
+            # Record what the plan was proposed against. This is evidence, not an
+            # authorisation: changing the workspace afterwards is normal, and a
+            # digest mismatch must not block a resume.
+            self.emit(
+                "workspace",
+                f"planned against a {snapshot.get('project_kind', 'unknown')} workspace",
+                project_kind=str(snapshot.get("project_kind", ""))[:40],
+                workspace_digest=str(snapshot.get("digest", ""))[:32],
+                files=int(snapshot.get("file_count", 0) or 0),
+                truncated=bool(snapshot.get("truncated", False)),
+            )
         self.persist()
         return validated
 
@@ -320,12 +333,16 @@ class Orchestrator:
             return
         self.task.checkpoints.append(mark.to_dict())
         del self.task.checkpoints[:-MAX_CHECKPOINTS]
+        snapshot = self.task.workspace_snapshot
+        fields: dict[str, Any] = {"completed": len(mark.completed_steps)}
+        if isinstance(snapshot, dict) and snapshot.get("digest"):
+            fields["workspace_digest"] = str(snapshot.get("digest"))[:32]
         self.task.record(
             TraceEvent(
                 TraceKind.CHECKPOINT,
                 mark.at,
                 mark.describe(),
-                completed=len(mark.completed_steps),
+                **fields,
             )
         )
         self.persist()
@@ -643,6 +660,27 @@ class Orchestrator:
             return VerificationOutcome.INCONCLUSIVE
 
         checks = discover_checks(Path(self.task.workspace))
+        if not checks and not self.task.checks:
+            # A project with no declared checks has not passed anything. Record
+            # that absence explicitly instead of leaving an empty result list
+            # that reads like "no problems found".
+            self.task.move_to(TaskStatus.VERIFYING)
+            missing = CheckResult(
+                check_id="project-checks",
+                status=CheckStatus.NOT_CONFIGURED,
+                detail="this project declares no checks to verify",
+            )
+            self.task.checks.append(missing)
+            self.emit("check_finished", "project-checks: not_configured")
+            self.persist()
+            self._record_verification(
+                VerificationOutcome.INCONCLUSIVE,
+                reasons=("this project declares no checks to verify",),
+                check_ids=(missing.check_id,),
+                criteria=len(self.task.plan.acceptance_criteria) if self.task.plan else 0,
+                verified=0,
+            )
+            return VerificationOutcome.INCONCLUSIVE
         results = self.verify(checks, timeout_seconds=timeout_seconds)
         outcome, reasons = self._verification_verdict(results)
         self._record_verification(

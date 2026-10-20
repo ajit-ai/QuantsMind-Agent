@@ -50,11 +50,11 @@ from quantsmind_agent.permissions import (
     PermissionRule,
     StaticPermissionProvider,
 )
-from quantsmind_agent.project_intel import ProjectIntelligence
 from quantsmind_agent.providers import build_provider
 from quantsmind_agent.session import Session
 from quantsmind_agent.tools import ToolRegistry
 from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.workspace_intel import WorkspaceIntelligence, WorkspaceSnapshot
 from quantsmind_agent.workspace_tools import build_default_tools
 from quantsmind_agent.write_tools import build_mutating_tools, build_undo_tool
 
@@ -100,11 +100,12 @@ class ApplicationContext:
         self._cancel = threading.Event()
         #: Durable conversation storage; ``None`` when persistence is switched off.
         self.conversations: ConversationStore | None = None
-        #: Project-scoped discovery and symbol/import map. Owned here rather than by
-        #: a tool because the tools are rebuilt on every workspace or settings
-        #: change, which is exactly when a cache would be thrown away. Session-scoped
-        #: and deliberately not persisted: it is a claim about files on disk.
-        self.project_intel: ProjectIntelligence | None = None
+        #: Project-scoped discovery, symbol/import map and bounded workspace
+        #: snapshot. Owned here rather than by a tool because the tools are
+        #: rebuilt on every workspace or settings change, which is exactly when a
+        #: cache would be thrown away. Session-scoped and deliberately not
+        #: persisted: it is a claim about files on disk.
+        self.project_intel: WorkspaceIntelligence | None = None
         #: Per-conversation storage bounds, rebuilt with the store.
         self._storage_limits = StorageLimits()
         #: Title of the conversation in progress, derived from the first request.
@@ -432,17 +433,47 @@ class ApplicationContext:
         return ProviderRouter(candidates, policy=RoutingPolicy(max_attempts=routing.max_attempts))
 
     # -- workspace ---------------------------------------------------------
+    @property
+    def workspace_intel(self) -> WorkspaceIntelligence | None:
+        """The active workspace intelligence, when a project is open.
+
+        Named separately from :attr:`project_intel` because it *is* a project
+        intelligence with a snapshot attached; the old name remains the shared
+        type the navigation tools consume.
+        """
+
+        return self.project_intel
+
+    def workspace_snapshot(self, *, refresh: bool = False) -> WorkspaceSnapshot | None:
+        """The bounded workspace facts a plan should be proposed against.
+
+        Discovery is synchronous and bounded; callers that run on a GUI thread
+        should use it sparingly or from a worker. A missing workspace is ``None``
+        rather than an invented empty snapshot.
+        """
+
+        intel = self.project_intel
+        if intel is None:
+            return None
+        return intel.refresh_snapshot() if refresh else intel.snapshot
+
     def _restore_workspace(self) -> None:
         last = self.config_manager.config.last_workspace
         if not last:
             return
         try:
-            self.workspace = Workspace(last)
+            workspace = Workspace(last)
         except QuantsMindError as exc:
             logger.info("Could not reopen the last workspace: %s", exc.message)
             return
-        self.session.set_workspace(self.workspace)
-        self.context_engine.set_workspace(self.workspace)
+        self.workspace = workspace
+        # Restoring a project has to build the same intelligence that opening one
+        # does. Without this the reopened window had an agent with no project
+        # context until the user reopened the folder by hand.
+        self.project_intel = WorkspaceIntelligence(workspace)
+        self.context_engine.set_project_intel(self.project_intel)
+        self.session.set_workspace(workspace)
+        self.context_engine.set_workspace(workspace)
         self._rebuild()
 
     def open_workspace(self, path: str | Path) -> Workspace:
@@ -452,7 +483,7 @@ class ApplicationContext:
         # A different project is a different question, so this is a new instance
         # rather than a reset: nothing from the previous project can leak into the
         # new one's answers.
-        self.project_intel = ProjectIntelligence(workspace)
+        self.project_intel = WorkspaceIntelligence(workspace)
         self.context_engine.set_project_intel(self.project_intel)
         self.workspace = workspace
         self.session.set_workspace(workspace)

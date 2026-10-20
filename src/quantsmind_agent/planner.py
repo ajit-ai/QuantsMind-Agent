@@ -162,6 +162,10 @@ class TaskPlanner:
     gateway: ModelGateway
     known_tools: frozenset[str] = field(default_factory=frozenset)
     workspace: str = ""
+    #: A bounded description of the project this plan is for. Supplied by
+    #: :class:`~quantsmind_agent.workspace_intel.WorkspaceIntelligence`; kept as
+    #: text so the planner does not own a second discovery cache.
+    project_context: str = ""
     #: The configured model to ask. Required: a request without one is refused by
     #: the endpoint, and a planner that hides that behind a generic failure is
     #: making the cause harder to find.
@@ -191,11 +195,17 @@ class TaskPlanner:
         # refusing it was correct, but the better fix is to tell it what it has.
         tools = ", ".join(sorted(self.known_tools)) or "(none)"
         instructions = f"{_INSTRUCTIONS}\nTools you may use: {tools}"
-        prompt = UserMessage(content=f"{instructions}\n\nObjective: {text}")
+        sections = [instructions]
+        # Project facts change where a plan should look first: a src layout, a
+        # declared test root, a Node package. They are bounded and contain no
+        # absolute paths; the snapshot is responsible for that guarantee.
+        project_context = self.project_context.strip()
+        if project_context:
+            sections.append("Project context:\n" + project_context[:4_000])
         if conversation.strip():
-            prompt = UserMessage(
-                content=f"{instructions}\n\nContext:\n{conversation}\n\nObjective: {text}"
-            )
+            sections.append("Context:\n" + conversation)
+        sections.append(f"Objective: {text}")
+        prompt = UserMessage(content="\n\n".join(sections))
         request = ChatRequest(
             messages=[prompt],
             model=self.model,

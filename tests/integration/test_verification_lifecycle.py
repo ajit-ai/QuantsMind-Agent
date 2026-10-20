@@ -221,6 +221,7 @@ class TestVerificationGatesCompletion:
         record = orchestrator.task.verification
         assert record is not None
         assert "declares no checks" in record.reasons[0]
+        assert orchestrator.task.checks[-1].status is CheckStatus.NOT_CONFIGURED
 
 
 class TestVerificationIsGatedLikeExecution:

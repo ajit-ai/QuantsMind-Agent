@@ -197,6 +197,23 @@ class TestTheIndexFollowsTheAgentsOwnWrites:
 
         assert any(item["qualified"] == "average" for item in data["symbols"])
 
+    def test_an_edit_invalidates_the_workspace_snapshot(self, app_paths: Any, shop: Path) -> None:
+        context = _context(app_paths, shop)
+        assert context.workspace_snapshot() is not None
+        assert context.workspace_intel is not None
+        assert context.workspace_intel.cached_snapshot is not None
+
+        context.tools.execute(
+            "edit_file",
+            {
+                "path": "src/shop/cart.py",
+                "operation": "append",
+                "new_text": "def average(items):\n    return total(items) / len(items)\n",
+            },
+        )
+
+        assert context.workspace_intel.cached_snapshot is None
+
     def test_a_created_file_is_visible_to_the_context_tool(
         self, app_paths: Any, shop: Path
     ) -> None:
@@ -266,6 +283,41 @@ class TestTheIndexFollowsTheAgentsOwnWrites:
         # The intelligence layer must not cost the existing guarantees.
         assert data["undoable"] is True
         assert "diff" in data
+
+
+class TestApplicationWorkspaceSnapshot:
+    def test_the_snapshot_is_cached_between_calls(self, app_paths: Any, shop: Path) -> None:
+        context = _context(app_paths, shop)
+
+        first = context.workspace_snapshot()
+
+        assert first is not None
+        assert first.file_count > 0
+        assert context.workspace_snapshot() is first
+
+    def test_a_refresh_sees_files_created_since_the_last_snapshot(
+        self, app_paths: Any, shop: Path
+    ) -> None:
+        context = _context(app_paths, shop)
+        first = context.workspace_snapshot()
+        assert first is not None
+
+        (shop / "src" / "shop" / "extra.py").write_text("VALUE = 1\n", encoding="utf-8")
+        refreshed = context.workspace_snapshot(refresh=True)
+
+        assert refreshed is not None
+        assert refreshed.file_count > first.file_count
+
+    def test_restoring_the_last_workspace_builds_intelligence(
+        self, app_paths: Any, shop: Path
+    ) -> None:
+        _context(app_paths, shop)
+
+        restored = _context(app_paths)
+
+        assert restored.workspace is not None
+        assert restored.workspace_intel is not None
+        assert restored.workspace_snapshot() is not None
 
 
 class TestACodingWorkflowEndToEnd:

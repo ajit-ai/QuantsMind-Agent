@@ -167,6 +167,14 @@ def checkpoint_for(task: Task, *, at: float = 0.0) -> Checkpoint:
     in_flight = tuple(
         step_id for step_id, status in task.step_status.items() if status is StepStatus.RUNNING
     )
+    notes: dict[str, Any] = {}
+    snapshot = getattr(task, "workspace_snapshot", None)
+    if isinstance(snapshot, dict) and snapshot.get("digest"):
+        # Scalar validation facts, not a copy of the snapshot: a checkpoint is a
+        # boundary, and the full inventory already lives on the task record.
+        notes["workspace_digest"] = str(snapshot.get("digest"))[:32]
+        notes["workspace_kind"] = str(snapshot.get("project_kind", ""))[:40]
+        notes["workspace_files"] = int(snapshot.get("file_count", 0) or 0)
     return Checkpoint(
         session_id=task.id,
         plan_digest=plan.digest if plan is not None else "",
@@ -174,6 +182,7 @@ def checkpoint_for(task: Task, *, at: float = 0.0) -> Checkpoint:
         in_flight_step=in_flight[0] if in_flight else "",
         workspace=task.workspace,
         at=at or task.updated_at,
+        notes=notes,
     )
 
 

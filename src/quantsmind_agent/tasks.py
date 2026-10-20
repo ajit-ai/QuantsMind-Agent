@@ -78,7 +78,9 @@ __all__ = [
 #: verified" rather than "verified by an absence of evidence".
 #: v3 adds `trace`: the ordered record of how a task reached its state.
 #: v4 adds `checkpoints`: the execution boundaries a session may resume from.
-SCHEMA_VERSION = 4
+#: v5 adds `workspace_snapshot`: the bounded project facts the plan was made
+#: against. It is evidence, not a live cache; nothing resumes from it.
+SCHEMA_VERSION = 5
 
 #: Bumped when the *canonical form* of a plan changes.
 #:
@@ -285,6 +287,9 @@ class CheckStatus(StrEnum):
     SKIPPED = "skipped"
     NOT_RUN = "not_run"
     BLOCKED = "blocked"
+    #: The project declares no check that could establish this outcome. It is
+    #: not a pass and not a failure: there was nothing to run.
+    NOT_CONFIGURED = "not_configured"
 
 
 class VerificationOutcome(StrEnum):
@@ -568,6 +573,8 @@ class TraceKind(StrEnum):
     PROVIDER = "provider"
     VERIFICATION_STARTED = "verification_started"
     VERIFICATION = "verification"
+    #: The bounded project facts a plan was proposed against.
+    WORKSPACE = "workspace"
     CHECKPOINT = "checkpoint"
     RECOVERY = "recovery"
     CANCELLED = "cancelled"
@@ -1096,6 +1103,10 @@ class Task:
     workspace: str
     status: TaskStatus = TaskStatus.DRAFT
     plan: Plan | None = None
+    #: The bounded workspace facts the plan was proposed against. Stored on the
+    #: task so "what did it think it was changing?" is answerable from the record
+    #: after the files have moved on. Never used to authorise anything.
+    workspace_snapshot: dict[str, Any] | None = None
     budget: TaskBudget = field(default_factory=TaskBudget)
     created_at: float = 0.0
     updated_at: float = 0.0
@@ -1187,6 +1198,9 @@ class Task:
             "workspace": self.workspace,
             "status": str(self.status),
             "plan": self.plan.to_dict() if self.plan else None,
+            "workspace_snapshot": (
+                dict(self.workspace_snapshot) if isinstance(self.workspace_snapshot, dict) else None
+            ),
             "budget": self.budget.to_dict(),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -1222,6 +1236,11 @@ class Task:
             workspace=str(migrated.get("workspace", "")),
             status=TaskStatus(status) if status in statuses else TaskStatus.DRAFT,
             plan=Plan.from_dict(plan_payload) if isinstance(plan_payload, dict) else None,
+            workspace_snapshot=(
+                dict(migrated["workspace_snapshot"])
+                if isinstance(migrated.get("workspace_snapshot"), dict)
+                else None
+            ),
             budget=TaskBudget.from_dict(migrated.get("budget")),
             created_at=float(migrated.get("created_at", 0.0) or 0.0),
             updated_at=float(migrated.get("updated_at", 0.0) or 0.0),
@@ -1281,6 +1300,10 @@ def migrate(payload: object) -> dict[str, Any]:
     v3 -> v4 adds ``checkpoints``. A record written before sessions existed has
     no known execution boundaries, so it loads with an empty list rather than an
     invented checkpoint that a resume might treat as fact.
+
+    v4 -> v5 adds ``workspace_snapshot``. An older record was planned without
+    one, which reads as ``None``: not "the workspace was empty", but "nobody
+    recorded what it looked like".
     """
 
     if not isinstance(payload, dict):
@@ -1298,6 +1321,8 @@ def migrate(payload: object) -> dict[str, Any]:
         migrated["trace"] = []
     if version < 4:
         migrated["checkpoints"] = []
+    if version < 5:
+        migrated["workspace_snapshot"] = None
     migrated["schema_version"] = SCHEMA_VERSION
     return migrated
 

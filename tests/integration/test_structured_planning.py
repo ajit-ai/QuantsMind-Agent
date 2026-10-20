@@ -256,6 +256,59 @@ class TestBuildingFromPayload:
             plan_from_payload({"objective": "do it", "steps": ["write the file"]})
 
 
+class TestProjectContext:
+    def test_the_project_context_is_put_in_the_prompt(self) -> None:
+        seen: list[ChatRequest] = []
+
+        class Recording(FakeModelProvider):
+            def complete(self, request: ChatRequest) -> Any:
+                seen.append(request)
+                return text_response(json.dumps(good_plan()))
+
+        planner = planner_for(
+            ModelGateway(Recording()),
+            project_context="Workspace: acme\nProject kind: python-package",
+        )
+
+        planner.propose("update the greeting module")
+
+        prompt = str(seen[0].messages[-1].content)
+        assert "Project context:" in prompt
+        assert "Project kind: python-package" in prompt
+        assert "Objective: update the greeting module" in prompt
+
+    def test_the_project_context_is_capped_before_it_reaches_the_prompt(self) -> None:
+        seen: list[ChatRequest] = []
+
+        class Recording(FakeModelProvider):
+            def complete(self, request: ChatRequest) -> Any:
+                seen.append(request)
+                return text_response(json.dumps(good_plan()))
+
+        planner = planner_for(
+            ModelGateway(Recording()),
+            project_context="A" * 5_000 + "END-OF-CONTEXT",
+        )
+
+        planner.propose("update the greeting module")
+
+        prompt = str(seen[0].messages[-1].content)
+        assert "END-OF-CONTEXT" not in prompt
+        assert "A" * 100 in prompt
+
+    def test_no_context_means_no_empty_section(self) -> None:
+        seen: list[ChatRequest] = []
+
+        class Recording(FakeModelProvider):
+            def complete(self, request: ChatRequest) -> Any:
+                seen.append(request)
+                return text_response(json.dumps(good_plan()))
+
+        planner_for(ModelGateway(Recording())).propose("update the greeting module")
+
+        assert "Project context:" not in str(seen[0].messages[-1].content)
+
+
 class TestCompatibilityAndRequest:
     def test_a_plan_written_before_structured_planning_still_loads(self) -> None:
         legacy = {
