@@ -1,9 +1,36 @@
 {
   "record_type": "release",
   "version": "0.9.0",
-  "platform": "windows-x64",
+  "tag": "v0.9.0",
+  "release_commit": "b4755060cfaa85f40247507c8cf68486410c2a3d",
   "artifact": "QuantsMindAgent-0.9.0-x64.msi",
-  "build_status": "pending",
-  "release_status": "pending",
-  "note": "The tagged source release commit carries this record. Artifact size, SHA-256, release commit and publication URLs are completed after the MSI is built and published."
+  "platform": "windows-x64",
+  "size_bytes": 43360256,
+  "sha256": "74823186651280cf6c7403bfdf1e016b35fbc2a9a3146aa750e2650f04e6dde6",
+  "installer": {
+    "scope": "perUser",
+    "elevation_required": false,
+    "signed": false
+  },
+  "build": {
+    "executable": "PyInstaller 6.22.3 (onedir)",
+    "installer_tool": "WiX Toolset 5.0.2+aa65968c",
+    "python": "3.14.7",
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "executable_command": "python scripts/build_executable.py --distpath artifacts/v0.9.0/windows/onedir",
+    "installer_command": "python scripts/build_msi.py --onedir artifacts/v0.9.0/windows/onedir"
+  },
+  "build_status": "built_and_verified",
+  "release_status": "pending_publication",
+  "verification": {
+    "smoke_test": "14/14 passed",
+    "msi_build": "7/7 passed",
+    "msi_install": "23/23 passed",
+    "gui_acceptance": "8/8 passed",
+    "installed_window_title": "QuantsMind-Agent 0.9.0",
+    "user_profile_unchanged": true
+  },
+  "note": "Built from the annotated v0.9.0 tag. GitHub Release URLs are added after publication."
 }
