@@ -9,14 +9,16 @@ policy refusal onto success. A verification report that says "5 checks passed"
 when two of them never ran is worse than no report, because it is believed.
 
 **Checks come from the project, not from a guess.** :func:`discover_checks`
-reads ``pyproject.toml``, ``setup.cfg``, ``tox.ini``, a ``Makefile`` and CI
-configuration to find what this repository actually declares, and returns only
-what it found. When it finds nothing, the plan says verification is unavailable
-rather than inventing ``pytest`` because that is usually right.
+reads Python packaging and test configuration, a ``Makefile``, and the manifests
+of Node, Rust, Go, Java, .NET, Ruby, PHP and Swift projects. It returns only
+commands those files declare. When a project declares nothing, the lifecycle
+records ``NOT_CONFIGURED`` instead of inventing ``pytest``, because a check that
+was never offered by the project cannot establish anything.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -168,6 +170,8 @@ def discover_checks(root: Path) -> list[Check]:
                     )
                 )
 
+    found.extend(_discover_other_ecosystems(root))
+
     deduplicated: dict[str, Check] = {}
     for check in found:
         # setup.cfg repeats pytest when pyproject already declared it.
@@ -186,6 +190,177 @@ def _read(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:  # pragma: no cover - unreadable config
         return ""
+
+
+def _read_json(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(_read(path))
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _node_runner(root: Path) -> str:
+    """The package manager a lock file selects, defaulting to npm.
+
+    A project that checked in ``pnpm-lock.yaml`` asked to be run with pnpm; using
+    npm there is a different install graph, not a harmless synonym.
+    """
+
+    if (root / "pnpm-lock.yaml").is_file():
+        return "pnpm"
+    if (root / "yarn.lock").is_file():
+        return "yarn"
+    if (root / "bun.lockb").is_file() or (root / "bun.lock").is_file():
+        return "bun"
+    return "npm"
+
+
+def _discover_other_ecosystems(root: Path) -> list[Check]:
+    """Declared checks from non-Python project manifests.
+
+    Only commands the manifest itself declares are returned. A ``package.json``
+    with no test script produces no test check, because inventing one would make
+    the verification report claim evidence the project never offered.
+    """
+
+    found: list[Check] = []
+
+    package_json = root / "package.json"
+    if package_json.is_file():
+        scripts = _read_json(package_json).get("scripts")
+        if isinstance(scripts, dict):
+            runner = _node_runner(root)
+            for name, check_id in (
+                ("test", "npm-test"),
+                ("lint", "npm-lint"),
+                ("typecheck", "npm-typecheck"),
+            ):
+                if isinstance(scripts.get(name), str):
+                    found.append(
+                        Check(
+                            id=check_id,
+                            argv=(runner, "run", name),
+                            description=f"the project's `{name}` script",
+                            source="package.json",
+                        )
+                    )
+
+    cargo = root / "Cargo.toml"
+    if cargo.is_file():
+        found.append(
+            Check(
+                id="cargo-test",
+                argv=("cargo", "test"),
+                description="the Rust test suite",
+                source="Cargo.toml",
+            )
+        )
+
+    if (root / "go.mod").is_file():
+        found.append(
+            Check(
+                id="go-test",
+                argv=("go", "test", "./..."),
+                description="the Go test suite",
+                source="go.mod",
+            )
+        )
+
+    if (root / "pom.xml").is_file():
+        found.append(
+            Check(
+                id="maven-test",
+                argv=("mvn", "-q", "test"),
+                description="the Maven test suite",
+                source="pom.xml",
+            )
+        )
+    elif (root / "build.gradle").is_file() or (root / "build.gradle.kts").is_file():
+        found.append(
+            Check(
+                id="gradle-test",
+                argv=("gradle", "test"),
+                description="the Gradle test suite",
+                source="build.gradle",
+            )
+        )
+
+    dotnet_project = (
+        next(root.glob("*.sln"), None)
+        or next(root.glob("*.csproj"), None)
+        or next(root.glob("*.fsproj"), None)
+    )
+    if dotnet_project is not None:
+        found.append(
+            Check(
+                id="dotnet-test",
+                argv=("dotnet", "test"),
+                description="the .NET test suite",
+                source=dotnet_project.name,
+            )
+        )
+
+    if (root / "Gemfile").is_file() and ((root / "spec").is_dir() or (root / ".rspec").is_file()):
+        found.append(
+            Check(
+                id="ruby-rspec",
+                argv=("bundle", "exec", "rspec"),
+                description="the Ruby specification suite",
+                source="Gemfile",
+            )
+        )
+    elif (root / "Rakefile").is_file():
+        found.append(
+            Check(
+                id="ruby-rake-test",
+                argv=("bundle", "exec", "rake", "test"),
+                description="the Ruby test task",
+                source="Rakefile",
+            )
+        )
+
+    composer = root / "composer.json"
+    if composer.is_file():
+        scripts = _read_json(composer).get("scripts")
+        if isinstance(scripts, dict):
+            for name, check_id in (
+                ("test", "composer-test"),
+                ("lint", "composer-lint"),
+            ):
+                if isinstance(scripts.get(name), str):
+                    found.append(
+                        Check(
+                            id=check_id,
+                            argv=("composer", name),
+                            description=f"the project's `{name}` script",
+                            source="composer.json",
+                        )
+                    )
+    phpunit = root / "phpunit.xml"
+    if not phpunit.is_file():
+        phpunit = root / "phpunit.xml.dist"
+    if phpunit.is_file():
+        found.append(
+            Check(
+                id="phpunit",
+                argv=("vendor/bin/phpunit",),
+                description="the PHP unit test suite",
+                source=phpunit.name,
+            )
+        )
+
+    if (root / "Package.swift").is_file():
+        found.append(
+            Check(
+                id="swift-test",
+                argv=("swift", "test"),
+                description="the Swift package test suite",
+                source="Package.swift",
+            )
+        )
+
+    return found
 
 
 def run_checks(
