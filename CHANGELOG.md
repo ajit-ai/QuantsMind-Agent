@@ -51,6 +51,26 @@ kept with the task as evidence of what the plan was made against.
   stays `INCONCLUSIVE`; skipped, blocked and unrun checks remain visible rather
   than becoming passes.
 
+### Validation
+
+- **1710 passed, 3 skipped** (symlink tests, Windows) across unit, integration,
+  security and GUI.
+- ruff, ruff-format, mypy (156 files), documentation normalisation and secret
+  scanning clean; the Sphinx build completes with zero warnings.
+- No live-provider run is claimed: this milestone changes local discovery,
+  planning context and records, and every path is exercised with deterministic
+  fakes.
+
+### Known limitations
+
+- A snapshot is a bounded sample, not a complete index. `truncated` and `sampled`
+  are recorded separately so the plan cannot mistake an omission for absence.
+- Checks are discovered from declarations; the snapshot does not invent a check
+  for a manifest that declares none, and it does not execute checks during
+  discovery.
+- The Project group is a read-only summary. Editing project metadata and
+  per-language configuration is not part of this milestone.
+
 ## [0.8.0] - 2026-10-20
 
 Durable Sessions. A task can now be interrupted, inspected and -- when the

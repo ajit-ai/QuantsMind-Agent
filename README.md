@@ -8,9 +8,9 @@ language model to a local project folder. You open a repository, ask a coding
 question, and the agent inspects your files through controlled tools before
 answering — showing every tool call it makes.
 
-> **Status: v0.2.0 (alpha).** The agent can now read, write, edit, delete, run
-> approved commands and inspect Git state. Real-model behaviour and on-desktop
-> rendering are verified manually, not by CI.
+> **Status: v0.9.0 (alpha).** Planning starts from a bounded, versioned account
+> of the whole project, and that account is kept with the task as evidence.
+> Real-model behaviour and on-desktop rendering are verified manually, not by CI.
 
 ---
 

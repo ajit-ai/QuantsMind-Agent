@@ -29,7 +29,7 @@ Model usage is separate, and it is the part that can cost money:
 * **Local models** avoid cloud charges entirely, if you run one and configure the
   application to use it. They need suitable hardware and are not our product.
 
-Version 0.3.0 has no paid licence, no subscription, no telemetry and no
+Version 0.9.0 has no paid licence, no subscription, no telemetry and no
 registration step.
 
 Supported platforms
@@ -50,17 +50,17 @@ Supported platforms
    * - Linux (glibc)
      - x86_64
      - tooling only
-     - ``.deb`` builder exists; not part of the v0.3.0 platform scope
+     - ``.deb`` builder exists; not part of the v0.9.0 platform scope
    * - macOS
      - --
      - tooling only
-     - ``.app``/``.dmg`` builders exist; not part of the v0.3.0 platform scope
+     - ``.app``/``.dmg`` builders exist; not part of the v0.9.0 platform scope
    * - FreeBSD
      - --
      - tooling only
-     - ``.pkg`` builder exists; not part of the v0.3.0 platform scope
+     - ``.pkg`` builder exists; not part of the v0.9.0 platform scope
 
-**v0.3.0 ships for Windows 11 AMD64.** That is the whole of its platform scope:
+**v0.9.0 ships for Windows 11 AMD64.** That is the whole of its platform scope:
 the executable folder and the MSI below are built and verified. The Linux, macOS
 and FreeBSD builders are in the repository because the packaging work supports
 them, but they were not run for this release and nothing here claims they work.
@@ -93,19 +93,19 @@ Build commands
 .. code-block:: bash
 
     # Executable folder -- every platform
-    python scripts/build_executable.py --distpath artifacts/v0.3.0/<platform>/onedir
+    python scripts/build_executable.py --distpath artifacts/v0.9.0/<platform>/onedir
 
     # Windows Installer (Windows)
-    python scripts/build_msi.py --onedir artifacts/v0.3.0/windows/onedir
+    python scripts/build_msi.py --onedir artifacts/v0.9.0/windows/onedir
 
     # Debian package (Debian/Ubuntu)
-    python scripts/build_deb.py --onedir artifacts/v0.3.0/ubuntu/onedir
+    python scripts/build_deb.py --onedir artifacts/v0.9.0/ubuntu/onedir
 
     # Disk image (macOS)
-    python scripts/build_dmg.py --app artifacts/v0.3.0/macos/QuantsMindAgent.app
+    python scripts/build_dmg.py --app artifacts/v0.9.0/macos/QuantsMindAgent.app
 
     # FreeBSD package (FreeBSD)
-    python scripts/build_freebsd_pkg.py --onedir artifacts/v0.3.0/freebsd/onedir
+    python scripts/build_freebsd_pkg.py --onedir artifacts/v0.9.0/freebsd/onedir
 
 .. warning::
 
@@ -122,8 +122,8 @@ Collect them into one manifest with checksums:
 
 .. code-block:: bash
 
-    python scripts/record_artifacts.py --artifacts artifacts/v0.3.0 \
-        --commit "$(git rev-parse HEAD)" --version 0.3.0
+    python scripts/record_artifacts.py --artifacts artifacts/v0.9.0 \
+        --commit "$(git rev-parse HEAD)" --version 0.9.0
 
 That writes ``MANIFEST.json`` (the whole matrix, including platforms that were
 **not** built, so an absent platform cannot be mistaken for a forgotten one) and
@@ -138,7 +138,8 @@ GitHub Release asset; Git stores the metadata and checksum that identify it.
 
 The policy is documented in ``packaging/README.md``. ``packaging/v0.7.0/`` is the
 historical baseline, reconstructed when the policy was introduced in v0.8.0.
-``packaging/v0.8.0/`` is the first record produced under it.
+``packaging/v0.8.0/`` is the first record produced under it, and
+``packaging/v0.9.0/`` records the current release.
 
 A release is not finalized until its packaging record and the published GitHub
 artifact agree. The annotated tag identifies the source release commit and is
@@ -160,7 +161,7 @@ Double-click ``QuantsMindAgent-<version>-x64.msi``, or:
 
 .. code-block:: bat
 
-    msiexec /i QuantsMindAgent-0.3.0-x64.msi
+    msiexec /i QuantsMindAgent-0.9.0-x64.msi
 
 The default package is **per-user**: it installs to
 ``%LOCALAPPDATA%\Programs\QuantsMindAgent`` and needs **no elevation**. Build a
@@ -181,7 +182,7 @@ Linux -- Debian package
 
 .. code-block:: bash
 
-    sudo dpkg -i quantsmind-agent_0.3.0_amd64.deb
+    sudo dpkg -i quantsmind-agent_0.9.0_amd64.deb
 
 Removes with ``sudo dpkg -r quantsmind-agent``, or ``dpkg -P`` to purge package
 files. Either way your ``$XDG_CONFIG_HOME`` and ``$XDG_DATA_HOME`` are untouched;
@@ -208,7 +209,7 @@ FreeBSD
 
 .. code-block:: sh
 
-    sudo pkg install -y ./quantsmind-agent-0.3.0.pkg
+    sudo pkg install -y ./quantsmind-agent-0.9.0.pkg
     sudo pkg remove -y quantsmind-agent
 
 Installing into ``/usr/local``, with a menu entry in
@@ -237,14 +238,14 @@ The build system ships the checks that were used, so they can be re-run:
 .. code-block:: bash
 
     # Starts the bundle headlessly and exercises configuration, paths and tools
-    python scripts/smoke_test_executable.py --distpath artifacts/v0.3.0/windows/onedir
+    python scripts/smoke_test_executable.py --distpath artifacts/v0.9.0/windows/onedir
 
     # Launches the real executable on a real display and checks for a window
-    python scripts/gui_acceptance.py --distpath artifacts/v0.3.0/windows/onedir
+    python scripts/gui_acceptance.py --distpath artifacts/v0.9.0/windows/onedir
 
     # Installs, launches, reinstalls and uninstalls the MSI, and proves that the
     # real user profile is byte-identical afterwards
-    powershell -File scripts/verify_msi_install.ps1 -Msi artifacts/v0.3.0/windows/msi/QuantsMindAgent-0.3.0-x64.msi
+    powershell -File scripts/verify_msi_install.ps1 -Msi artifacts/v0.9.0/windows/msi/QuantsMindAgent-0.9.0-x64.msi
 
 Known issues and unverified platforms
 =====================================
@@ -254,7 +255,7 @@ Known issues and unverified platforms
 * **Linux, macOS and FreeBSD are tooling only.** ``build_deb.py``,
   ``build_dmg.py`` and ``build_freebsd_pkg.py`` are implemented and refuse to run
   on the wrong operating system, but no artifact was produced from them for
-  v0.3.0 and no claim is made about them. They are outside this release's
+  v0.9.0 and no claim is made about them. They are outside this release's
   platform scope, not a defect in it.
 * **Nothing is code-signed.** No certificate is available on the build machine,
   so Windows SmartScreen will warn on first run of the MSI or the executable.
