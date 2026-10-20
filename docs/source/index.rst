@@ -74,6 +74,7 @@ application rather than by the model.
    architecture/v0.6-behaviour
    architecture/v0.7-behaviour
    architecture/v0.8-behaviour
+   architecture/v0.9-behaviour
    architecture/adr/index
 
 .. toctree::

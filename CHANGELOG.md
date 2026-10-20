@@ -9,6 +9,48 @@ and the project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-20
+
+Workspace Intelligence. Planning now starts from a bounded account of the whole
+project -- languages, manifests, roots and declared checks -- and that account is
+kept with the task as evidence of what the plan was made against.
+
+### Added
+
+- **Bounded, versioned workspace snapshots.** `workspace_intel.discover_workspace`
+  records project kind, confidence, ecosystems, languages, manifests, source/test/
+  documentation roots, declared checks and a sampled file list, with explicit
+  entry and file budgets. `truncated` and `sampled` are separate facts, and the
+  snapshot carries an `unknowns` list instead of implying complete coverage.
+- **Multi-language detection.** Python keeps the existing richer classification;
+  Node, Rust, Go, Java, .NET, Ruby, PHP, C++ and Swift projects are recognised
+  from manifests and suffixes, with a polyglot answer when several are present.
+- **Project-aware planning.** `TaskPlanner.project_context` places a bounded,
+  absolute-path-free rendering of the snapshot before the objective. Checks and
+  files are capped, and the whole block defaults to 3,000 characters.
+- **Workspace evidence on the task.** `TaskService.propose` stores the snapshot on
+  `Task.workspace_snapshot`. It is evidence only: approval still binds to the plan
+  digest and the workspace boundary, never to the snapshot.
+- **Trace and checkpoint context.** Plan submission emits a `WORKSPACE` trace
+  event with kind, digest, file count and truncation; checkpoints add the digest,
+  kind and file count as scalar notes.
+- **Non-Python check discovery.** Declared scripts and configuration now produce
+  checks for npm/pnpm/yarn/bun, Cargo, Go, Maven, Gradle, .NET, RSpec/Rake,
+  Composer, PHPUnit and Swift. Nothing is invented for a manifest that declares
+  no check.
+- **Project inspection in the Task panel.** A read-only `Project` group shows the
+  bounded summary and a Refresh action. Refreshing runs on a worker thread; the
+  Task view remains the only second top-level view.
+
+### Changed
+
+- Task records are schema version 5. Records from earlier versions load with
+  `workspace_snapshot = None`: nobody recorded the workspace, rather than the
+  workspace having been empty.
+- A project that declares no checks now records `CheckStatus.NOT_CONFIGURED` and
+  stays `INCONCLUSIVE`; skipped, blocked and unrun checks remain visible rather
+  than becoming passes.
+
 ## [0.8.0] - 2026-10-20
 
 Durable Sessions. A task can now be interrupted, inspected and -- when the
