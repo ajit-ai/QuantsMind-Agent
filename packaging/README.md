@@ -36,7 +36,10 @@ packaging/
     README.md
     BUILD-METADATA.json
     checksums.sha256
-  v0.9.0/       # future
+  v0.9.0/
+    README.md
+    BUILD-METADATA.json
+    checksums.sha256
   v1.0.0/       # future
 ```
 
