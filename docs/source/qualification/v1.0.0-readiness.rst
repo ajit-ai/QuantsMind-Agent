@@ -99,17 +99,18 @@ v0.9.0 artifact.
 Artifact boundary
 -----------------
 
-* The correction is in the working tree. It is not committed, not built into an
-  MSI, and not present in the published v0.9.0 artifact.
-* No replacement MSI, version bump, tag or release was produced.
-* **G23 remains FAIL for the published v0.9.0 MSI.** The source-level close-out
-  condition is met; a future release candidate must repeat the check.
-* The original full-suite result was 1710 passed. The working tree now adds
-  three regression tests, so the current result is not directly comparable to
-  the released artifact.
-* The checkout no longer has "no source changes" relative to the release
-  commit. That statement in the Environment section describes the assessment
-  cut-off, not the current working tree.
+* The correction is committed on the remediation branch. An internal candidate
+  was built from that source into a separately named, ignored directory and
+  tested at artifact level. It is not published.
+* No version bump, tag, public release or replacement of the published MSI was
+  produced. The candidate has its own filename and metadata.
+* **G23 remains FAIL for the published v0.9.0 MSI.** The candidate-level G23
+  check passed against the installed artifact and against the code objects
+  embedded in its executable.
+* The original full-suite result was 1710 passed. The remediated source adds
+  three regression tests; the full suite now records 1713 passed, 3 skipped.
+* The checkout is no longer identical to the release commit. The Environment
+  section describes the assessment cut-off, not the current branch.
 
 QF-006 / G23: root cause and correction
 ---------------------------------------
@@ -194,13 +195,21 @@ Static, documentation and artifact checks:
      - No credential-shaped strings in 889 file(s) after the documentation
        corrections.
    * - Release record
-     - The v0.9.0 MSI remains 43,360,256 bytes with SHA-256
+     - The published v0.9.0 MSI remains 43,360,256 bytes with SHA-256
        ``74823186651280cf6c7403bfdf1e016b35fbc2a9a3146aa750e2650f04e6dde6``,
-       matching ``packaging/v0.9.0``. No packaging file or release artifact was
-       modified.
+       matching ``packaging/v0.9.0``. No packaging file or published release
+       artifact was modified.
+   * - Candidate build
+     - Built separately from the remediated commit, with a candidate-specific
+       MSI filename and ``BUILD-METADATA.json``. Its exact size, SHA-256,
+       Authenticode status and build logs are stored beside the artifact.
+   * - Candidate artifact checks
+     - Installed-artifact G23: ``14/14``. Bundled-bytecode G23: ``12/12``.
+       Packaged smoke: ``14/14``. MSI lifecycle: ``23/23``. G24 documentation
+       bundle built strictly and carried with the candidate.
    * - Scope control
-     - No commit, tag, version bump, replacement MSI, publish or external
-       request was made.
+     - No tag, version bump, public publish or external provider request was
+       made. Nothing was pushed or merged.
 
 QF-007 / G24: documentation correction
 --------------------------------------
@@ -221,9 +230,10 @@ the junction-discovery defect.
 
 A strict Sphinx build with warnings as errors now passes. The old
 ``manual-llm`` and ``windows-manual-checklist`` references used by historical
-pages were preserved. This closes the source-level G24 documentation condition;
+pages were preserved. This closes the G24 condition for the internal candidate;
 it does not change the historical FAIL result for the published artifact, and
-the corrected HTML has not been published.
+the corrected HTML has not been published. The built HTML is carried with the
+candidate, not with the published v0.9.0 MSI.
 
 G21 / QF-008: workflow correction
 ---------------------------------
@@ -748,6 +758,38 @@ Statuses are exactly ``PASS``, ``FAIL``, ``BLOCKED``, ``NOT TESTED`` and
 Summary: 16 PASS, 4 FAIL, 5 BLOCKED, 2 NOT TESTED, 1 NOT APPLICABLE. Passing
 installer and regression gates do not compensate for missing real-world evidence.
 
+Internal candidate addendum (2026-10-21)
+========================================
+
+The gate table above is the assessment of the published v0.9.0 MSI. It is not a
+result for the internal candidate built from the remediated branch.
+
+Candidate boundary and evidence:
+
+* The candidate is built from the remediated commit and stored in a separate,
+  ignored candidate directory. Its source commit is in the bundled
+  ``BUILD-METADATA.json``; its filename includes ``internal-candidate``; its
+  size, SHA-256 and Authenticode status are in the candidate identity file.
+* The published v0.9.0 MSI, checksum record and metadata are unchanged.
+* G23 passed at two artifact levels. A real install and project refresh against
+  a workspace containing an outward junction reported exactly the local files,
+  never an external file. The code objects embedded in the candidate executable
+  also excluded the junction, recorded it in the snapshot unknowns, and refused
+  a direct read through it.
+* G24 passed for the candidate: the corrected documentation built strictly from
+  the same source and is carried beside the candidate. Historical pages remain
+  labelled; the corrected HTML is not published.
+* Packaged smoke passed ``14/14``, MSI lifecycle passed ``23/23``, and the
+  remediated full suite recorded ``1713 passed, 3 skipped``.
+* G21 is still open: no workflow was dispatched for the candidate commit. G25
+  is still open: the candidate is unsigned. The real-provider, human GUI,
+  clean-machine, external beta, upgrade and long-session gates remain open or
+  not tested.
+
+The candidate is therefore suitable for controlled internal engineering work,
+not for a public or general-availability claim. G21 and G25 must not be reported
+as passes.
+
 Conditions for a limited beta
 =============================
 
@@ -765,9 +807,10 @@ The verdict is conditional on all of the following:
 #. **The credential is revocable.** Use a dedicated key with a low limit, enter
    it through Settings, and revoke it after the test.
 #. **Junctions are excluded from the published beta.** Do not use a workspace
-   containing a directory junction to an outside location with the v0.9.0 MSI
-   until a candidate containing the source fix has been built and tested. This
-   is a documented beta limitation, not a supported configuration.
+   containing a directory junction to an outside location with the published
+   v0.9.0 MSI. An internal candidate contains and passed the fix, but it is not
+   approved for external beta. This is a documented beta limitation, not a
+   supported configuration.
 #. **Unsigned-build risk is explicit.** Testers must expect SmartScreen and
    security-software warnings; a block or quarantine is a trust finding, not a
    silent retry.
@@ -818,10 +861,11 @@ These risks remain even if every automated gate passes:
   consumers must read ``complete``, ``truncated`` and ``sampled``.
 * **No update mechanism or telemetry.** There is no automatic patching and no
   fleet-level crash reporting.
-* **Junction limitation in the published artifact.** The v0.9.0 MSI can fail
-  discovery on a workspace containing an outward junction. The source fix
-  excludes links from discovery and reports them as unknown, but it is not in
-  the published artifact until a candidate is rebuilt and retested.
+* **Junction limitation in the published artifact.** The published v0.9.0 MSI
+  can fail discovery on a workspace containing an outward junction. The source
+  fix excludes links from discovery and reports them as unknown. The internal
+  candidate contains the fix and passed artifact-level G23; the published
+  artifact is unchanged. Any public release must rebuild and retest it.
 
 Reproduction and evidence
 =========================

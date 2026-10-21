@@ -29,15 +29,15 @@ Permission           Meaning
 In v0.9.0, ``WRITE_WORKSPACE``, ``EXECUTE_COMMAND`` and ``GIT`` are in active
 use. The shipped policy is:
 
-===================  ========  =================================
+===================  ========  ================================
 Permission           Decision  Notes
-===================  ========  =================================
+===================  ========  ================================
 ``READ_WORKSPACE``   ALLOW     Reads change nothing.
 ``WRITE_WORKSPACE``  ASK       Writes and edits ask by default.
 ``EXECUTE_COMMAND``  ASK       Always asks, never automatic.
 ``GIT``              ALLOW     Only read-only tools exist.
 ``NETWORK``          DENY      No built-in network tool.
-===================  ========  =================================
+===================  ========  ================================
 
 Three operations keep asking no matter what, because they are irreversible or
 host-affecting: ``delete_file``, ``undo_file`` and ``run_command``. Turning on

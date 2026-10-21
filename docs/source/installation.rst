@@ -13,9 +13,9 @@ Support is claimed only where it has been verified. *Native-verified* means the
 application has actually been run on that operating system, not merely that the
 code appears portable or that a build succeeded.
 
-=================  =============  =================================================
+=================  =============  ==============================================
 Platform           Status         Evidence
-=================  =============  =================================================
+=================  =============  ==============================================
 Windows 11 x64     Supported      Full suite, packaged executable and MSI built,
                                   installed and smoke-tested on Windows 11
 Windows 10 x64     Unverified     The same code path may work; no Windows 10 run
@@ -25,7 +25,7 @@ Linux x64 (glibc)  Headless       Full suite in CI on Ubuntu (headless); no
 macOS arm64/x64    Planned        Native artifact builds are configured in CI;
                                   the GUI has not been run on macOS
 BSD                Not supported  Blocked at the dependency level, see below
-=================  =============  =================================================
+=================  =============  ==============================================
 
 Python 3.11, 3.12 and 3.13 are the supported interpreters; CI tests 3.11 and
 3.12, and the code also runs on 3.14.

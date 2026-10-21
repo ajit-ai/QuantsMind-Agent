@@ -19,8 +19,9 @@ page is a short local smoke test and a map to that plan.
    makes the whole report worthless.
 
    A pass in the local smoke test does not replace the beta evidence. The
-   published v0.9.0 MSI has a known junction-discovery defect (QF-006) and no
-   human approval-dialog or real-provider result.
+   published v0.9.0 MSI has a known junction-discovery defect (QF-006). An
+   internal candidate contains the fix and passed artifact-level G23, but there
+   is still no human approval-dialog or real-provider result.
 
 Preparing the fixture
 =====================
@@ -115,8 +116,10 @@ Outward junction check
 ======================
 
 This is a known defect in the published v0.9.0 artifact. The source tree contains
-the fix, but the MSI does not. The test exists to record the real result, not to
-demand a pass from the wrong artifact.
+the fix, and the internal candidate passed installed-artifact and bundled-code
+checks. The published MSI does not contain the fix. The test exists to record
+the real result for the artifact in hand, not to demand a pass from the wrong
+artifact.
 
 .. code-block:: powershell
 
@@ -127,9 +130,10 @@ demand a pass from the wrong artifact.
     cmd /c mklink /J ".acceptance-fixture\widget-factory\linked-outside" "$outside"
 
 Refresh the Project panel and ask the agent to summarize the project. For the
-published v0.9.0 MSI, record a failed discovery or explicit error. Ask the agent
-to read ``linked-outside/outside.txt``; the direct read must be refused. Remove
-the junction afterwards:
+published v0.9.0 MSI, record a failed discovery or explicit error. For the
+internal candidate, record whether discovery succeeds without the external file
+appearing. Ask the agent to read ``linked-outside/outside.txt``; the direct read
+must be refused for every artifact. Remove the junction afterwards:
 
 .. code-block:: powershell
 

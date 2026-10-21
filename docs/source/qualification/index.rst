@@ -25,13 +25,17 @@ Current assessment
      - ``QuantsMindAgent-0.9.0-x64.msi``, SHA-256
        ``74823186651280cf6c7403bfdf1e016b35fbc2a9a3146aa750e2650f04e6dde6``
    * - Verdict
-     - **CONDITIONAL -- LIMITED BETA ONLY**
+     - **CONDITIONAL -- LIMITED BETA ONLY** for the published v0.9.0 MSI
+   * - Internal candidate
+     - Built from the remediated commit into a separately named, ignored
+       candidate directory. Its identity and SHA-256 are recorded beside the
+       artifact. It is not published. Artifact-level G23 and G24 passed; the
+       published v0.9.0 MSI is unchanged and still affected.
    * - Latest remediation
-     - 2026-10-21: QF-006 junction discovery and QF-007 documentation are fixed
-       in source and verified locally; the CI runner/reminder fixes are in
-       source but not dispatched. The published v0.9.0 MSI is unchanged and
-       still affected. QF-008 and signing QF-001 remain open; external evidence
-       is still required.
+     - 2026-10-21: QF-006 junction discovery and QF-007 documentation are fixed,
+       committed and carried with the internal candidate; the CI
+       runner/reminder fixes are committed but not dispatched. QF-008 and
+       signing QF-001 remain open; external evidence is still required.
    * - Not claimed
      - General real-world use, v1.0.0 readiness, code signing, clean-machine
        acceptance, real-provider acceptance, or human GUI acceptance

@@ -341,10 +341,11 @@ BETA-08 -- Outward junction workspace
 This is a known defect in v0.9.0. The purpose is to record the real user-visible
 failure, not to demand a pass.
 
-The source tree now contains a junction-discovery fix, but this plan targets the
-published v0.9.0 MSI, which does not include it. Keep the expected failure below
-until a new candidate has been built, hashed and tested. See
-:doc:`defect-triage`.
+The source tree now contains a junction-discovery fix, and an internal candidate
+has been built and tested. This plan still targets the published v0.9.0 MSI,
+which does not include the fix; keep the expected failure below for that
+artifact. A beta plan for a new candidate must state its exact hash and expect a
+pass. See :doc:`defect-triage`.
 
 #. Create a harmless outside folder and file::
 

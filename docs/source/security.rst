@@ -143,9 +143,9 @@ is recorded in ``unknowns`` instead of pretending the project was complete.
 
    The published v0.9.0 Windows MSI predates the reparse-point discovery fix.
    In that artifact, an outward junction can still fail project discovery even
-   though direct reads through it are refused. The source tree is fixed; the
-   next release candidate must repeat the junction check against its own hash.
-   See :doc:`qualification/defect-triage`.
+   though direct reads through it are refused. The internal candidate passed the
+   check; any public release candidate must repeat it against its own hash. See
+   :doc:`qualification/defect-triage`.
 
 Limitations, stated plainly:
 

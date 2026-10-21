@@ -33,9 +33,9 @@ Provider settings
     api_key_env = "QM_API_KEY"
     # organization = "org-..."      # optional, sent as OpenAI-Organization
 
-=====================  ==========================================================
+=====================  =======================================================================
 Field                  Meaning
-=====================  ==========================================================
+=====================  =======================================================================
 ``name``               Provider implementation. The current build ships ``openai_compatible``.
 ``base_url``           Must be ``http(s)``. A trailing ``/`` is stripped.
 ``model``              Model identifier sent to the endpoint.
@@ -44,7 +44,7 @@ Field                  Meaning
 ``temperature``        Sampling temperature, 0.0-2.0.
 ``api_key_env``        Environment variable consulted before the secret store.
 ``organization``       Optional organisation header.
-=====================  ==========================================================
+=====================  =======================================================================
 
 ``requires_api_key()`` returns ``False`` for ``localhost``, ``127.0.0.1``,
 ``0.0.0.0``, ``host.docker.internal`` and ``[::1]`` endpoints, so local servers

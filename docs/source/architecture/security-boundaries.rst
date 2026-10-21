@@ -99,8 +99,9 @@ such entries are absent from a snapshot.
 
 **The published v0.9.0 MSI predates the discovery fix.** It can fail project
 discovery when an outward junction is present, although direct reads through the
-junction are refused. The source tree contains the fix; a new candidate must be
-tested against its own hash.
+junction are refused. The source tree contains the fix, and the internal
+candidate passed installed-artifact and bundled-code G23 checks. Any public
+release candidate must repeat the check against its own hash.
 
 Trust model
 ===========

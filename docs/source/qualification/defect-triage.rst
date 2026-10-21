@@ -81,12 +81,12 @@ Summary
      - Outward junction breaks workspace discovery
      - Major
      - Affected projects cannot refresh or plan from the project snapshot.
-     - Fixed in source -- artifact retest pending
+     - Fixed and candidate-verified -- published MSI affected
    * - QF-007
      - Product and security documentation are stale
      - Major
      - Testers were told the product is read-only and still at v0.1/v0.2.
-     - Fixed in source -- strict docs build passed
+     - Fixed and candidate-verified -- not published
    * - QF-008
      - Release-commit CI is not green
      - Major
@@ -387,8 +387,8 @@ Maps to gate G23.
 Post-qualification remediation (2026-10-20)
 -------------------------------------------
 
-Status: **fixed in source; published v0.9.0 remains affected; release retest
-pending.**
+Status: **fixed, committed and verified in the internal candidate; the
+published v0.9.0 MSI remains affected.**
 
 Root cause: ``os.walk(..., followlinks=False)`` does not suppress Windows
 directory junctions. The walk descended the junction, then the containment check
@@ -410,6 +410,13 @@ file and reported ``1 filesystem link(s) were not followed``; the outside file
 was not read; ``read_text("linked-outside/secret.py")`` raised
 ``InvalidPathError``.
 
+The internal candidate was also tested as an installed artifact and through the
+code objects embedded in its executable. The installed application refreshed a
+workspace containing an outward junction and reported only the two local files;
+the bundled code excluded the junction, recorded it in snapshot ``unknowns`` and
+refused the direct read. Installed checks passed ``14/14`` and bundled-bytecode
+checks passed ``12/12``.
+
 Regression coverage:
 
 * ``tests/unit/test_workspace.py::TestJunctions`` -- listing, walking and
@@ -425,9 +432,9 @@ skipped``; workspace integration and Task panel tests ``23 passed``; full suite
 test. The full suite used an explicit ``--basetemp`` because the host's default
 pytest temporary root returned ``WinError 5``.
 
-This does not change the G23 result for the published v0.9.0 MSI. No replacement
-artifact was built. The next release candidate must repeat the junction test
-against its exact hash.
+This does not change the G23 result for the published v0.9.0 MSI. An internal
+candidate was built separately and tested against its exact hash; it is not
+published. Any future public release candidate must repeat the junction test.
 
 QF-007 -- Stale product and security documentation
 ==================================================
@@ -478,8 +485,8 @@ understanding as the shipped application. Maps to gate G24.
 Post-qualification remediation (2026-10-21)
 -------------------------------------------
 
-Status: **fixed in source; strict documentation build passed; not committed or
-published.**
+Status: **fixed in source; strict documentation build passed; committed and
+carried with the internal candidate; not published.**
 
 The current-facing pages were corrected: README, index, security summary,
 security boundaries, getting-started, tools, permissions, conversation,
@@ -495,10 +502,10 @@ tool documentation no longer claims that writes are denied or that only four
 tools exist.
 
 Verification: ``python scripts/build_docs.py --clean`` exited 0 with warnings
-treated as errors; ``normalize_rst.py --check`` reported zero issues. The
-corrected HTML is local and was not deployed. The original G24 FAIL for the
-published artifact and the historical gate table are unchanged.
-
+treated as errors; ``normalize_rst.py --check`` reported zero
+issues. The corrected HTML is carried with the internal candidate and was not
+deployed or published. This closes G24 for the candidate. The original G24 FAIL
+for the published artifact and the historical gate table are unchanged.
 QF-008 -- Release-commit CI is not green
 ========================================
 
