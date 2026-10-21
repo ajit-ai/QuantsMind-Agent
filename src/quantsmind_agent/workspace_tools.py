@@ -160,6 +160,13 @@ class ReadFileTool:
         all_lines = content.splitlines()
         window = all_lines[start - 1 : start - 1 + limit]
         numbered = "\n".join(f"{start + offset:>5}\t{line}" for offset, line in enumerate(window))
+        # The mutating tools accept the fingerprint of the file as the model
+        # last read it, and refuse the change when the file moved on. Without a
+        # digest in the read result the model has nothing to pass back, so the
+        # protection is advertised and unreachable. The digest is of the whole
+        # file, not of the returned window, because that is what the write path
+        # compares against.
+        fingerprint = self._workspace.fingerprint(path)
         return ToolResult.success(
             self.spec.name,
             f"read {self._workspace.relative(path)} ({len(window)} lines)",
@@ -170,6 +177,7 @@ class ReadFileTool:
                 "returned_lines": len(window),
                 "truncated": len(window) < len(all_lines[start - 1 :]),
                 "content": numbered,
+                "sha256": fingerprint.sha256,
             },
         )
 

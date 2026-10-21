@@ -303,9 +303,3 @@ if ($failures.Count) {
 }
 Write-Host ("{0}/{1} matrix checks passed" -f $results.Count, $results.Count)
 exit 0
-
-
-
-
-
-

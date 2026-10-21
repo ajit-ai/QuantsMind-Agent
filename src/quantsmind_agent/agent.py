@@ -404,6 +404,14 @@ class AgentCore:
             else:
                 text, response = self._stream(request, emitter)
 
+            if self._cancel.is_set():
+                # The user asked to stop while this request was in flight. The
+                # answer cannot be un-received, but it must not be shown, kept
+                # in the session or reported as the result of a turn the user
+                # cancelled. The same applies to a stream that was cut short.
+                self._discard_pending_answer(outcome)
+                return
+
             if response.tool_calls:
                 assistant = AssistantMessage(
                     content=response.content,
@@ -415,7 +423,16 @@ class AgentCore:
                 self._session.add_message(assistant)
                 observations.append(assistant)
                 for call in response.tool_calls:
+                    if self._cancel.is_set():
+                        # A cancel must not start new work. One response can
+                        # queue several tool calls; the ones that have not run
+                        # yet are dropped rather than executed after the user
+                        # asked to stop.
+                        self._discard_pending_answer(outcome)
+                        break
                     observations.append(self._execute_call(call, outcome, emitter, evidence))
+                if outcome.cancelled:
+                    return
                 continue
 
             self._finish(outcome, text, response)
