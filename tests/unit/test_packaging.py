@@ -239,16 +239,18 @@ class TestVersionConsistency:
 
         assert ".".join(str(part) for part in version_info) == __version__
 
-    def test_the_ci_wheel_check_names_the_current_version(self) -> None:
-        """A stale filename there means the CI version gate checks nothing."""
+    def test_the_ci_wheel_check_uses_the_built_filename(self) -> None:
+        """A stale literal filename makes the gate inspect a file nobody builds."""
 
         import re
 
+        workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        assert "scripts/verify_version.py dist/*.whl" in workflow
+        assert not re.search(r"quantsmind_agent-\d+\.\d+\.\d+-py3-none-any\.whl", workflow)
+
+    def test_verify_version_reads_the_source_version(self) -> None:
+        import verify_version
+
         from quantsmind_agent.version import __version__
 
-        workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        # Every wheel filename the workflow names must be the current one: a
-        # stale name means the version gate inspects a file that no longer gets
-        # built, so it passes without checking anything.
-        named = set(re.findall(r"quantsmind_agent-(0\.\d+\.\d+)-py3", workflow))
-        assert named == {__version__}
+        assert __version__ == verify_version.EXPECTED_VERSION

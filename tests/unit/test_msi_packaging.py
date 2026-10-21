@@ -31,6 +31,8 @@ if str(REPO / "scripts") not in sys.path:
     sys.path.insert(0, str(REPO / "scripts"))
 
 import build_msi  # noqa: E402
+import release_policy  # noqa: E402
+import signing  # noqa: E402
 
 WIX_NS = "{http://wixtoolset.org/schemas/v4/wxs}"
 
@@ -162,6 +164,41 @@ class TestPackageProperties:
         """A package with no upgrade path installs beside itself forever."""
 
         assert next(wxs.iter(f"{WIX_NS}MajorUpgrade"), None) is not None
+
+    def test_product_code_is_explicit_and_version_specific(
+        self, bundle: Path, tmp_path: Path
+    ) -> None:
+        first = authoring(bundle, tmp_path)
+        package = first.find(f"{WIX_NS}Package")
+        assert package is not None
+        assert package.get("ProductCode") == release_policy.product_code_for(SAMPLE_VERSION)
+
+        second_path = tmp_path / "next.wxs"
+        build_msi.generate_wxs(bundle, "QuantsMindAgent.exe", "9.8.0", "perUser", second_path)
+        second = ElementTree.parse(second_path).getroot()
+        next_package = second.find(f"{WIX_NS}Package")
+        assert next_package is not None
+        assert next_package.get("ProductCode") != package.get("ProductCode")
+
+    def test_product_code_is_stable_for_the_same_version(
+        self, bundle: Path, tmp_path: Path
+    ) -> None:
+        first = authoring(bundle, tmp_path).find(f"{WIX_NS}Package")
+        second = authoring(bundle, tmp_path).find(f"{WIX_NS}Package")
+        assert first is not None and second is not None
+        assert first.get("ProductCode") == second.get("ProductCode")
+
+    def test_product_code_is_not_the_upgrade_code(self, wxs: ElementTree.Element) -> None:
+        package = wxs.find(f"{WIX_NS}Package")
+        assert package is not None
+        assert package.get("ProductCode") != package.get("UpgradeCode")
+
+    def test_upgrade_runs_before_cost_initialization(self, wxs: ElementTree.Element) -> None:
+        """The default afterInstallValidate schedule blocks rollback in some failures."""
+
+        upgrade = next(wxs.iter(f"{WIX_NS}MajorUpgrade"))
+        assert upgrade.get("Schedule") == "afterInstallInitialize"
+        assert upgrade.get("AllowSameVersionUpgrades") is None
 
     def test_per_user_scope_installs_without_elevation(self, wxs: ElementTree.Element) -> None:
         package = wxs.find(f"{WIX_NS}Package")
@@ -309,6 +346,20 @@ class TestUserDataIsNeverPackaged:
 
     def test_a_clean_bundle_reports_nothing(self, bundle: Path) -> None:
         assert build_msi.find_user_data(bundle) == []
+
+
+class TestReleaseMode:
+    def test_release_mode_refuses_an_inactive_policy(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert build_msi.main(["--onedir", str(tmp_path), "--release"]) == 2
+        errors = capsys.readouterr().err
+        assert "FAIL" in errors
+        assert "distribution_authorized" in errors
+
+    def test_a_release_requires_a_signed_executable(self, bundle: Path) -> None:
+        with pytest.raises(signing.SigningError):
+            build_msi.verify_executable_signature(bundle / "QuantsMindAgent.exe", None)
 
 
 class TestBundleDiscovery:

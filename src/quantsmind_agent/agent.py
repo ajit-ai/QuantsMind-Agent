@@ -324,6 +324,7 @@ class AgentCore:
         except QuantsMindError as exc:
             logger.warning("Agent turn failed: %s", exc.message)
             outcome.error = exc.user_message
+            outcome.stopped_reason = "error"
             record.error = exc.user_message
             self._emit(
                 AgentEventType.AGENT_FAILED,
@@ -335,6 +336,7 @@ class AgentCore:
                 "The agent hit an unexpected internal error. "
                 "See the log file for details, then try again."
             )
+            outcome.stopped_reason = "error"
             record.error = outcome.error
             self._emit(
                 AgentEventType.AGENT_FAILED,

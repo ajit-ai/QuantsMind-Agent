@@ -8,7 +8,7 @@ The version is read from the wheel's ``METADATA`` rather than by importing the
 package, because the build job installs only ``build`` -- not the project. That
 way the check asserts on the artifact that would actually be published.
 
-Exits 0 when the wheel's version matches ``EXPECTED_VERSION``, 1 otherwise.
+Exits 0 when the wheel's version matches the source version, 1 otherwise.
 """
 
 from __future__ import annotations
@@ -18,8 +18,19 @@ import sys
 import zipfile
 from pathlib import Path
 
-#: Keep in step with ``pyproject.toml`` and ``quantsmind_agent.version``.
-EXPECTED_VERSION = "0.9.0"
+REPO = Path(__file__).resolve().parents[1]
+VERSION_PATH = REPO / "src" / "quantsmind_agent" / "version.py"
+
+
+def source_version() -> str:
+    text = VERSION_PATH.read_text(encoding="utf-8")
+    match = re.search(r'__version__: Final\[str\] = "([^"]+)"', text)
+    if match is None:
+        raise SystemExit(f"{VERSION_PATH}: no __version__ assignment found")
+    return match.group(1)
+
+
+EXPECTED_VERSION = source_version()
 
 
 def wheel_version(wheel: Path) -> str:

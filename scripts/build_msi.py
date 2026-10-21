@@ -57,7 +57,11 @@ import uuid
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+import release_policy
+import signing
+
 REPO = Path(__file__).resolve().parents[1]
+POLICY = release_policy.load_policy(REPO / "packaging" / "release-policy.toml")
 
 #: Root the generated identities are derived from. A constant, not a random UUID,
 #: so rebuilding the same bundle produces the same component GUIDs -- which is
@@ -66,7 +70,7 @@ IDENTITY_NAMESPACE = uuid.UUID("6f6a1f2e-6c1a-5f2b-9d3e-7c4a2b8d0f11")
 
 #: Product identity, stable across every version. Windows Installer uses it to
 #: recognise a newer build of the same product during an upgrade.
-UPGRADE_CODE = "{7C4A2B8D-0F11-4E2A-9B3C-5D6E7F8A9B0C}"
+UPGRADE_CODE = POLICY.upgrade_code
 
 MANUFACTURER = "QuantsMind"
 
@@ -75,28 +79,13 @@ MANUFACTURER = "QuantsMind"
 #: settings.
 FORBIDDEN_NAMES = {"config.toml", "secrets.json", "credentials.json", ".env"}
 
-PASS, FAIL, INCONCLUSIVE = "PASS", "FAIL", "INCONCLUSIVE"
+PASS, FAIL = "PASS", "FAIL"
 checks: list[tuple[str, str, str]] = []
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
     checks.append((name, PASS if ok else FAIL, detail))
     print(f"[{PASS if ok else FAIL}] {name}" + (f" -- {detail}" if detail else ""), flush=True)
-
-
-def environment(name: str, ok: bool, detail: str = "") -> None:
-    """Record an environment fact.
-
-    Whether a signing certificate exists is a property of the build machine, not
-    a property of the package. Reporting it as a failed check would mean a
-    perfectly good unsigned package reports a failed build, and reporting it as a
-    pass would imply the package is signed. It is neither: it is reported, and it
-    does not decide the exit code.
-    """
-
-    status = PASS if ok else INCONCLUSIVE
-    checks.append((name, status, detail))
-    print(f"[{status}] {name}" + (f" -- {detail}" if detail else ""), flush=True)
 
 
 def read_version() -> str:
@@ -205,6 +194,7 @@ def generate_wxs(
     per_machine = scope == "perMachine"
     standard_dir = "ProgramFiles6432Folder" if per_machine else "LocalAppDataFolder"
     dirs, files = bundle_tree(onedir_root)
+    product_code = release_policy.product_code_for(version, POLICY)
 
     out: list[str] = [
         '<?xml version="1.0" encoding="utf-8"?>',
@@ -215,6 +205,7 @@ def generate_wxs(
         f'    Manufacturer="{escape(MANUFACTURER)}"',
         f'    Version="{version}"',
         f'    UpgradeCode="{UPGRADE_CODE}"',
+        f'    ProductCode="{product_code}"',
         f'    Scope="{scope}"',
         '    Compressed="yes"',
         '    InstallerVersion="500">',
@@ -222,7 +213,7 @@ def generate_wxs(
         f'      Description="QuantsMind-Agent {escape(version)} - a local coding agent"',
         f'      Manufacturer="{escape(MANUFACTURER)}" />',
         "    <MajorUpgrade",
-        '      AllowSameVersionUpgrades="yes"',
+        f'      Schedule="{POLICY.upgrade_schedule}"',
         '      DowngradeErrorMessage="A newer version of QuantsMind-Agent is already'
         ' installed." />',
         '    <MediaTemplate EmbedCab="yes" />',
@@ -384,37 +375,33 @@ def locate_bundle(path: Path) -> tuple[Path | None, str]:
     return None, ""
 
 
-def find_signing_certificate() -> str | None:
-    """Return the subject of a usable code-signing certificate, if any.
+def verify_executable_signature(executable: Path, expected_thumbprint: str | None) -> None:
+    """Fail unless the executable is validly signed and timestamped."""
 
-    Signing a release package needs a real certificate issued for it. This looks
-    for one in the current user's personal store and reports honestly when there
-    is none, because an unsigned package that says it is signed is worse than an
-    unsigned package that admits it.
-    """
-
-    if platform.system() != "Windows":
-        return None
-    try:
-        out = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                "Get-ChildItem Cert:\\CurrentUser\\My | Where-Object "
-                "{$_.HasPrivateKey -and $_.EnhancedKeyUsageList.ObjectId.Value "
-                "-contains '1.3.6.1.5.5.7.3.3'} | Select-Object -First 1 "
-                "-ExpandProperty Subject",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
+    if not expected_thumbprint:
+        raise signing.SigningError(
+            f"{signing.CERTIFICATE_ENV} is required with --require-signed-executable"
         )
-    except (OSError, subprocess.SubprocessError):  # pragma: no cover - powershell absent
-        return None
-    subject = out.stdout.strip()
-    return subject or None
+    details = signing.verify_file(
+        executable,
+        expected_thumbprint=expected_thumbprint,
+        require_timestamp=True,
+    )
+    check(
+        "executable signature is valid",
+        details.get("Status") == "Valid",
+        details.get("StatusMessage", "verified"),
+    )
+    check(
+        "executable signer matches the authorized certificate",
+        details.get("SignerThumbprint") == signing.normalize_thumbprint(expected_thumbprint),
+        details.get("SignerSubject", ""),
+    )
+    check(
+        "executable signature is timestamped",
+        bool(details.get("TimeStamperSubject")),
+        details.get("TimeStamperSubject", ""),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -425,7 +412,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", default=None, help="MSI path (default <onedir>/../msi)")
     parser.add_argument("--scope", choices=["perUser", "perMachine"], default="perUser")
     parser.add_argument("--keep-wxs", action="store_true", help="keep the generated authoring")
+    parser.add_argument(
+        "--require-signed-executable",
+        action="store_true",
+        help="refuse to package an unsigned or untimestamped executable",
+    )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="enforce an activated, authorized release policy and signed executable",
+    )
+    parser.add_argument(
+        "--expected-certificate-sha1",
+        default=os.environ.get(signing.CERTIFICATE_ENV),
+        help=f"authorized signer thumbprint (default ${signing.CERTIFICATE_ENV})",
+    )
     args = parser.parse_args(argv)
+
+    policy_errors = release_policy.validate_source_tree(POLICY)
+    if args.release:
+        policy_errors.extend(release_policy.validate_release_activation(POLICY))
+        args.require_signed_executable = True
+    if policy_errors:
+        for error in policy_errors:
+            print(f"FAIL: {error}", file=sys.stderr)
+        return 2
 
     onedir = Path(args.onedir)
     if not onedir.is_absolute():
@@ -448,15 +459,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"packaging {bundle} -> {output}\n")
     check("source bundle exists", bundle.is_dir(), str(bundle))
 
-    # A signature must come from a real certificate. Report what is available and
-    # sign only when a certificate genuinely exists; an invented or self-signed
-    # "signature" would be worse than an honest unsigned package.
-    signer = find_signing_certificate()
-    environment(
-        "code-signing certificate available",
-        signer is not None,
-        signer or "none in CurrentUser\\My; package is UNSIGNED",
-    )
+    if args.require_signed_executable:
+        try:
+            verify_executable_signature(bundle / exe_name, args.expected_certificate_sha1)
+        except signing.SigningError as exc:
+            check("executable is signed by the authorized release identity", False, str(exc))
+            failures = [name for name, status, _detail in checks if status == FAIL]
+            print("\nfailing: " + ", ".join(failures), file=sys.stderr)
+            return 1
 
     leaked = find_user_data(bundle)
     check(
@@ -476,6 +486,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"using WiX {version_text} at {wix}\n")
 
     wxs_path = output.parent / f"{output.stem}.wxs"
+    product_code = release_policy.product_code_for(version, POLICY)
     components, files = generate_wxs(bundle, exe_name, version, args.scope, wxs_path)
     check(
         "authoring generated",
@@ -520,6 +531,12 @@ def main(argv: list[str] | None = None) -> int:
         "artifact": "msi",
         "version": version,
         "commit": git_commit(),
+        "upgrade_code": UPGRADE_CODE,
+        "product_code": product_code,
+        "upgrade_schedule": POLICY.upgrade_schedule,
+        "allow_same_version_upgrades": POLICY.allow_same_version_upgrades,
+        "require_signed_executable": args.require_signed_executable,
+        "release_mode": args.release,
         "scope": args.scope,
         "install_directory": (
             r"%ProgramFiles%\QuantsMindAgent"
@@ -550,18 +567,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     failures = [name for name, status, _d in checks if status == FAIL]
-    unverified = [name for name, status, _d in checks if status == INCONCLUSIVE]
     print()
     print(f"{len(checks) - len(failures)}/{len(checks)} MSI build checks passed")
-    if unverified:
-        print("environment, not gating: " + ", ".join(unverified))
     if failures:
         print("failing: " + ", ".join(failures))
         return 1
     print(f"built: {output}")
     print("note: this builds the package. Installing, launching and uninstalling it")
     print("      are separate steps -- see scripts/verify_msi_install.ps1")
-    print("note: the package is UNSIGNED; Windows SmartScreen will warn on first run.")
+    print("note: the build output is unsigned; sign and verify it with scripts/signing.py")
+    print("      before distribution, then rerun the MSI install verification.")
     return 0
 
 

@@ -46,7 +46,7 @@ def test_packaging_definition_exists(path: Path) -> None:
 
 
 class TestDebianControl:
-    @pytest.fixture(scope="class")
+    @pytest.fixture
     def control(self) -> str:
         return (DEB / "control.in").read_text(encoding="utf-8")
 
