@@ -396,13 +396,17 @@ class AgentCore:
             )
             request = self._build_request(bundle.messages, observations, tools, offer_tools)
 
-            if offer_tools and self._use_streaming:
-                # Streaming is only used when no tool call may arrive.
+            if offer_tools:
+                # A tool-calling round is never streamed: partially received
+                # tool arguments cannot be executed safely.
                 text, response = self._complete(request)
-            elif offer_tools:
-                text, response = self._complete(request)
-            else:
+            elif self._use_streaming:
                 text, response = self._stream(request, emitter)
+            else:
+                # Streaming is off, or the endpoint does not declare it. Asking
+                # for a streamed answer anyway is how a strict local server
+                # answers HTTP 400 for a parameter it refuses.
+                text, response = self._complete(request)
 
             if self._cancel.is_set():
                 # The user asked to stop while this request was in flight. The
