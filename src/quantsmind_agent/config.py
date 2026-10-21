@@ -93,11 +93,17 @@ class ProviderSettings(BaseModel):
 
         Kept as a plain mapping in the settings so a configuration file can carry
         it, and turned into a typed record at the provider boundary.
+
+        An explicit override always wins. Otherwise the record comes from the
+        preset that describes this endpoint, matched by name or by base URL. The
+        base URL matters because ``provider.name`` selects the provider
+        *factory* and must stay ``openai_compatible``; the preset list is keyed
+        by display name, so the endpoint is what identifies the service.
         """
 
         if self.capability_overrides is not None:
             return dict(self.capability_overrides)
-        preset = PROVIDER_PRESETS.get(self.name)
+        preset = PROVIDER_PRESETS.get(self.name) or _preset_for_base_url(self.base_url)
         if preset:
             declared = preset.get("capabilities")
             if isinstance(declared, dict):
@@ -342,6 +348,25 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "capabilities": {"tools": None, "streaming": None, "structured_output": None},
     },
 }
+
+
+def _preset_for_base_url(base_url: str) -> dict[str, Any] | None:
+    """The preset whose endpoint this configuration points at.
+
+    ``provider.name`` selects the provider *factory* and has to stay
+    ``openai_compatible``; the preset list is keyed by display name. The
+    endpoint is therefore what identifies the service, and it is what the
+    capability record describes.
+    """
+
+    target = base_url.strip().rstrip("/").lower()
+    if not target:
+        return None
+    for preset in PROVIDER_PRESETS.values():
+        endpoint = str(preset.get("base_url", "")).strip().rstrip("/").lower()
+        if endpoint and endpoint == target:
+            return preset
+    return None
 
 
 def default_configuration() -> Configuration:
