@@ -6,15 +6,17 @@ Configuration
 =============
 
 
-Configuration has three parts, and they are deliberately separate:
+Configuration has four parts, and they are deliberately separate:
 
 1. **Settings** (not secret) -- ``config.toml`` in the per-user config directory.
 2. **Credentials** (secret) -- the Windows Credential Manager, or
    ``secrets.json`` when a keyring is unavailable.
-3. **Session state** (in memory) -- workspace and conversation, never written
-   to disk.
+3. **Stored data** -- conversations and task records in the per-user data
+   directory. Persistence is on by default and can be disabled.
+4. **Live session state** -- workspace and conversation context in memory for
+   the current run.
 
-A fourth, optional source overrides both: environment variables.
+Environment variables are an optional overriding source.
 
 Provider settings
 =================
@@ -34,7 +36,7 @@ Provider settings
 =====================  ==========================================================
 Field                  Meaning
 =====================  ==========================================================
-``name``               Provider implementation. v0.1 ships ``openai_compatible``.
+``name``               Provider implementation. The current build ships ``openai_compatible``.
 ``base_url``           Must be ``http(s)``. A trailing ``/`` is stripped.
 ``model``              Model identifier sent to the endpoint.
 ``timeout_seconds``    Per-request timeout (5-3600 s).
@@ -96,7 +98,7 @@ Agent settings
        kept, because the failing part of a build or test run is at the end.
    * - ``persist_conversations``
      - Store conversations on disk so they survive a restart. ``false`` keeps them
-       in memory only, which is the v0.2 behaviour.
+       in memory only, the older in-memory-only behaviour.
    * - ``resume_last_conversation``
      - Reopen the most recent conversation when the application starts. The
        transcript comes back; approval grants and undo history never do.
@@ -176,5 +178,8 @@ Resetting everything
 
     Remove-Item -Recurse "$env:LOCALAPPDATA\QuantsMind-Agent\QuantsMind-Agent"
 
-Then launch the application and re-enter your settings. Nothing else is stored
-on disk: there is no database and no telemetry.
+Then launch the application and re-enter your settings. This removes the
+configuration, credentials, logs, stored conversations and task records in that
+per-user profile; it does not touch your project folders. There is no telemetry.
+If you only want to clear conversation history, use the conversation controls or
+turn off ``persist_conversations`` instead of deleting the profile.

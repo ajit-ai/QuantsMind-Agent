@@ -8,11 +8,11 @@ Tools
 
 A tool is the only way the agent touches your files. Each one has a stable
 name, a description, a JSON Schema the model reads, and a permission
-requirement. v0.1 ships four read-only tools; v0.3 adds two more for reading
-code structure.
+requirement. v0.9.0 registers sixteen tools: eight read-only readers, four file
+mutations, one command runner and three read-only Git tools.
 
-The v0.1 tool set
-=================
+Reading the workspace
+=====================
 
 ``project_structure``
 ---------------------
@@ -326,15 +326,86 @@ They read Python, and they say so instead of guessing:
   could not be parsed are listed in ``unparsable_files``, so a partial answer is
   never mistaken for a complete one.
 
-All three require ``READ_WORKSPACE`` and are read-only, exactly like the v0.1
-tools, and reading records nothing in the undo list.
+All four require ``READ_WORKSPACE``, are read-only, and record nothing in the
+undo list.
 
-Every tool
-==========
+The registered tool set
+=======================
 
-All four require ``READ_WORKSPACE`` and are read-only. There is no write, delete,
-rename, command, git or network tool in v0.1 -- see
-:doc:`../releases/v0.1`.
+.. list-table::
+   :header-rows: 1
+   :widths: 28 20 52
+
+   * - Tool
+     - Permission
+     - Effect
+   * - ``project_structure``, ``list_directory``, ``read_file``,
+       ``search_content``
+     - ``READ_WORKSPACE``
+     - Read files inside the workspace.
+   * - ``code_outline``, ``find_references``, ``project_symbols``,
+       ``project_context``
+     - ``READ_WORKSPACE``
+     - Read Python structure and project relationships.
+   * - ``write_file``, ``edit_file``
+     - ``WRITE_WORKSPACE``
+     - Create or replace a file; apply a deterministic, staleness-checked edit.
+       Approval is required unless ``auto_approve_writes`` is enabled.
+   * - ``delete_file``
+     - ``WRITE_WORKSPACE``
+     - Delete one file. Always asks; irreversible; no directory-tree delete.
+   * - ``undo_file``
+     - ``WRITE_WORKSPACE``
+     - Restore the newest reversible change to one file. Always asks; the undo
+       journal is session-scoped.
+   * - ``run_command``
+     - ``EXECUTE_COMMAND``
+     - Run one approved command in the workspace. Always asks and is filtered by
+       the command policy. It is not an OS sandbox.
+   * - ``git_status``, ``git_diff``, ``git_log``
+     - ``GIT``
+     - Read repository state. There is no Git mutation tool.
+
+File changes
+============
+
+``write_file`` creates or replaces a text file, writes through a temporary
+sibling, and reports a bounded diff plus whether the file was created or
+replaced. ``edit_file`` applies one deterministic operation against an explicit
+precondition, so a stale request fails instead of overwriting newer content.
+
+Both record a pre-image for the session undo journal and report the files that
+import the changed file. Neither can widen the approval they were given:
+``delete_file`` and ``undo_file`` ask every time, even when ordinary writes are
+auto-approved.
+
+``delete_file`` removes one file, never a directory tree. It is the one
+irreversible file operation and is deliberately not added to the undo journal.
+``undo_file`` restores the newest reversible write or edit from the current
+session; it does not restore deletes, and it starts empty after a restart.
+
+Command execution
+=================
+
+``run_command`` starts one program with an argument vector, not a shell, after
+the user approves it. The working directory must be inside the workspace; the
+runner enforces a timeout, caps stdout and stderr, and removes the configured
+provider key from the child environment.
+
+The command policy is a separate, non-overridable gate. A blocked command never
+reaches the approval dialog. The policy blocks destructive host operations,
+common network-transfer and loader tools, and Git mutations. It is a deny list
+evaluated by this process, **not an OS sandbox**: an approved program runs with
+your privileges and may spawn children or use the network. See
+:doc:`../architecture/command-execution`.
+
+Git
+===
+
+``git_status``, ``git_diff`` and ``git_log`` are read-only and use ``GIT``.
+``git_enabled = false`` removes them from the registry rather than denying them,
+so the model cannot even name them. Git mutations are blocked in the command
+policy as well.
 
 Limits
 ------

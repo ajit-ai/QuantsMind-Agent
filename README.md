@@ -10,7 +10,10 @@ answering — showing every tool call it makes.
 
 > **Status: v0.9.0 (alpha).** Planning starts from a bounded, versioned account
 > of the whole project, and that account is kept with the task as evidence.
-> Real-model behaviour and on-desktop rendering are verified manually, not by CI.
+> The published Windows MSI is qualified for a supervised limited beta only:
+> real-model, human GUI, clean-machine, signing and release-commit CI evidence
+> are still outstanding. See the
+> [qualification record](docs/source/qualification/index.rst).
 
 ---
 
@@ -21,42 +24,45 @@ Support is claimed per platform, and only where it has actually been verified.
 
 | Platform | Status | Evidence |
 |---|---|---|
-| Windows 10/11 x64 | **Supported** | Full test suite, packaged executable built and smoke-tested on Windows 11 |
-| Linux x64 (glibc) | **Supported** | Full test suite in CI on Ubuntu; headless only, no on-desktop run yet |
-| macOS (Apple Silicon, Intel) | **Planned** | Artifact builds run in CI; the GUI has not been run on macOS |
+| Windows 11 x64 | **Supported** | Full test suite, packaged executable and v0.9.0 MSI built, installed and smoke-tested on Windows 11 |
+| Windows 10 x64 | **Not verified** | The same code path may work, but no Windows 10 artifact or desktop run is recorded |
+| Linux x64 (glibc) | **Supported, headless** | Full test suite in CI on Ubuntu; no on-desktop run yet |
+| macOS (Apple Silicon, Intel) | **Planned** | Artifact builds are configured in CI; the GUI has not been run on macOS |
 | BSD (FreeBSD, NetBSD, OpenBSD) | **Not supported** | Blocked: no PySide6 wheels exist for BSD. See docs/source/installation.rst |
 
-Windows and Linux are supported. macOS is building artifacts but has no
-on-desktop verification, so it is not claimed as supported. BSD is blocked at the
+Windows 11 is the supported desktop target. Linux is supported headless;
+macOS is not claimed until its GUI has been run. BSD is blocked at the
 dependency level, not by the application code.
 
-## What v0.2 does
+## What v0.9.0 does
 
-| Capability | v0.2 |
+| Capability | v0.9.0 status |
 |---|---|
-| Cross-platform desktop GUI (PySide6 / Qt 6): Windows, Linux, macOS | ✅ |
+| Desktop GUI (PySide6 / Qt 6) | Windows 11 verified; Linux headless CI; macOS planned |
 | Open a local project folder | ✅ |
 | OpenAI-compatible provider (OpenAI, OpenRouter, Groq, Ollama, LM Studio, llama.cpp, …) | ✅ |
-| Streaming answers | ✅ |
-| Tool-calling agent loop | ✅ |
+| Streaming answers and a tool-calling agent loop | ✅ |
 | Read tools: `project_structure`, `list_directory`, `read_file`, `search_content` | ✅ |
-| Write tools: `write_file`, `edit_file` (deterministic, staleness-checked) | ✅ v0.2 |
-| `delete_file`, file-only, always approved | ✅ v0.2 |
-| `run_command` with timeout, cancellation and bounded output | ✅ v0.2 |
-| Command safety policy (deny-by-default, not an OS sandbox) | ✅ v0.2 |
-| Read-only Git: `git_status`, `git_diff`, `git_log` | ✅ v0.2 |
-| Human approval prompts (Allow / Allow Once / Deny / Allow for Session) | ✅ v0.2 |
-| Visible tool activity with per-call state | ✅ |
+| Code navigation: `code_outline`, `find_references`, `project_symbols`, `project_context` | ✅ |
+| Write tools: `write_file`, `edit_file` (deterministic, staleness-checked), `delete_file` | ✅ approval-gated |
+| `undo_file` for the newest reversible change, session-scoped | ✅ approval-gated |
+| `run_command` with timeout, cancellation and bounded output | ✅ approval-gated |
+| Command safety policy (application deny list, not an OS sandbox) | ✅ |
+| Read-only Git: `git_status`, `git_diff`, `git_log` | ✅ |
+| Plan → approve → execute → verify task lifecycle | ✅ |
+| Bounded workspace snapshot and project-aware planning (v0.9) | ✅ |
+| Persistent conversations, task history, checkpoints and recovery | ✅ |
+| Human approval prompts (Allow / Allow Once / Deny / Allow for Session) | ✅; delete, undo and command always ask |
 | Permission layer (`ALLOW` / `DENY` / `ASK`, deny-by-default) | ✅ |
-| Path-traversal and symlink-escape protection | ✅ |
+| Path containment, including symlink and junction escapes | ✅; discovery skips all filesystem links |
 | Credentials in the OS keyring (Windows Credential Manager, macOS Keychain, Secret Service on Linux), never logged, with a file-store fallback | ✅ |
-| Conversation kept for the session | ✅ |
 | Sphinx/RST documentation with a local HTML build | ✅ |
-| Automated tests (unit + integration + GUI, offline) | ✅ |
-| CI on Linux and Windows, plus native artifact builds for Windows, Linux and macOS | ✅ |
+| Automated tests (unit + integration + security + GUI, offline) | ✅ |
+| CI on Linux, Windows and macOS, plus native artifact builds | Configured; not all runners are currently available, and no green release-commit run is evidenced |
+| Signed Windows MSI and executable | ❌ unsigned; signing is an open release blocker |
+| OS-level sandbox for approved commands | ❌ not implemented |
 | **Git mutations (commit/push/checkout/reset)** | ❌ deliberately blocked |
-| **Persistent conversation history** | ❌ planned |
-| **MCP, VS Code extension, multi-agent** | ❌ planned |
+| **Web-fetch tool, MCP, VS Code extension, multi-agent** | ❌ not implemented |
 
 QuantsMind-Agent is **not** a Cline/OpenCode clone and does not claim parity
 with them. It implements the core loop of a coding agent: a request, controlled
@@ -70,7 +76,8 @@ The rule the rest of the design follows:
 Concretely: every write, every delete and every command is authorised by the
 application, not by the model. Commands that would be obviously destructive on
 the host are refused outright and are never shown in an approval dialog at all.
-See [the v0.2 release notes](docs/source/releases/v0.2.rst) and the
+See [the v0.9 behaviour note](docs/source/architecture/v0.9-behaviour.rst), the
+[changelog](CHANGELOG.md), and the
 [security boundaries](docs/source/architecture/security-boundaries.rst).
 
 ## Quick start
@@ -157,17 +164,21 @@ and the diagnostic log.
 
 ## Security
 
-* Every path — read, write, edit or delete — is validated by the same
+* Every path — read, write, edit, delete or undo — is validated by the same
   containment check. Absolute paths, `..` traversal, null bytes and symlinks
   leaving the root are refused.
+* Project discovery omits symbolic links, junctions and other reparse points
+  instead of following them. The published v0.9.0 MSI predates that fix, so an
+  outward junction can still fail discovery in that artifact.
 * The model cannot grant itself a capability: tools declare permissions, the
   registry enforces them, and unmatched rules are denied.
-* Anything that changes the workspace prompts first. Deleting a file and running
-  a command always prompt, every time.
+* Anything that changes the workspace prompts first. Deleting a file, undoing a
+  change and running a command always prompt, every time.
 * Destructive host commands are refused outright and are never offered in an
   approval dialog. Git mutations are refused too.
 * **Application-level command policy is not an OS sandbox.** It is a deny list
-  evaluated by this process. Read
+  evaluated by this process; an approved program still runs with your
+  privileges. Read
   [security boundaries](docs/source/architecture/security-boundaries.rst) before
   pointing the agent at anything you care about.
 * Your API key lives in your operating system keyring, is masked everywhere it
@@ -202,8 +213,10 @@ Start with:
 * [Configuration](docs/source/configuration.rst)
 * [Windows 11](docs/source/windows.rst)
 * [Architecture](docs/source/architecture/overview.rst)
-* [v0.2 release notes](docs/source/releases/v0.2.rst)
-* [v0.1 release notes](docs/source/releases/v0.1.rst)
+* [v0.9.0 behaviour](docs/source/architecture/v0.9-behaviour.rst)
+* [Qualification record](docs/source/qualification/index.rst)
+* [v0.2 release notes](docs/source/releases/v0.2.rst) (historical)
+* [v0.1 release notes](docs/source/releases/v0.1.rst) (historical)
 * [Roadmap](docs/source/roadmap/roadmap.rst)
 
 ## Development
@@ -240,14 +253,18 @@ scripts\package.ps1
 
 Produces a PyInstaller one-directory bundle in `dist\QuantsMind-Agent\`. Ship the
 whole directory; the rationale is in the
-[packaging decision](docs/source/installation.rst#installation-packaging).
+[packaging decision](docs/source/installation.rst#installation-packaging). The
+published v0.9.0 Windows release also ships a per-user MSI. That MSI is
+**unsigned**, so Windows SmartScreen may warn on first install; the artifact
+hash and its limits are recorded in the
+[qualification record](docs/source/qualification/index.rst).
 
 ## Project status
 
 `main` is the development branch. See
-[CHANGELOG.md](CHANGELOG.md) for what changed, and the
-[acceptance report](docs/source/testing/acceptance-v0.1.rst) for what has and has
-not been verified.
+[CHANGELOG.md](CHANGELOG.md) for what changed. The
+[qualification record](docs/source/qualification/index.rst) separates automated
+source evidence, published-artifact evidence and evidence that is still missing.
 
 ## Contributing
 

@@ -6,10 +6,11 @@ Conversation
 ============
 
 
-The conversation is in memory for as long as the application stays open.
-Nothing is persisted: closing the window discards it. That is deliberate -- v0.1
-has no database, and it makes "no data leaves your machine except the model
-request" easy to state and to verify.
+The live conversation is in memory while the application is open. Conversations
+are also stored on disk by default, one JSON file each, so they survive a
+restart; ``persist_conversations = false`` returns the application to
+in-memory-only behaviour. Stored transcripts are separate from the live model
+context, and API keys are never written into them.
 
 Sending a request
 =================
@@ -220,8 +221,8 @@ Settings
      - Reopen the newest one at startup
 
 These live under ``[agent]`` in ``config.toml`` -- see :doc:`settings`. Turning
-``persist_conversations`` off returns the application to its v0.2 behaviour,
-where a conversation lives only until you close the window.
+``persist_conversations`` off returns the application to in-memory-only
+behaviour, where a conversation lives only until you close the window.
 
 Where they are stored
 ---------------------
@@ -276,10 +277,11 @@ What the agent still cannot do
 
 * ``Search the web for ...``
 
-There is no network access in any version. Git *mutations* -- commit, push,
-checkout, reset, merge, rebase and the rest -- are blocked too, including
-through the command tool; the read-only ``git_status``, ``git_diff`` and
-``git_log`` are available.
+There is no built-in web-fetch or search tool. The only built-in outbound path
+is the configured model endpoint; an approved command can make its own network
+connections. Git *mutations* -- commit, push, checkout, reset, merge, rebase and
+the rest -- are blocked too, including through the command tool; the read-only
+``git_status``, ``git_diff`` and ``git_log`` are available.
 
 Related
 =======

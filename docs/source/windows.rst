@@ -51,6 +51,13 @@ resolved path is checked against the root, and the request is refused. This
 means a repository containing a link to ``C:\Users`` cannot be used to read that
 directory through the agent.
 
+Project discovery is deliberately stricter than an explicit path request.
+Directory junctions, symbolic links and other reparse points are omitted from
+listings and walks instead of being followed. A junction-containing workspace
+therefore still produces a bounded snapshot, with the excluded link named as an
+unknown; it no longer fails the whole scan. The published v0.9.0 MSI predates
+this source fix; see :doc:`qualification/defect-triage`.
+
 Long paths
 ----------
 
@@ -62,15 +69,33 @@ projects.
 Manual validation procedure
 ===========================
 
-This procedure is the *Windows 11 acceptance* gate. It is manual by design: it
-requires a real desktop, a real API key and a real model. Run it once per
-release candidate; record the outcome in
-:doc:`testing/acceptance-v0.1`.
+The v0.9.0 Windows 11 acceptance gate is the executable beta plan:
+:doc:`qualification/manual-beta-acceptance`. It covers install and hash,
+first-run settings, a real-provider read-only task, approval-gated edits,
+deny/stale-edit safety, command approval and policy refusal, closing during an
+approval, the outward-junction known defect, the Project panel, a twenty-turn
+session, and uninstall/profile preservation.
+
+For a quick local check, use the smoke table in
+:doc:`testing/manual-acceptance`. It is not a substitute for the beta evidence.
+
+Do **not** record v0.9.0 results in :doc:`testing/acceptance-v0.1`; that report is
+the historical v0.1 record. Record beta evidence in
+:doc:`qualification/manual-beta-acceptance`, with the artifact hash and exact
+observations.
+
+The packaged MSI and the onedir executable have automated install, launch,
+reinstall and uninstall checks. Those checks do not cover human rendering,
+approval-dialog comprehension or a real model. Those remain manual beta gates.
 
 .. _windows-manual-checklist:
 
-Checklist
----------
+Historical v0.1 Windows checklist
+---------------------------------
+
+This was the v0.1 read-only release gate. It is preserved for the historical
+v0.1 release notes and acceptance report; it is **not** the current gate and
+does not exercise writes, commands or approvals.
 
 .. list-table::
    :header-rows: 1
@@ -119,65 +144,17 @@ Checklist
      - Close the window; the process exits cleanly
      - PASS / FAIL
 
-Detailed steps
---------------
-
-1. **Launch** and confirm the window appears within a few seconds::
-
-       quantsmind-agent
-
-2. **Confirm the empty state.** The transcript reads *Open a project folder
-   first.*
-
-3. **Open a project.** Click **Open project…**, select any small repository,
-   for example::
-
-       python scripts\make_acceptance_fixture.py
-       quantsmind-agent --workspace .acceptance-fixture\widget-factory
-
-   The sidebar shows the resolved absolute path.
-
-4. **Confirm the status bar** shows the model and the workspace.
-
-5. **Open Settings** (``Ctrl+K``). Confirm the model name, the base URL, and
-   that the API key field is empty with masked status text such as
-   ``sk-******op``.
-
-6. **Ask a question** that requires orientation::
-
-       Explain the structure of this project.
-
-7. **Confirm tool activity.** The *Tool activity* panel lists
-   ``project_structure`` (or ``list_directory``) with a state marker.
-
-8. **Confirm streaming.** Text appears progressively in the transcript rather
-   than all at once.
-
-9. **Ask a tool-driven question**::
-
-       Read the README and summarize the project.
-
-10. **Confirm ``read_file``** appears in the activity panel before the answer.
-
-11. **Confirm no credential leaks.** Search the transcript, the Settings dialog
-    and ``%LOCALAPPDATA%\QuantsMind-Agent\QuantsMind-Agent\logs\quantsmind-agent.log``
-    for the first and last three characters of your key. Neither may appear.
-
-12. **Cancel a request.** Press **Stop** while a request is running. The window
-    stays responsive and the transcript reports the cancellation. Note the
-    documented limitation: an HTTP request already in flight is not aborted, but
-    its answer is discarded.
-
-13. **Exit.** Close the window. The process terminates with code ``0`` and no
-    orphaned ``python`` process remains.
-
 Known Windows limitations
 =========================
 
-* The packaged executable has no Start-menu entry or file association in v0.1.
+* Windows 10 is not separately verified; the supported desktop target is
+  Windows 11 x64.
+* The portable onedir folder has no Start-menu entry or file association. The
+  MSI creates an installed-apps entry and shortcuts.
 * Long paths beyond 260 characters need the Windows long-paths policy.
 * The credential store falls back to ``secrets.json`` when Credential Manager is
   unavailable.
 * Sockets and TLS use ``httpx``'s bundled ``certifi`` bundle, not the Windows
   certificate store, so a corporate proxy with a private CA needs
   ``REQUESTS_CA_BUNDLE``-style configuration at the environment level.
+* The published v0.9.0 MSI is unsigned and predates the junction-discovery fix.

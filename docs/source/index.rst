@@ -9,14 +9,19 @@ QuantsMind-Agent
 **QuantsMind-Agent is an AI coding-agent platform inspired by modern
 coding-agent workflows.**
 
-QuantsMind-Agent is a Windows desktop application that connects a real language
-model to a local project folder. You point it at a repository, ask a coding
-question, and the agent inspects your files through controlled tools before
-answering. Everything it touches is visible in the interface.
+QuantsMind-Agent is a desktop application that connects a real language model to
+a local project folder. You point it at a repository, ask a coding question, and
+the agent inspects your files through controlled tools before answering.
+Everything it touches is visible in the interface. Windows 11 is the supported
+desktop target; Linux is supported headless.
 
-Version 0.2 is a controlled coding agent: it can read, write, edit, delete, run
-approved commands and inspect Git state, and every change is authorised by the
-application rather than by the model.
+Version 0.9.0 is a controlled coding agent. It can read and navigate a project,
+write, edit, delete and undo files, run approved commands, and inspect Git state.
+Planning starts from a bounded workspace snapshot, and a task is planned,
+approved, executed and verified through the application's own records. Every
+change is authorised by the application rather than by the model. Command
+execution is not an OS sandbox and the published Windows MSI is still a limited
+beta; see :doc:`qualification/index`.
 
 .. code-block:: text
 
@@ -99,6 +104,7 @@ application rather than by the model.
    testing/native-gui-acceptance
    testing/live-provider-validation-v0.5
    known-issues
+   qualification/index
 
 .. toctree::
    :maxdepth: 2

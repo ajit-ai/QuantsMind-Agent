@@ -524,7 +524,8 @@ def discover_workspace(
     """
 
     project = _workspace(workspace)
-    entries = list(project.walk(".", max_entries=max(1, int(max_entries))))
+    excluded: list[str] = []
+    entries = list(project.walk(".", max_entries=max(1, int(max_entries)), excluded=excluded))
     profile = profile or project_intelligence_profile(project)
     names = {entry.name for entry in entries if "/" not in entry.path}
     suffixes = {Path(entry.path).suffix.lower() for entry in entries}
@@ -570,6 +571,14 @@ def discover_workspace(
     if sampled:
         unknowns.append(
             f"only {len(selected)} of {len(files)} discovered files are included in the snapshot"
+        )
+    if excluded:
+        sample = ", ".join(excluded[:5])
+        if len(excluded) > 5:
+            sample += f", and {len(excluded) - 5} more"
+        unknowns.append(
+            f"{len(excluded)} filesystem link(s) were not followed; "
+            f"their contents are not represented: {sample}"
         )
 
     try:

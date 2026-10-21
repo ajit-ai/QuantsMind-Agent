@@ -149,6 +149,19 @@ class TestBoundsAreVisible:
         assert 0 < MAX_SNAPSHOT_FILES < 10_000
 
 
+class TestLinks:
+    def test_an_outward_junction_is_skipped_and_reported(
+        self, outward_junction_project: Path
+    ) -> None:
+        snapshot = discover_workspace(outward_junction_project)
+
+        paths = {entry.path for entry in snapshot.files}
+
+        assert "src/safe.py" in paths
+        assert not any("linked-outside" in path or "secret" in path for path in paths)
+        assert any("link" in note and "not followed" in note for note in snapshot.unknowns)
+
+
 class TestPromptRendering:
     def test_the_prompt_never_contains_the_absolute_workspace(
         self, python_project: Workspace

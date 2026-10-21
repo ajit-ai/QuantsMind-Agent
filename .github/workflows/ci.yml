@@ -116,8 +116,8 @@ jobs:
       - name: GUI tests
         run: python scripts/run_qt_tests.py tests/gui -q
 
-      # v0.2 executes real commands and touches real files. Prove the safety
-      # policy on a host with no display before trusting the suite above.
+      # The product executes real commands and touches real files. Prove the
+      # safety policy on a host with no display before trusting the suite above.
       # One line on purpose: GitHub's default shell on Windows is PowerShell,
       # which does not treat a trailing backslash as a line continuation, so a
       # wrapped command silently passes "\" as an argument and pytest then
@@ -180,7 +180,8 @@ jobs:
           retention-days: 14
 
   # A green CI run does NOT prove the application works on a real Windows 11
-  # desktop or against a real model. See docs/source/testing/acceptance-v0.1.rst.
+  # desktop or against a real model. See
+  # docs/source/qualification/manual-beta-acceptance.rst.
   manual-acceptance-required:
     name: Manual Windows 11 acceptance required
     runs-on: ubuntu-latest
@@ -188,18 +189,18 @@ jobs:
     steps:
       - name: Reminder
         run: |
-          echo "::notice title=Manual acceptance pending::"
+          echo "::notice title=Manual beta acceptance pending::"
           echo "Automated CI passed, but GUI rendering on Windows 11 and"
-          echo "real-LLM behaviour are NOT verified here. Run the procedures in"
-          echo "docs/source/windows.rst and docs/source/testing/manual-acceptance.rst"
+          echo "real-provider behaviour are NOT verified here. Run the procedures"
+          echo "in docs/source/windows.rst and docs/source/testing/manual-acceptance.rst"
           echo "and record the results in"
-          echo "docs/source/testing/acceptance-v0.1.rst."
+          echo "docs/source/qualification/manual-beta-acceptance.rst."
 
-      - name: Reminder for v0.2 mutating tools
+      - name: Reminder for mutating tools
         run: |
-          echo "::notice title=v0.2 acceptance pending::"
-          echo "v0.2 adds write/edit/delete, run_command and read-only Git."
+          echo "::notice title=Beta acceptance pending::"
+          echo "The product includes write/edit/delete, run_command and read-only Git."
           echo "CI proves the automated suite only. The approval prompt, a real"
           echo "write/edit/delete round trip, a real approved command and the"
           echo "command safety policy MUST be exercised by hand on Windows 11"
-          echo "against a disposable workspace before v0.2 is treated as accepted."
+          echo "against a disposable workspace before v0.9.0 is treated as accepted."

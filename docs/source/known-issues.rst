@@ -237,9 +237,11 @@ Windows desktop acceptance is outstanding
 ==========================================
 
 No human has looked at the rendered window or exercised an approval dialog on
-any platform. See :doc:`testing/native-gui-acceptance` for the checklist and the result
-template. The ``Manual Windows 11 acceptance required`` CI job is a four-second
-reminder and is not a test.
+any platform. The v0.9.0 gate and result template are in
+:doc:`qualification/manual-beta-acceptance`; the older
+:doc:`testing/native-gui-acceptance` page is supporting context, not the current
+sign-off record. The ``Manual Windows 11 acceptance required`` CI job is a
+four-second reminder and is not a test.
 
 Documentation is not published
 ==============================

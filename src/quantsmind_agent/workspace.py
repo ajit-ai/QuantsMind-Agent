@@ -14,6 +14,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import os
+import stat
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -145,6 +146,18 @@ def _ends_with_newline(path: Path) -> bool:
             return handle.read(1) == b"\n"
     except OSError:  # pragma: no cover - unreadable file
         return True
+
+
+_FILE_ATTRIBUTE_REPARSE_POINT = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def _is_filesystem_link(info: os.stat_result) -> bool:
+    """Whether lstat metadata describes a symlink, junction or other reparse point."""
+
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    attributes = int(getattr(info, "st_file_attributes", 0) or 0)
+    return bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,19 +410,24 @@ class Workspace:
 
         entries: list[FileEntry] = []
         for item in children:
-            if item.is_dir(follow_symlinks=False) and item.name in self._ignored:
-                continue
-            rel = self._relative_of(Path(item.path))
             try:
                 info = item.stat(follow_symlinks=False)
-                size, mtime = info.st_size, info.st_mtime
             except OSError:
-                size, mtime = 0, None
+                info = None
+            if info is not None and _is_filesystem_link(info):
+                continue
+            is_dir = (
+                item.is_dir(follow_symlinks=False) if info is None else stat.S_ISDIR(info.st_mode)
+            )
+            if is_dir and item.name in self._ignored:
+                continue
+            rel = self._relative_of(Path(item.path))
+            size, mtime = (info.st_size, info.st_mtime) if info is not None else (0, None)
             entries.append(
                 FileEntry(
                     path=rel,
                     name=item.name,
-                    is_dir=item.is_dir(follow_symlinks=False),
+                    is_dir=is_dir,
                     size=size,
                     modified=_iso(mtime),
                 )
@@ -429,8 +447,15 @@ class Workspace:
         *,
         max_entries: int = 5000,
         include_binary: bool = False,
+        excluded: list[str] | None = None,
     ) -> Iterator[FileEntry]:
-        """Depth-first walk yielding every reachable *file* under ``relative``."""
+        """Depth-first walk yielding every reachable *file* under ``relative``.
+
+        Symbolic links, junctions and other filesystem reparse points are not
+        traversed. This keeps discovery inside the workspace and prevents link
+        cycles; their workspace-relative paths are appended to ``excluded`` when
+        a list is supplied.
+        """
 
         base = self.resolve(relative)
         if not base.is_dir():
@@ -438,17 +463,40 @@ class Workspace:
 
         count = 0
         for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
-            dirnames[:] = sorted(d for d in dirnames if d not in self._ignored)
             current = Path(dirpath)
+            kept: list[str] = []
+            for name in sorted(dirnames):
+                if name in self._ignored:
+                    continue
+                child = current / name
+                try:
+                    dir_info = child.lstat()
+                except OSError:
+                    continue
+                if _is_filesystem_link(dir_info):
+                    if excluded is not None:
+                        excluded.append(
+                            PurePosixPath(child.relative_to(self._root).as_posix()).as_posix()
+                        )
+                    continue
+                kept.append(name)
+            dirnames[:] = kept
+
             for name in sorted(filenames):
                 full = current / name
+                try:
+                    info = full.lstat()
+                except OSError:
+                    info = None
+                if info is not None and _is_filesystem_link(info):
+                    if excluded is not None:
+                        excluded.append(
+                            PurePosixPath(full.relative_to(self._root).as_posix()).as_posix()
+                        )
+                    continue
                 if not include_binary and full.suffix.lower() in self._binary:
                     continue
-                try:
-                    info = full.stat()
-                    size, mtime = info.st_size, info.st_mtime
-                except OSError:
-                    size, mtime = 0, None
+                size, mtime = (info.st_size, info.st_mtime) if info is not None else (0, None)
                 yield FileEntry(self._relative_of(full), name, False, size, _iso(mtime))
                 count += 1
                 if count >= max_entries:

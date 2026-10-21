@@ -139,6 +139,25 @@ class TestInspection:
         assert workspace.count_children("missing") == 0
 
 
+class TestJunctions:
+    def test_outward_junction_is_not_listed_or_walked(self, outward_junction_project: Path) -> None:
+        space = Workspace(outward_junction_project)
+
+        names = {entry.name for entry in space.list_dir(".")}
+        paths = {entry.path for entry in space.walk(".")}
+
+        assert "linked-outside" not in names
+        assert "src" in names
+        assert "src/safe.py" in paths
+        assert not any("linked-outside" in path or "secret" in path for path in paths)
+
+    def test_outward_junction_read_is_still_refused(self, outward_junction_project: Path) -> None:
+        space = Workspace(outward_junction_project)
+
+        with pytest.raises(InvalidPathError):
+            space.read_text("linked-outside/secret.py")
+
+
 class TestReading:
     def test_read_text(self, workspace: Workspace) -> None:
         content = workspace.read_text("README.md")

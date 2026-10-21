@@ -8,6 +8,7 @@ store, so no test can read or write the developer's credentials.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -113,6 +114,37 @@ def workspace(sample_project: Path) -> Workspace:
     """A :class:`Workspace` bound to :func:`sample_project`."""
 
     return Workspace(sample_project)
+
+
+@pytest.fixture
+def outward_junction_project(tmp_path: Path) -> Iterator[Path]:
+    """A workspace whose outward directory junction points at an outside tree."""
+
+    if os.name != "nt":
+        pytest.skip("directory junctions are only available on Windows")
+
+    root = tmp_path / "junction_project"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "safe.py").write_text("VALUE = 1\n", encoding="utf-8")
+    outside = tmp_path / "outside_project"
+    outside.mkdir()
+    (outside / "secret.py").write_text("SECRET = 1\n", encoding="utf-8")
+    link = root / "linked-outside"
+
+    created = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(outside)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if created.returncode != 0:
+        pytest.skip(f"could not create a directory junction: {created.stderr or created.stdout}")
+
+    try:
+        yield root
+    finally:
+        if os.path.lexists(link):
+            os.rmdir(link)
 
 
 @pytest.fixture

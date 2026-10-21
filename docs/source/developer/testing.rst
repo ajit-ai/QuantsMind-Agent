@@ -138,8 +138,10 @@ Honest limits of the automated suite:
 * **No interactive desktop.** Widgets are exercised offscreen: no window
   dragging, DPI scaling, native dialogs, taskbar integration or focus behaviour.
 * **No visual regression.** There are no screenshot assertions.
-* **No packaging test.** ``python -m build`` validates metadata and imports;
-  PyInstaller output is verified manually.
+* **No packaging test in the ordinary suite.** ``python -m build`` validates
+  metadata and imports. PyInstaller, MSI install and uninstall checks have
+  dedicated scripts, but their results are separate evidence and are not
+  inferred from a pytest run.
 * **No concurrency stress.** The threading tests are single-turn and
   deterministic.
 

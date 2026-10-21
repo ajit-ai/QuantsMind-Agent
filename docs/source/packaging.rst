@@ -261,6 +261,7 @@ Known issues and unverified platforms
   so Windows SmartScreen will warn on first run of the MSI or the executable.
   Signing needs a real certificate; an invented signature would be worse than
   none. macOS notarization, were that in scope, is likewise not performed.
-* **No CI evidence.** ``.github/workflows/package.yml`` covers Windows, Linux and
-  both macOS architectures, but it was not run for this release, so nothing here
-  is claimed on its authority.
+* **No successful CI evidence.** ``.github/workflows/package.yml`` is configured
+  for Windows, Linux and both macOS architectures, but no run on the release
+  commit completed successfully for this release. Its macOS Intel job also still
+  names a retired runner. Nothing here is claimed on the workflow's authority.

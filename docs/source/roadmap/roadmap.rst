@@ -8,6 +8,13 @@ Roadmap
 
 Direction, not a commitment. Items move as the product and its users dictate.
 
+.. note::
+
+   This roadmap is historical. The v0.2 through v0.9 capabilities described
+   below have shipped; see :doc:`../architecture/v0.9-behaviour` and
+   ``CHANGELOG.md`` for what actually exists. Items still marked as future here
+   are not a description of v0.9.0.
+
 Principles
 ==========
 
