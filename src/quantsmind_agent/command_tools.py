@@ -66,6 +66,15 @@ __all__ = [
 
 logger = get_logger(__name__)
 
+#: The isolation a sandboxed command requires by default. ``LIFECYCLE`` is the
+#: level this host can establish without elevation; a caller handling
+#: untrusted code asks for ``UNTRUSTED_CODE`` and the run is refused when the
+#: boundary cannot provide it (M3B-S1.4).
+from quantsmind_agent.sandbox.policy import IsolationLevel as _IsolationLevel  # noqa: E402
+
+_DEFAULT_SANDBOX_ISOLATION: Any = _IsolationLevel.LIFECYCLE
+
+
 #: Upper bounds, so a misbehaving command cannot exhaust the machine.
 MAX_OUTPUT_CHARS = 20_000
 MAX_TIMEOUT_SECONDS = 600.0
@@ -254,12 +263,21 @@ class RunCommandTool:
         default_timeout: float = 120.0,
         max_output_chars: int = MAX_OUTPUT_CHARS,
         redact_env: tuple[str, ...] = (),
+        sandbox_runner: Any | None = None,
+        sandbox_isolation: Any | None = None,
+        sandbox_max_child_processes: int = 8,
     ) -> None:
         self._workspace = workspace
         self._cancel = cancel_event
         self._default_timeout = min(max(default_timeout, MIN_TIMEOUT_SECONDS), MAX_TIMEOUT_SECONDS)
         self._max_output_chars = max_output_chars
         self._redact_env = redact_env
+        #: When a runner is supplied, every command runs inside the OS
+        #: boundary (M3B-S1.4) and a refusal is a failure, never a fall back
+        #: to an ordinary subprocess.
+        self._sandbox_runner = sandbox_runner
+        self._sandbox_isolation = sandbox_isolation or _DEFAULT_SANDBOX_ISOLATION
+        self._sandbox_max_child_processes = int(sandbox_max_child_processes)
 
     @property
     def spec(self) -> ToolSpec:
@@ -441,6 +459,57 @@ class RunCommandTool:
             # Keep a console-less child: a GUI app must not flash console
             # windows, and the pipes carry everything we need.
             creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        if self._sandbox_runner is not None:
+            # The command runs inside the OS-enforced boundary (M3B-S1.4).
+            # The policy is built from the *approved* argv, so nothing about
+            # the execution can be changed after the approval, and a refusal
+            # is a failure -- never a fall back to an ordinary subprocess.
+            from quantsmind_agent.sandbox.policy import (
+                SandboxPolicy,
+            )
+
+            policy = SandboxPolicy(
+                workspace_root=cwd,
+                allowed_command=tuple(argv),
+                timeout_seconds=timeout,
+                max_output_bytes=self._max_output_chars,
+                max_child_processes=self._sandbox_max_child_processes,
+                required_isolation=self._sandbox_isolation,
+                reason="run_command via the sandbox",
+            )
+            result = self._sandbox_runner.run(policy, cancel_event=self._cancel)
+            if not result.isolation_verified:
+                raise CommandExecutionError(
+                    " ".join(argv),
+                    (
+                        "the command was not executed: the sandbox could not establish "
+                        f"the required isolation ({result.failure_reason})"
+                    ),
+                    details={"exit_code": None, "isolation": result.established_level},
+                )
+            return ToolResult.success(
+                self.spec.name,
+                (
+                    f"`{' '.join(argv)}` exited with code {result.exit_code} "
+                    f"in {result.duration_seconds:.1f}s"
+                ),
+                {
+                    "command": " ".join(argv),
+                    "argv": argv,
+                    "cwd": str(cwd),
+                    "exit_code": result.exit_code,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "timed_out": result.timed_out,
+                    "duration_seconds": round(result.duration_seconds, 2),
+                    "isolation": result.established_level,
+                    "sandboxed": True,
+                    "risk": verdict.command_class.value,
+                    "risk_label": verdict.risk_label,
+                    "policy_rule": verdict.rule,
+                },
+            )
 
         try:
             # argv list, shell=False, and the policy has already approved it.

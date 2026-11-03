@@ -154,10 +154,11 @@ Credential storage
 The API key is stored in the operating system keyring: Windows Credential
 Manager on Windows, the Keychain on macOS, and the Secret Service (GNOME Keyring,
 KWallet) on Linux. On a Linux machine with no Secret Service provider -- a bare
-container, some minimal window managers -- `keyring` reports no usable backend
-and the application falls back to a file-backed store in its data directory. That
-fallback is plain file storage, so on such a machine the key is only as protected
-as the file's permissions.
+container, some minimal window managers -- ``keyring`` reports no usable backend.
+The application still starts and will read a ``secrets.json`` left by an earlier
+version, but it **refuses to save a new key**, because writing one would put the
+credential in a plaintext file. Install a Secret Service provider (or another
+supported keyring backend) before entering a key.
 
 Command-line options
 ====================
@@ -216,14 +217,15 @@ adds ``sphinx``; ``packaging`` adds ``pyinstaller``.
 Where files are written
 =======================
 
-====================================  ================================
+====================================  =============================================
 Path (Windows 11)                     Contents
-====================================  ================================
+====================================  =============================================
 ``%LOCALAPPDATA%\QuantsMind-Agent\``  ``config.toml``
-``%LOCALAPPDATA%\QuantsMind-Agent\``  ``secrets.json`` (file fallback)
+``%LOCALAPPDATA%\QuantsMind-Agent\``  ``secrets.json`` (legacy; read-only without a
+                                      credential service)
 Windows Credential Manager            the API key (primary store)
 ``%LOCALAPPDATA%\QuantsMind-Agent\``  ``logs\quantsmind-agent.log``
-====================================  ================================
+====================================  =============================================
 
 None of these live inside the repository, and all are covered by
 ``.gitignore``. Override them with ``--config-dir`` for a fully portable setup.

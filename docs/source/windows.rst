@@ -31,9 +31,11 @@ Credentials
 -----------
 
 With ``keyring`` installed the API key is stored in **Windows Credential
-Manager**. If no credential service is reachable (some service accounts, locked
-sessions), the store degrades to ``secrets.json`` with owner-only permissions.
-The application never fails to start because of this.
+Manager**. A keyring that cannot be used is treated as unavailable rather than
+as permission to write plaintext: the application still starts and can read a
+legacy ``secrets.json``, but it refuses to save a new key there. The UI reports
+the degraded state and suggests restoring Credential Manager access. The
+application never fails to start because of this.
 
 File paths
 ----------
@@ -152,8 +154,8 @@ Known Windows limitations
 * The portable onedir folder has no Start-menu entry or file association. The
   MSI creates an installed-apps entry and shortcuts.
 * Long paths beyond 260 characters need the Windows long-paths policy.
-* The credential store falls back to ``secrets.json`` when Credential Manager is
-  unavailable.
+* When Credential Manager is unavailable, a legacy ``secrets.json`` remains
+  readable but new keys cannot be saved until a credential service is usable.
 * Sockets and TLS use ``httpx``'s bundled ``certifi`` bundle, not the Windows
   certificate store, so a corporate proxy with a private CA needs
   ``REQUESTS_CA_BUNDLE``-style configuration at the environment level.

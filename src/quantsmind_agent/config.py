@@ -34,7 +34,6 @@ Credential Manager or ``secrets.json``) or in the environment variable named by
 
 from __future__ import annotations
 
-import os
 import tomllib
 from enum import StrEnum
 from pathlib import Path
@@ -42,13 +41,25 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
+from quantsmind_agent.credential_resolution import (
+    CredentialResolution,
+    CredentialResolutionService,
+)
 from quantsmind_agent.errors import ConfigurationError
 from quantsmind_agent.paths import AppPaths, default_paths
-from quantsmind_agent.secrets import SecretStore, build_secret_store, mask_secret
+from quantsmind_agent.provider_identity import (
+    EndpointPolicyError,
+    ProviderIdentity,
+    ProviderTrust,
+    canonicalize_endpoint,
+    resolve_provider_identity,
+)
+from quantsmind_agent.secrets import SecretStore, build_secret_store
 from quantsmind_agent.toml_writer import dumps as toml_dumps
 from quantsmind_agent.version import APP_NAME, __version__
 
 __all__ = [
+    "PROVIDER_ENV_VARS",
     "PROVIDER_PRESETS",
     "AgentSettings",
     "ConfigManager",
@@ -60,6 +71,31 @@ __all__ = [
 ]
 
 _LOCAL_HOST_MARKERS = ("localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "[::1]")
+
+#: Environment variables that belong to one specific provider (M3B-S1.1).
+#:
+#: A generic variable such as ``QM_API_KEY`` cannot be used for "the current
+#: provider", because the current provider changes: that is exactly how a key
+#: ends up being sent to a service it was not issued for. These names are
+#: bound to one service each.
+PROVIDER_ENV_VARS: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+    "together": "TOGETHER_API_KEY",
+    "fireworks": "FIREWORKS_API_KEY",
+}
+
+#: The provider that owns the application's generic environment variable.
+#:
+#: ``QM_API_KEY`` predates provider identities and has always meant "the key
+#: for the provider this application was pointed at". It is now bound to the
+#: default provider, which is the one the default configuration names. Every
+#: other provider has a variable of its own, so switching providers can no
+#: longer send this key to a different service.
+GENERIC_ENV_OWNER = "openai"
 
 
 class LogLevel(StrEnum):
@@ -87,6 +123,41 @@ class ProviderSettings(BaseModel):
     #: Capability overrides for this endpoint, as declared by the chosen preset.
     #: ``None`` means "no opinion", not "unsupported".
     capability_overrides: dict[str, Any] | None = None
+    #: Explicit provider identity binding (M3B-S1.1).
+    #:
+    #: ``provider.name`` selects the protocol factory and is therefore the
+    #: constant ``openai_compatible`` for every hosted service, so it cannot
+    #: say which service a credential belongs to. This field can: set it to
+    #: ``openrouter`` to bind a credential to OpenRouter explicitly, and the
+    #: credential identifier becomes ``provider:openrouter:default:api_key``.
+    provider_id: str | None = None
+    #: Whether a custom endpoint may be used at all (M3B-S1.1).
+    #:
+    #: Off by default. An endpoint that is not a known service needs an
+    #: explicit trust decision, because speaking the OpenAI protocol is not a
+    #: statement that a destination deserves a credential.
+    trust_custom_endpoint: bool = False
+    #: Whether a model server on the local network may be used (M3B-S1.2).
+    #:
+    #: Off by default. A model server on this machine needs no permission; one
+    #: on the network is an explicit decision, because the prompt and the
+    #: response would leave the machine.
+    allow_remote_local_models: bool = False
+
+    def identity(self) -> ProviderIdentity:
+        """The provider identity this configuration describes.
+
+        Derived from the canonical endpoint and, when present, the explicit
+        ``provider_id`` binding. The display name is never used to decide
+        ownership.
+        """
+
+        endpoint = canonicalize_endpoint(self.base_url)
+        return resolve_provider_identity(
+            endpoint,
+            explicit_provider_id=self.provider_id,
+            display_name=self.name,
+        )
 
     def capabilities(self) -> dict[str, Any] | None:
         """The declared capability overrides for this endpoint, if any.
@@ -129,14 +200,27 @@ class ProviderSettings(BaseModel):
         return stripped
 
     def requires_api_key(self) -> bool:
-        """Return ``True`` when this endpoint needs a credential.
+        """Whether this endpoint needs a credential (M3B-S1.1).
 
-        Local OpenAI-compatible servers (Ollama, LM Studio, llama.cpp, vLLM ...)
-        normally run unauthenticated, so the key stays optional for them.
+        Decided by the canonical endpoint rather than by a substring match. A
+        host whose name merely *contains* ``localhost`` is not a local
+        server, and a LAN address is not a cloud service: those two mistakes
+        are exactly how a cloud key ends up being offered to a machine on the
+        local network.
+
+        A model server on this machine needs no key. Everything else does,
+        including a custom endpoint, which is refused outright unless the
+        operator has explicitly trusted it.
         """
 
-        host = self.base_url.lower()
-        return not any(marker in host for marker in _LOCAL_HOST_MARKERS)
+        try:
+            endpoint = canonicalize_endpoint(self.base_url)
+        except EndpointPolicyError:
+            return True
+        if endpoint.is_loopback:
+            return False
+        identity = resolve_provider_identity(endpoint, explicit_provider_id=self.provider_id)
+        return identity.trust is not ProviderTrust.LOCAL
 
 
 class AgentSettings(BaseModel):
@@ -376,12 +460,19 @@ def default_configuration() -> Configuration:
 
 
 class ConfigManager:
-    """Loads/saves :class:`Configuration` and resolves the API key.
+    """Loads/saves :class:`Configuration` and exposes credential compatibility APIs.
 
-    Credential resolution order:
+    Credential resolution itself lives in
+    :class:`~quantsmind_agent.credential_resolution.CredentialResolutionService`.
+    The compatibility methods on this class delegate to that service, so a
+    caller that still uses :meth:`api_key_value` gets the same order and the
+    same lifecycle rules as the request path: the provider-bound store slot,
+    a confirmed legacy binding, the provider's own environment variable, then
+    the generic environment variable for the provider that owns it.
 
-    1. the environment variable named by :attr:`ProviderSettings.api_key_env`,
-    2. the secret store (Windows Credential Manager or ``secrets.json``).
+    Outside the composition root the service reads the configured secret
+    store directly. :meth:`bind_credential_service` replaces it with the
+    vault-backed service once the vault exists, so there is one authority.
     """
 
     def __init__(
@@ -391,7 +482,21 @@ class ConfigManager:
     ) -> None:
         self.paths = paths or default_paths()
         self.secret_store = secret_store or build_secret_store(self.paths.secrets_file)
+        self._credential_service = CredentialResolutionService(
+            secret_store=self.secret_store,
+            provider_env_vars=PROVIDER_ENV_VARS,
+            generic_env_owner=GENERIC_ENV_OWNER,
+        )
         self._config: Configuration = default_configuration()
+
+    def bind_credential_service(self, service: CredentialResolutionService) -> None:
+        """Use ``service`` as the one authority for every credential decision."""
+
+        self._credential_service = service
+
+    @property
+    def credential_service(self) -> CredentialResolutionService:
+        return self._credential_service
 
     @property
     def config(self) -> Configuration:
@@ -439,24 +544,60 @@ class ConfigManager:
         return self._config
 
     # -- credentials -----------------------------------------------------
+    def provider_identity(self) -> ProviderIdentity:
+        """The identity of the configured provider (M3B-S1.1)."""
+
+        return self._config.provider.identity()
+
     def api_key_secret_key(self) -> str:
-        """Secret-store key for the active provider's credential."""
+        """Secret-store key for the active provider's credential.
+
+        Provider-bound: ``provider:openrouter:default:api_key``. The old
+        shared slot is no longer written to, because one slot shared by every
+        provider is the reason a credential could be sent to the wrong
+        service.
+        """
+
+        return self.provider_identity().credential_id
+
+    def legacy_api_key_secret_key(self) -> str:
+        """The old shared slot, kept readable for an explicit migration."""
 
         return f"provider:{self._config.provider.name}:api_key"
 
-    def api_key_value(self) -> str | None:
-        """The credential as a plain string, for the provider's request time.
+    def credential_resolution_for(self, settings: ProviderSettings) -> CredentialResolution:
+        """The authoritative resolution for ``settings``, saved or not.
 
-        Resolution order: the environment variable named by
-        :attr:`ProviderSettings.api_key_env`, then the secret store. Returning
-        ``None`` is how the provider learns that no credential is configured.
+        The Settings dialog resolves the values currently on screen, so its
+        hint cannot promise a key the request path would refuse.
         """
 
-        env_value = os.environ.get(self._config.provider.api_key_env)
-        if env_value:
-            return env_value
-        secret = self.secret_store.get(self.api_key_secret_key())
-        return secret.get_secret_value() if secret else None
+        return self._credential_service.resolve(
+            settings.identity(),
+            required=settings.requires_api_key(),
+            configured_env_name=settings.api_key_env,
+        )
+
+    def credential_resolution(self) -> CredentialResolution:
+        """The authoritative resolution for the current configuration.
+
+        This does not perform endpoint authorisation; the request path and
+        readiness do that separately. It answers only "what credential, from
+        where, in what state".
+        """
+
+        return self.credential_resolution_for(self._config.provider)
+
+    def api_key_value(self) -> str | None:
+        """The credential as a plain string, for compatibility callers.
+
+        Delegates to the authoritative resolution, so the value follows the
+        same order and lifecycle rules as the request path. Returning ``None``
+        is how a caller learns that no usable credential is configured. A
+        credential is never resolved for one provider and sent to another.
+        """
+
+        return self.credential_resolution().value
 
     def resolve_api_key(self) -> SecretStr | None:
         """The credential as a :class:`~pydantic.SecretStr`, which masks itself."""
@@ -464,8 +605,12 @@ class ConfigManager:
         value = self.api_key_value()
         return SecretStr(value) if value else None
 
-    def set_api_key(self, value: str) -> None:
-        """Persist an API key to the secret store."""
+    def set_api_key_for(self, settings: ProviderSettings, value: str) -> None:
+        """Persist a key for ``settings``, under that identity only.
+
+        Writes to a plaintext file are refused, and a provider id that does
+        not own the configure endpoint is refused before anything is stored.
+        """
 
         stripped = value.strip()
         if not stripped:
@@ -473,21 +618,46 @@ class ConfigManager:
                 "API key must not be empty",
                 user_message="Enter a non-empty API key.",
             )
-        self.secret_store.set(self.api_key_secret_key(), SecretStr(stripped))
+        identity = settings.identity()
+        if identity.identity_mismatch:
+            raise ConfigurationError(
+                "the provider identity does not match the configured endpoint",
+                user_message=(
+                    "The selected provider does not belong to this model address. "
+                    "Choose the provider again, or correct the address, before saving a key."
+                ),
+            )
+        if not getattr(self.secret_store, "is_secure", False):
+            raise ConfigurationError(
+                "the secret store is not an OS credential store",
+                user_message=(
+                    "This system has no usable OS credential store, so the API key was "
+                    "not saved. Nothing was written to disk."
+                ),
+            )
+        self.secret_store.set(identity.credential_id, SecretStr(stripped))
+
+    def set_api_key(self, value: str) -> None:
+        """Persist an API key for the current configuration."""
+
+        self.set_api_key_for(self._config.provider, value)
 
     def clear_api_key(self) -> bool:
-        """Remove the stored API key. Returns ``True`` when one was removed."""
+        """Remove the stored API key for this provider.
+
+        Only this provider's slot is touched. The legacy shared slot is left
+        alone, because it may hold another provider's credential.
+        """
 
         return self.secret_store.delete(self.api_key_secret_key())
 
     def has_api_key(self) -> bool:
-        secret = self.resolve_api_key()
-        return bool(secret and secret.get_secret_value())
+        return self.credential_resolution().usable
 
     def masked_api_key(self) -> str:
         """UI-safe description of the configured credential (never the value)."""
 
-        return mask_secret(self.api_key_value())
+        return self.credential_resolution().masked()
 
     def describe(self) -> str:
         """One-line human summary for the status bar."""

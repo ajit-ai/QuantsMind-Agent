@@ -57,6 +57,12 @@ class AppPaths:
         return self.config_dir / "secrets.json"
 
     @property
+    def credentials_file(self) -> Path:
+        """Credential *metadata*: identifiers and states, never values."""
+
+        return self.config_dir / "credentials.json"
+
+    @property
     def log_file(self) -> Path:
         return self.log_dir / "quantsmind-agent.log"
 

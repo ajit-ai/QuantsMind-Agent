@@ -15,12 +15,14 @@ Storage backends
     extra services.
 
 :class:`KeyringSecretStore`
-    Optional Windows Credential Manager / libsecret backend, used when
-    ``keyring`` is importable and a credential is not already cached in the
-    file store.
+    Optional Windows Credential Manager / libsecret backend. It is secure only
+    when the keyring package has a usable backend; otherwise it reads existing
+    plaintext values (so upgrading does not lose credentials) but refuses to
+    write, reporting a :class:`SecretStoreError` instead.
 
 Both backends implement :class:`SecretStore`, so the rest of the application is
-unaware of which one is active.
+unaware of which one is active. Neither silently writes a secret to a less
+secure location than the one the caller selected.
 """
 
 from __future__ import annotations
@@ -30,17 +32,20 @@ import logging
 import os
 import stat
 from abc import ABC, abstractmethod
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from pydantic import SecretStr
 
-from quantsmind_agent.errors import ConfigurationError
+from quantsmind_agent.errors import ConfigurationError, QuantsMindError
 
 __all__ = [
     "FileSecretStore",
     "KeyringSecretStore",
     "SecretStore",
+    "SecretStoreError",
+    "StorageStatus",
     "build_secret_store",
     "mask_secret",
 ]
@@ -48,6 +53,36 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _KEYRING_SERVICE = "quantsmind-agent"
+
+
+class SecretStoreError(QuantsMindError):
+    """A secret-store operation failed and must not be papered over.
+
+    Reads and writes that cannot reach the OS credential store are surfaced
+    rather than silently redirected to the plaintext file. Callers decide how
+    to degrade; the store never decides for them.
+    """
+
+    code = "secret_store_error"
+
+
+class StorageStatus(StrEnum):
+    """How securely the active backend keeps values."""
+
+    SECURE = "secure"
+    """An OS credential store is in use."""
+
+    DEGRADED = "degraded"
+    """A secure backend was expected but is not functioning."""
+
+    PLAINTEXT = "plaintext"
+    """Values live in the file store, which is not an OS credential store."""
+
+    UNAVAILABLE = "unavailable"
+    """No backend can be used."""
+
+    NOT_APPLICABLE = "not_applicable"
+    """The value did not come from a store (for example, the environment)."""
 
 
 def mask_secret(value: str | None) -> str:
@@ -66,6 +101,39 @@ def mask_secret(value: str | None) -> str:
 
 class SecretStore(ABC):
     """Persistence contract for credentials."""
+
+    @property
+    def is_secure(self) -> bool:
+        """Whether this backend keeps values in an OS credential store.
+
+        ``False`` for a plaintext file. The credential vault refuses to write
+        to an insecure store, because a file of API keys is a file of API
+        keys whatever its permissions say.
+        """
+
+        return False
+
+    @property
+    def storage_status(self) -> StorageStatus:
+        """How securely this backend keeps values.
+
+        The base contract follows :attr:`is_secure`; a backend that can detect
+        a *broken* secure store overrides it with :attr:`StorageStatus.DEGRADED`
+        instead of pretending to be either secure or plaintext.
+        """
+
+        return StorageStatus.SECURE if self.is_secure else StorageStatus.PLAINTEXT
+
+    def read(self, key: str) -> tuple[SecretStr | None, StorageStatus]:
+        """Return the secret *and* how securely its location keeps it.
+
+        A store may hold values in more than one place -- for example a secure
+        backend plus a legacy plaintext file -- so the quality of the location
+        a value actually came from is reported here rather than guessed from
+        the store as a whole.
+        """
+
+        return self.get(key), self.storage_status
 
     @abstractmethod
     def get(self, key: str) -> SecretStr | None:
@@ -151,62 +219,170 @@ class FileSecretStore(SecretStore):
         return sorted(self._load())
 
 
+#: Sentinel meaning "discover the keyring module". ``None`` means "no keyring",
+#: which lets a test exercise the unavailable path without uninstalling it.
+_AUTO_KEYRING = object()
+
+
+def _usable_keyring(module: Any) -> Any | None:
+    """Return ``module`` only when its active backend can actually work.
+
+    An installed ``keyring`` package is not proof of a functioning backend: on
+    a headless Linux host it may select ``fail.Keyring`` or a null backend, and
+    treating that as secure would advertise storage the application cannot
+    use. The check is deliberately static -- probing with a write would create
+    junk credentials and may prompt the user.
+    """
+
+    if module is None:
+        return None
+    try:
+        backend = module.get_keyring()
+    except Exception:
+        logger.info("keyring has no usable backend; secure storage is unavailable")
+        return None
+    if backend is None:
+        return None
+    try:
+        from keyring.backends import fail, null
+    except Exception:  # pragma: no cover - very old keyring layout
+        fail = null = ()  # type: ignore[assignment]
+    if isinstance(backend, (fail.Keyring, null.Keyring)):
+        return None
+    try:
+        priority = float(getattr(backend, "priority", 0) or 0)
+    except (TypeError, ValueError):
+        priority = 0.0
+    if priority <= 0:
+        return None
+    return module
+
+
 class KeyringSecretStore(SecretStore):
     """OS credential-manager backed store (Windows Credential Manager).
 
-    Falls back to the file store when the platform has no usable keyring, so
-    the application never crashes because of credential plumbing.
+    The file store is still readable as a fallback so credentials written by
+    earlier versions remain usable, and that read is reported as degraded.
+    Writes never fall back: if the OS credential store cannot be reached, the
+    operation fails visibly instead of putting the key in a plaintext file.
     """
 
-    def __init__(self, fallback: SecretStore, username: str = "default") -> None:
+    def __init__(
+        self,
+        fallback: SecretStore,
+        username: str = "default",
+        *,
+        keyring_module: Any = _AUTO_KEYRING,
+    ) -> None:
         self._fallback = fallback
         self._username = username
-        self._keyring: Any | None
-        try:
-            import keyring
-        except Exception:
-            logger.info("keyring is unavailable; using file-based secret storage")
-            self._keyring = None
+        self._keyring_installed = False
+        if keyring_module is _AUTO_KEYRING:
+            try:
+                import keyring as keyring_module
+            except Exception:
+                logger.info("keyring is unavailable; secure storage is unavailable")
+                self._keyring = None
+            else:
+                self._keyring_installed = True
+                self._keyring = _usable_keyring(keyring_module)
         else:
-            self._keyring = keyring
+            self._keyring_installed = keyring_module is not None
+            self._keyring = _usable_keyring(keyring_module)
+        if self._keyring is None and self._keyring_installed:
+            logger.warning("keyring is installed but has no usable backend")
 
     @property
-    def _backend(self) -> bool:
+    def is_secure(self) -> bool:
+        """Secure only when the OS credential manager is actually usable."""
+
         return self._keyring is not None
+
+    @property
+    def storage_status(self) -> StorageStatus:
+        if self._keyring is not None:
+            return StorageStatus.SECURE
+        if self._keyring_installed:
+            return StorageStatus.DEGRADED
+        return StorageStatus.PLAINTEXT
 
     def _name(self, key: str) -> str:
         return f"{self._username}/{key}"
 
-    def get(self, key: str) -> SecretStr | None:
+    def _keyring_value(self, key: str) -> SecretStr | None:
+        if self._keyring is None:
+            return None
+        try:
+            value = self._keyring.get_password(_KEYRING_SERVICE, self._name(key))
+        except Exception as exc:
+            raise SecretStoreError(
+                f"the OS credential store could not be read ({type(exc).__name__})",
+                user_message=(
+                    "The OS credential store could not be read. Unlock it or check "
+                    "the platform credential service and try again."
+                ),
+                details={"operation": "read"},
+            ) from exc
+        return SecretStr(value) if value else None
+
+    def read(self, key: str) -> tuple[SecretStr | None, StorageStatus]:
         if self._keyring is not None:
-            try:
-                value = self._keyring.get_password(_KEYRING_SERVICE, self._name(key))
-            except Exception:
-                logger.debug("keyring lookup failed for %s", key)
-            else:
-                if value:
-                    return SecretStr(value)
-        return self._fallback.get(key)
+            value = self._keyring_value(key)
+            if value is not None:
+                return value, StorageStatus.SECURE
+            # A credential written before the OS store was adopted is still
+            # readable, but it is reported as what it is, not as secure.
+            legacy = self._fallback.get(key)
+            if legacy is not None:
+                return legacy, StorageStatus.PLAINTEXT
+            return None, StorageStatus.SECURE
+        # No usable secure backend: read the legacy plaintext half so existing
+        # credentials are preserved, and report the degraded storage.
+        return self._fallback.get(key), self.storage_status
+
+    def get(self, key: str) -> SecretStr | None:
+        return self.read(key)[0]
 
     def set(self, key: str, value: SecretStr) -> None:
-        if self._keyring is not None:
-            try:
-                self._keyring.set_password(
-                    _KEYRING_SERVICE, self._name(key), value.get_secret_value()
-                )
-                return
-            except Exception:
-                logger.debug("keyring write failed for %s; using file fallback", key)
-        self._fallback.set(key, value)
+        if self._keyring is None:
+            raise SecretStoreError(
+                "no usable OS credential store is available",
+                user_message=(
+                    "This system has no usable OS credential store, so the API key was "
+                    "not saved. Nothing was written to disk."
+                ),
+                details={"operation": "write"},
+            )
+        try:
+            self._keyring.set_password(_KEYRING_SERVICE, self._name(key), value.get_secret_value())
+        except Exception as exc:
+            raise SecretStoreError(
+                f"the OS credential store refused the write ({type(exc).__name__})",
+                user_message=(
+                    "The OS credential store refused to save the API key. Nothing was "
+                    "written to disk."
+                ),
+                details={"operation": "write"},
+            ) from exc
 
     def delete(self, key: str) -> bool:
+        if self._keyring is None:
+            return self._fallback.delete(key)
         removed = False
-        if self._keyring is not None:
-            try:
-                self._keyring.delete_password(_KEYRING_SERVICE, self._name(key))
-                removed = True
-            except Exception:
-                logger.debug("keyring delete failed for %s; using file fallback", key)
+        try:
+            self._keyring.delete_password(_KEYRING_SERVICE, self._name(key))
+            removed = True
+        except Exception as exc:
+            # A missing entry is not a failure to remove anything; every other
+            # backend error is surfaced.
+            if type(exc).__name__ != "PasswordDeleteError":
+                raise SecretStoreError(
+                    f"the OS credential store could not be updated ({type(exc).__name__})",
+                    user_message="The OS credential store could not remove the API key.",
+                    details={"operation": "delete"},
+                ) from exc
+        # An explicit removal removes every copy, including a plaintext one
+        # left behind by an earlier version.
         return self._fallback.delete(key) or removed
 
     def keys(self) -> list[str]:

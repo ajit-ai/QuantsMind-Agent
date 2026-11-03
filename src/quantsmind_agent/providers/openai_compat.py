@@ -76,6 +76,8 @@ class OpenAICompatProvider:
         capabilities: ProviderCapabilities | Mapping[str, Any] | None = None,
         transport: httpx.BaseTransport | None = None,
         client: httpx.Client | None = None,
+        follow_redirects: bool = False,
+        trust_env: bool = True,
     ) -> None:
         base = str(base_url).strip().rstrip("/")
         if not base.startswith(("http://", "https://")):
@@ -91,6 +93,15 @@ class OpenAICompatProvider:
         self._api_key_source = api_key
         self._transport = transport
         self._client = client
+        #: Redirects are refused by default (M3B-S1.1). A redirect would move
+        #: the request -- and the prompt and the ``Authorization`` header with
+        #: it -- to a host the security policy never authorised.
+        self._follow_redirects = bool(follow_redirects)
+        #: Whether environment variables (proxy settings, ``.netrc``) may shape
+        #: the connection. The authentication gateway turns this off for a
+        #: credential-bearing route so a proxy variable cannot silently become
+        #: the destination of a request that carries an API key.
+        self._trust_env = bool(trust_env)
         self.capabilities = self._resolve_capabilities(capabilities)
 
     @classmethod
@@ -156,7 +167,31 @@ class OpenAICompatProvider:
         return httpx.Client(
             timeout=httpx.Timeout(self.timeout_seconds, connect=15.0),
             transport=self._transport,
-            follow_redirects=True,
+            follow_redirects=self._follow_redirects,
+            trust_env=self._trust_env,
+            # Certificate validation is never turned off. It is stated here so
+            # that the next person to touch this constructor has to delete the
+            # line rather than not notice it.
+            verify=True,
+        )
+
+    def _refuse_redirect(self, response: httpx.Response) -> None:
+        """Report a redirect as an error instead of following it (M3B-S1.1)."""
+
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return
+        location = response.headers.get("location", "")
+        raise LLMProtocolError(
+            "The provider redirected the request",
+            user_message=(
+                "The provider redirected the request to another address. The application "
+                "does not follow redirects for authenticated requests, so no API key was "
+                "sent to the new address. Check the provider address in Settings."
+            ),
+            details={
+                "status_code": response.status_code,
+                "location_host": location.split("/")[2] if "://" in location else "",
+            },
         )
 
     def _close_http(self, client: httpx.Client) -> None:
@@ -277,6 +312,7 @@ class OpenAICompatProvider:
         try:
             try:
                 response = client.get(f"{self.base_url}/models", headers=self._headers())
+                self._refuse_redirect(response)
                 self._check_status(response)
                 body = response.json()
             except QuantsMindError:
@@ -313,6 +349,7 @@ class OpenAICompatProvider:
                     json=payload,
                     timeout=timeout,
                 )
+                self._refuse_redirect(response)
                 self._check_status(response)
                 try:
                     body = response.json()
@@ -350,6 +387,7 @@ class OpenAICompatProvider:
                     json=payload,
                     timeout=timeout,
                 ) as response:
+                    self._refuse_redirect(response)
                     self._check_status(response)
                     yield from self._iter_sse(response)
             except QuantsMindError:

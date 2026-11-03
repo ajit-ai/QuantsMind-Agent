@@ -27,7 +27,8 @@ application into an operating-system sandbox.
    * - Area
      - Status
    * - Credential storage
-     - Windows Credential Manager (file fallback), never in config or logs
+     - operating-system credential store; a legacy plaintext file is readable
+       but never written, and never in config or logs
    * - Credential exposure
      - masked in the UI, scrubbed from logs, excluded from events
    * - Filesystem access
@@ -48,7 +49,9 @@ application into an operating-system sandbox.
    * - Updates
      - **none**; the application never phones home
    * - OS-level sandbox
-     - **not implemented**
+     - **not implemented** in the product. An experimental sandbox package
+       exists but is dormant: the application never supplies a runner to it,
+       and it must not be described as an isolation guarantee.
    * - Release signing
      - **not implemented**; published Windows artifacts are unsigned
 
@@ -58,9 +61,13 @@ Credential handling
 Storage
 -------
 
-1. **Windows Credential Manager** via ``keyring``, used when available.
-2. **``secrets.json``** in the per-user config directory, written with
-   owner-only permissions, when no credential service is reachable.
+1. **The operating-system credential store** via ``keyring`` -- Windows
+   Credential Manager, macOS Keychain, or the Secret Service on Linux -- keyed
+   by provider identity (``provider:<provider_id>:default:api_key``).
+2. **A legacy ``secrets.json``** in the per-user config directory. It remains
+   readable so existing installations keep working, but it is never written as a
+   fallback: without a usable credential service the application refuses to save
+   a new key and says so.
 
 Both live outside the repository. ``.gitignore`` additionally blocks
 ``secrets.toml``, ``qm-secrets.toml``, ``.env`` and ``*.key``.
@@ -68,9 +75,16 @@ Both live outside the repository. ``.gitignore`` additionally blocks
 Resolution order
 ----------------
 
-1. the environment variable named by ``provider.api_key_env`` (default
-   ``QM_API_KEY``);
-2. the secret store.
+1. the provider-bound credential in the secure store, or a legacy credential an
+   operator has explicitly bound to that provider;
+2. the provider's own environment variable (``OPENROUTER_API_KEY`` and so on);
+3. ``provider.api_key_env`` only when the configured provider owns that generic
+   name. ``QM_API_KEY`` belongs to the default provider, OpenAI.
+
+A credential is bound to the endpoint that issued it. Changing the base URL to a
+different service does not carry the old key along: the mismatch is refused
+before any credential is read. Redirects are refused rather than followed, so a
+key is never re-sent to another host.
 
 The GUI settings path is preferred: it goes through the credential store rather
 than the process environment.
@@ -111,7 +125,9 @@ Verification
 Tests asserting these guarantees:
 ``tests/unit/test_secrets_paths.py``,
 ``tests/unit/test_errors_logging.py``,
-``tests/gui/test_main_window.py::TestErrorHandling::test_no_credentials_appear_in_the_transcript``.
+``tests/gui/test_main_window.py::TestErrorHandling::test_no_credentials_appear_in_the_transcript``,
+and, for the single resolution authority, cross-provider isolation and
+secure-store failures, ``tests/security/test_phase08_credential_authority.py``.
 
 Workspace isolation
 ===================
@@ -226,7 +242,9 @@ built-in network tool, so ``NETWORK`` is denied.
 That is the property to rely on: an unconfigured action is refused, and an
 interactive request without an approver fails closed rather than proceeding.
 Decisions are recorded in the broker history and published as events, so the
-activity panel is an audit trail rather than decoration.
+activity panel shows what was decided. That record is session-scoped: it is not
+persistent beyond the process, not encrypted and not tamper-evident, and it is
+not offered as a compliance audit trail.
 
 Network and data flow
 =====================
@@ -239,6 +257,14 @@ blocks common transfer and loader tools, but it is not a network sandbox.
 TLS uses ``httpx``'s ``certifi`` bundle rather than the Windows certificate
 store, so a corporate proxy with a private CA requires environment-level
 configuration -- a known limitation listed in :doc:`windows`.
+
+Endpoint authorization classifies the destination literally: loopback is allowed
+for a local model server, a private or link-local address is refused unless
+``provider.allow_remote_local_models`` is enabled, and a custom endpoint must be
+HTTPS and publicly addressed. That leaves a documented gap rather than complete
+LAN support: the remote-local permission is evaluated against a literal address
+only, so a LAN *hostname* is refused even when the permission is enabled, and no
+name-resolution re-check runs for local endpoints.
 
 .. code-block:: text
 
@@ -362,6 +388,16 @@ Security checklist before release
    * - Credentials outside the repo
      - DONE
      - ``.gitignore`` + user config dir
+   * - Credential bound to its endpoint
+     - DONE IN SOURCE
+     - canonical endpoint identity + mismatch regression tests
+   * - No plaintext write without a secure store
+     - DONE IN SOURCE
+     - fail-closed write + secure-store failure tests
+   * - Security audit redaction
+     - DONE IN SOURCE
+     - ``SecurityAuditLog`` field and URL scrubbing + tests; session-scoped,
+       not persistent or tamper-evident
    * - Real LLM validation
      - NOT RUN
      - manual, see :doc:`qualification/manual-beta-acceptance`

@@ -631,6 +631,7 @@ class MainWindow(QMainWindow):
         self.sidebar.open_workspace_requested.connect(self._on_open_workspace)
         self.sidebar.close_workspace_requested.connect(self._on_close_workspace)
         self.sidebar.settings_requested.connect(self._on_settings)
+        self.sidebar.security_requested.connect(self._on_security)
         self.sidebar.new_conversation_requested.connect(self._on_new_conversation)
         self.sidebar.conversation_selected.connect(self._on_conversation_selected)
         self.sidebar.conversation_delete_requested.connect(self._on_conversation_delete_requested)
@@ -663,7 +664,7 @@ class MainWindow(QMainWindow):
             provider.name,
             provider.model,
             provider.base_url,
-            self._context.config_manager.masked_api_key(),
+            self._context.masked_credential(),
         )
         self.sidebar.set_workspace(str(workspace.root) if workspace else None)
         self.sidebar.set_status(self._status_text())
@@ -767,12 +768,24 @@ class MainWindow(QMainWindow):
 
     # -- settings ----------------------------------------------------------
     def _on_settings(self) -> None:
-        dialog = SettingsDialog(self._context.config_manager, parent=self)
+        dialog = SettingsDialog(
+            self._context.config_manager,
+            parent=self,
+            security=self._context.security_controller(),
+        )
         if dialog.exec():
             self._context.apply_configuration()
             self._refresh_from_context()
             self.conversation.append_notice("Settings saved.")
             self.activity.notice("configuration updated")
+
+    def _on_security(self) -> None:
+        """Open the security panel: providers, credentials and the audit trail."""
+
+        from quantsmind_agent.gui.security_panel import SecurityDialog
+
+        dialog = SecurityDialog(self._context.security_controller(), parent=self)
+        dialog.exec()
 
     def _on_new_conversation(self) -> None:
         self._context.reset_conversation()

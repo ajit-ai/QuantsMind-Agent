@@ -1,7 +1,7 @@
 """Shared pytest fixtures.
 
 Fixtures never touch the real user profile: every test gets an isolated
-``QM_CONFIG_DIR`` equivalent through :class:`AppPaths` and a file-backed secret
+``QM_CONFIG_DIR`` equivalent through :class:`AppPaths` and an in-memory secret
 store, so no test can read or write the developer's credentials.
 """
 
@@ -19,13 +19,46 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:  # pragma: no cover - import bootstrap
     sys.path.insert(0, str(SRC))
 
-from quantsmind_agent.config import ConfigManager  # noqa: E402
+from pydantic import SecretStr  # noqa: E402
+
+from quantsmind_agent.config import PROVIDER_ENV_VARS, ConfigManager  # noqa: E402
 from quantsmind_agent.logging_setup import shutdown_logging  # noqa: E402
 from quantsmind_agent.paths import AppPaths  # noqa: E402
-from quantsmind_agent.secrets import FileSecretStore  # noqa: E402
+from quantsmind_agent.secrets import SecretStore  # noqa: E402
 from quantsmind_agent.workspace import Workspace  # noqa: E402
 
-_API_KEY_ENV_VARS = ("QM_API_KEY", "OPENAI_API_KEY")
+#: Every variable the application may read as a credential. Ambient values are
+#: removed for every test so a developer's real key can never influence a run.
+_API_KEY_ENV_VARS = ("QM_API_KEY", *PROVIDER_ENV_VARS.values())
+
+
+class InMemorySecretStore(SecretStore):
+    """A secure, process-local store. Nothing is written to the user profile.
+
+    It claims ``is_secure`` because the production policy refuses to persist
+    credentials in a plaintext store; tests that need the degraded path pass
+    their own ``FileSecretStore`` instead.
+    """
+
+    def __init__(self) -> None:
+        self._values: dict[str, str] = {}
+
+    @property
+    def is_secure(self) -> bool:
+        return True
+
+    def get(self, key: str) -> SecretStr | None:
+        value = self._values.get(key)
+        return SecretStr(value) if value else None
+
+    def set(self, key: str, value: SecretStr) -> None:
+        self._values[key] = value.get_secret_value()
+
+    def delete(self, key: str) -> bool:
+        return self._values.pop(key, None) is not None
+
+    def keys(self) -> list[str]:
+        return sorted(self._values)
 
 
 @pytest.fixture(autouse=True)
@@ -64,9 +97,9 @@ def app_paths(tmp_path: Path) -> AppPaths:
 
 @pytest.fixture
 def config_manager(app_paths: AppPaths) -> ConfigManager:
-    """A :class:`ConfigManager` backed by a temp directory."""
+    """A :class:`ConfigManager` over temp directories and a secure in-memory store."""
 
-    return ConfigManager(app_paths, secret_store=FileSecretStore(app_paths.secrets_file))
+    return ConfigManager(app_paths, secret_store=InMemorySecretStore())
 
 
 @pytest.fixture

@@ -7,6 +7,8 @@ saved API key is never rendered in plain text again. The key field echoes.
 
 from __future__ import annotations
 
+from typing import Any
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -26,8 +28,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from quantsmind_agent.config import PROVIDER_PRESETS, ConfigManager, Configuration, LogLevel
+from quantsmind_agent.config import (
+    PROVIDER_PRESETS,
+    ConfigManager,
+    Configuration,
+    LogLevel,
+    ProviderSettings,
+)
+from quantsmind_agent.credential_resolution import (
+    CredentialResolution,
+    CredentialSource,
+)
+from quantsmind_agent.credential_resolution import (
+    CredentialStatus as ResolutionStatus,
+)
+from quantsmind_agent.errors import ConfigurationError, QuantsMindError
 from quantsmind_agent.logging_setup import get_logger
+from quantsmind_agent.provider_identity import (
+    EndpointPolicyError,
+    canonicalize_endpoint,
+    rebind_explicit_provider_id,
+)
+from quantsmind_agent.secrets import StorageStatus
 from quantsmind_agent.version import APP_NAME, __version__
 
 __all__ = ["SettingsDialog"]
@@ -44,10 +66,14 @@ class SettingsDialog(QDialog):
         *,
         parent: QWidget | None = None,
         available_models: list[str] | None = None,
+        security: Any | None = None,
     ) -> None:
         super().__init__(parent)
         self._manager = config_manager
         self._available_models = available_models or []
+        #: The secure provider settings controller (M3B-S1.2). Optional, so
+        #: the dialog still opens where no vault is available.
+        self._security = security
         self.setWindowTitle(f"{APP_NAME} \u2014 Settings")
         self.setMinimumWidth(540)
         self.setModal(True)
@@ -63,6 +89,10 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._provider_tab(), "Provider")
         tabs.addTab(self._agent_tab(), "Agent")
+        if self._security is not None:
+            from quantsmind_agent.gui.security_panel import SecurityPanel
+
+            tabs.addTab(SecurityPanel(self._security, parent=self), "Security")
         tabs.addTab(self._about_tab(), "About")
         outer.addWidget(tabs)
 
@@ -110,7 +140,13 @@ class SettingsDialog(QDialog):
 
         self._base_url = QLineEdit()
         self._base_url.setPlaceholderText("https://api.openai.com/v1")
+        self._base_url.textChanged.connect(self._on_provider_edited)
         form.addRow("Base URL", self._base_url)
+
+        self._identity = QLabel("")
+        self._identity.setStyleSheet("color:#6a7280;font-size:11px;")
+        self._identity.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        form.addRow("Provider identity", self._identity)
 
         self._api_key = QLineEdit()
         self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
@@ -130,6 +166,7 @@ class SettingsDialog(QDialog):
 
         self._env_var = QLineEdit()
         self._env_var.setPlaceholderText("QM_API_KEY")
+        self._env_var.textChanged.connect(self._on_provider_edited)
         form.addRow("Key from environment variable", self._env_var)
 
         self._timeout = QSpinBox()
@@ -229,20 +266,117 @@ class SettingsDialog(QDialog):
         self._auto_approve.setChecked(config.agent.auto_approve_reads)
         self._system_prompt.setText(config.agent.system_prompt)
         self._debug.setChecked(config.logging.level is LogLevel.DEBUG)
-        self._key_status.setText(f"Stored key: {self._manager.masked_api_key()}")
+        self._key_status.setText(self._credential_status_text())
         self._paths_label.setText(
             f"Config file: {self._manager.config_file}<br/>"
             f"Log file: {self._manager.paths.log_file}<br/>"
             "Credentials stay in your OS credential store and are never written to Git."
         )
+        self._refresh_identity()
         self._refresh_hint()
+
+    def _on_provider_edited(self) -> None:
+        self._refresh_identity()
+        self._refresh_hint()
+
+    def _provider_settings_from_widgets(self) -> ProviderSettings | None:
+        """The provider settings currently on screen, or ``None`` if invalid.
+
+        The explicit provider binding is re-validated against the *edited*
+        endpoint: changing the address must not carry the old provider id, or
+        a key for one service would become a key for another.
+        """
+
+        provider = self._manager.config.provider
+        try:
+            endpoint = canonicalize_endpoint(self._base_url.text().strip())
+            return ProviderSettings(
+                name=provider.name,
+                base_url=endpoint.endpoint_id,
+                model=self._model.text().strip() or provider.model,
+                timeout_seconds=provider.timeout_seconds,
+                max_output_tokens=provider.max_output_tokens,
+                temperature=provider.temperature,
+                api_key_env=self._env_var.text().strip() or "QM_API_KEY",
+                organization=provider.organization,
+                capability_overrides=provider.capability_overrides,
+                provider_id=rebind_explicit_provider_id(endpoint, provider.provider_id),
+                trust_custom_endpoint=provider.trust_custom_endpoint,
+                allow_remote_local_models=provider.allow_remote_local_models,
+            )
+        except (EndpointPolicyError, ValueError):
+            return None
+
+    def _refresh_identity(self) -> None:
+        """Show which provider identity the *edited* configuration resolves to."""
+
+        settings = self._provider_settings_from_widgets()
+        if settings is None:
+            self._identity.setStyleSheet("color:#b42318;font-size:11px;")
+            self._identity.setText("invalid: the model address cannot be used")
+            return
+        identity = settings.identity()
+        if identity.identity_mismatch:
+            self._identity.setStyleSheet("color:#b42318;font-size:11px;")
+            self._identity.setText(
+                f"mismatch: {identity.requested_provider_id!r} does not own "
+                f"{identity.endpoint_id}; it will be saved as {identity.provider_id}"
+            )
+            return
+        self._identity.setStyleSheet("color:#6a7280;font-size:11px;")
+        self._identity.setText(
+            f"{identity.provider_id} / {identity.profile} ({identity.trust.value})"
+        )
+
+    @staticmethod
+    def _resolution_text(resolution: CredentialResolution) -> str:
+        status = resolution.status
+        if status is ResolutionStatus.RESOLVED:
+            if resolution.source is CredentialSource.ENVIRONMENT:
+                return "Credential: from environment"
+            if resolution.storage_status is StorageStatus.PLAINTEXT:
+                return "Credential: configured (stored in a plaintext file)"
+            return "Credential: configured"
+        if status is ResolutionStatus.DEGRADED:
+            return "Credential: configured (storage degraded)"
+        if status is ResolutionStatus.NOT_REQUIRED:
+            return "Credential: not required"
+        if status is ResolutionStatus.REJECTED:
+            return {
+                "provider_endpoint_mismatch": "Credential: provider identity mismatch",
+                "credential_disabled": "Credential: disabled",
+                "credential_revoked": "Credential: removed",
+            }.get(resolution.reason_code, "Credential: unusable")
+        if status is ResolutionStatus.UNAVAILABLE:
+            return "Credential: store unavailable"
+        return "Credential: not configured"
+
+    def _credential_status_text(self) -> str:
+        """A status line for the credential the stored configuration uses."""
+
+        if self._security is None:
+            return f"Stored key: {self._manager.masked_api_key()}"
+        try:
+            return self._resolution_text(self._manager.credential_resolution())
+        except EndpointPolicyError:
+            return "Credential: invalid configuration"
 
     def to_configuration(self) -> Configuration:
         """Build a validated :class:`Configuration` from the widgets."""
 
         config = self._manager.config.model_copy(deep=True)
+        try:
+            endpoint = canonicalize_endpoint(self._base_url.text().strip())
+        except EndpointPolicyError as exc:
+            raise ConfigurationError(
+                f"invalid base URL: {exc}",
+                user_message=f"The model address is not valid: {exc}",
+            ) from exc
         config.provider.model = self._model.text().strip()
-        config.provider.base_url = self._base_url.text().strip()
+        config.provider.base_url = endpoint.endpoint_id
+        config.provider.provider_id = rebind_explicit_provider_id(
+            endpoint, config.provider.provider_id
+        )
         config.provider.api_key_env = self._env_var.text().strip() or "QM_API_KEY"
         config.provider.timeout_seconds = float(self._timeout.value())
         config.provider.max_output_tokens = int(self._max_tokens.value())
@@ -268,13 +402,25 @@ class SettingsDialog(QDialog):
         self._refresh_hint()
 
     def _on_clear_key(self) -> None:
+        if self._security is not None:
+            try:
+                identity = self._manager.provider_identity()
+            except EndpointPolicyError:
+                self._key_status.setText("The saved provider configuration is invalid")
+                return
+            removed = self._security.remove_credential_for(identity)
+            self._key_status.setText(
+                self._credential_status_text()
+                if removed
+                else "No credential was stored for this provider"
+            )
+            self._api_key.clear()
+            return
         removed = self._manager.clear_api_key()
         self._key_status.setText("Stored key removed" if removed else "No key was stored")
         self._api_key.clear()
 
     def _on_save(self) -> None:
-        from quantsmind_agent.errors import QuantsMindError
-
         try:
             config = self.to_configuration()
         except QuantsMindError as exc:
@@ -284,7 +430,13 @@ class SettingsDialog(QDialog):
         key = self._api_key.text().strip()
         if key:
             try:
-                self._manager.set_api_key(key)
+                if self._security is not None:
+                    # Store under the identity of the configuration *being
+                    # saved*, not the one that was loaded, so the key can never
+                    # be written under a provider that is no longer selected.
+                    self._security.store_credential_for(config.provider.identity(), key)
+                else:
+                    self._manager.set_api_key_for(config.provider, key)
             except QuantsMindError as exc:
                 QMessageBox.warning(self, "Could not store the key", exc.user_message)
                 return
@@ -302,19 +454,93 @@ class SettingsDialog(QDialog):
             )
             return
 
-        self._key_status.setText(f"Stored key: {self._manager.masked_api_key()}")
+        self._key_status.setText(self._credential_status_text())
         self.accept()
 
     def _refresh_hint(self) -> None:
-        config = self._manager.config
-        if not config.provider.requires_api_key():
+        """Explain the *current* credential decision, from the one authority.
+
+        The hint is computed from the values on screen, so it cannot promise a
+        key the request path would refuse, or advise an environment variable
+        that would not be read for this provider.
+        """
+
+        settings = self._provider_settings_from_widgets()
+        if settings is None:
+            self._hint.setText("The model address is not valid, so no credential would be used.")
+            return
+        try:
+            resolution = self._manager.credential_resolution_for(settings)
+        except EndpointPolicyError:
+            self._hint.setText("The configured provider identity cannot be used for this address.")
+            return
+
+        status = resolution.status
+        if status is ResolutionStatus.REJECTED:
+            if resolution.reason_code == "provider_endpoint_mismatch":
+                self._hint.setText(
+                    "The selected provider does not belong to this model address. "
+                    "Its API key will not be used; choose the provider again or "
+                    "correct the address."
+                )
+            elif resolution.reason_code in {"credential_disabled", "credential_revoked"}:
+                self._hint.setText(
+                    "The stored credential is disabled or removed. Enter a new key to "
+                    "use this provider."
+                )
+            else:
+                self._hint.setText(
+                    "The model endpoint was refused by the security policy, so no key "
+                    "would be sent."
+                )
+            return
+        if status is ResolutionStatus.UNAVAILABLE:
             self._hint.setText(
-                "This endpoint looks like a local server, so no API key is required."
+                "The OS credential store could not be read, so no key is available. "
+                "Check the credential service and try again."
             )
-        elif self._manager.has_api_key():
-            self._hint.setText("A credential is configured. It is never shown or logged.")
-        else:
+            return
+        if status is ResolutionStatus.DEGRADED:
             self._hint.setText(
-                "No API key yet. Paste one above, or set the environment variable "
-                f"{config.provider.api_key_env} before starting the app."
+                "A credential is configured, but it is not held in the OS credential "
+                "store. Move it to secure storage when one is available; only this "
+                "provider can use it either way."
             )
+            return
+        if status is ResolutionStatus.RESOLVED:
+            if resolution.source is CredentialSource.ENVIRONMENT:
+                self._hint.setText(
+                    "A credential is provided by an environment variable for this "
+                    "provider only. It is never written to disk."
+                )
+            elif resolution.storage_status is StorageStatus.PLAINTEXT:
+                self._hint.setText(
+                    "A credential is configured in a plaintext file. It is never shown "
+                    "or logged, but it is not protected by the OS credential store."
+                )
+            else:
+                self._hint.setText("A credential is configured. It is never shown or logged.")
+            return
+        if status is ResolutionStatus.NOT_REQUIRED:
+            self._hint.setText("This endpoint is a local model server, so no API key is required.")
+            return
+
+        if self._security is not None:
+            candidate = self._security.legacy_candidate()
+            if candidate is not None and candidate.provider_id == settings.identity().provider_id:
+                self._hint.setText(
+                    "A credential was found under the shared legacy identity. Open the "
+                    "Security tab to choose the provider it belongs to and confirm the "
+                    "migration."
+                )
+                return
+        if resolution.storage_status in (StorageStatus.PLAINTEXT, StorageStatus.DEGRADED):
+            self._hint.setText(
+                "No secure credential store is available on this system, so API keys "
+                "cannot be stored. Existing credentials are left untouched."
+            )
+            return
+        self._hint.setText(
+            "No API key yet. Paste one above, or set the environment variable for this "
+            "provider before starting the app."
+        )

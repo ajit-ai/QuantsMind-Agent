@@ -22,12 +22,22 @@ import os
 import sys
 import threading
 import time
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from quantsmind_agent.agent import AgentCore
+from quantsmind_agent.auth_gateway import AuthGateway
 from quantsmind_agent.code_tools import build_code_tools
 from quantsmind_agent.command_tools import build_command_tools
-from quantsmind_agent.config import ConfigManager, Configuration
+from quantsmind_agent.config import (
+    GENERIC_ENV_OWNER,
+    PROVIDER_ENV_VARS,
+    ConfigManager,
+    Configuration,
+    ProviderSettings,
+)
 from quantsmind_agent.context import ContextEngine
 from quantsmind_agent.conversations import (
     ConversationStore,
@@ -35,7 +45,13 @@ from quantsmind_agent.conversations import (
     StorageLimits,
     snapshot_session,
 )
-from quantsmind_agent.errors import QuantsMindError
+from quantsmind_agent.credential_resolution import (
+    CredentialResolution,
+    CredentialResolutionService,
+    CredentialStatus,
+)
+from quantsmind_agent.credential_vault import CredentialVault, CredentialVaultError
+from quantsmind_agent.errors import LLMConfigurationError, QuantsMindError
 from quantsmind_agent.events import AgentEvent, AgentEventType, EventBus
 from quantsmind_agent.git_tools import build_git_tools
 from quantsmind_agent.llm import ModelGateway
@@ -50,7 +66,9 @@ from quantsmind_agent.permissions import (
     PermissionRule,
     StaticPermissionProvider,
 )
+from quantsmind_agent.provider_identity import EndpointPolicyError, canonicalize_endpoint
 from quantsmind_agent.providers import build_provider
+from quantsmind_agent.security_audit import AuditEventType, SecurityAuditLog
 from quantsmind_agent.session import Session
 from quantsmind_agent.tools import ToolRegistry
 from quantsmind_agent.workspace import Workspace
@@ -59,9 +77,10 @@ from quantsmind_agent.workspace_tools import build_default_tools
 from quantsmind_agent.write_tools import build_mutating_tools, build_undo_tool
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from quantsmind_agent.agent import AgentCore
+    from quantsmind_agent.gui.security_controller import SecurityController
 
 __all__ = ["ApplicationContext", "main"]
+
 
 logger = get_logger(__name__)
 
@@ -75,6 +94,32 @@ _TURN_END_EVENTS = frozenset(
 )
 
 
+class ReadinessCode(StrEnum):
+    """Why the application is, or is not, ready to send a request."""
+
+    READY = "ready"
+    WORKSPACE_MISSING = "workspace_missing"
+    ENDPOINT_INVALID = "endpoint_invalid"
+    IDENTITY_MISMATCH = "identity_mismatch"
+    CREDENTIAL_MISSING = "credential_missing"
+    CREDENTIAL_DISABLED = "credential_disabled"
+    CREDENTIAL_UNAVAILABLE = "credential_unavailable"
+    CREDENTIAL_STORAGE_DEGRADED = "credential_storage_degraded"
+    ENDPOINT_DENIED = "endpoint_denied"
+    MODEL_MISSING = "model_missing"
+
+
+@dataclass(frozen=True, slots=True)
+class ReadinessReport:
+    """A structured readiness answer, with the decisions behind it."""
+
+    ready: bool
+    code: ReadinessCode
+    reason: str
+    credential: CredentialResolution | None = None
+    endpoint_reason: str = ""
+
+
 class ApplicationContext:
     """Owns every long-lived subsystem and the transitions between them.
 
@@ -82,11 +127,50 @@ class ApplicationContext:
     is optional, because the application can start with no project open.
     """
 
-    def __init__(self, config_manager: ConfigManager, paths: AppPaths) -> None:
+    def __init__(
+        self,
+        config_manager: ConfigManager,
+        paths: AppPaths,
+        *,
+        security_resolver: Any | None = None,
+    ) -> None:
         self.config_manager = config_manager
         self.paths = paths
+        #: Name resolution used by endpoint authorisation. Injectable so tests
+        #: and offline deployments never depend on the system resolver.
+        self.security_resolver = security_resolver
         self.events = EventBus()
         self.recorded_events: list[AgentEvent] = []
+        #: Security audit trail (M3B-S1.1). Identifiers and decisions only.
+        self.security_audit = SecurityAuditLog()
+        #: Credential vault and authentication gateway (M3B-S1.1). The gateway
+        #: is the only component that may hand a credential to a provider.
+        #: Whether an OS credential store is actually available (M3B-S1.2).
+        self.secure_storage_available = True
+        self.credential_vault = self._build_credential_vault()
+        #: The one authority every consumer asks about a credential (Phase 0.8).
+        self.credential_service = CredentialResolutionService(
+            self.credential_vault,
+            provider_env_vars=PROVIDER_ENV_VARS,
+            generic_env_owner=GENERIC_ENV_OWNER,
+        )
+        self.config_manager.bind_credential_service(self.credential_service)
+        self.auth_gateway = AuthGateway(
+            vault=self.credential_vault,
+            audit=self.security_audit,
+            resolver=security_resolver,
+            credential_service=self.credential_service,
+            # The trust decisions live in the configuration and can change
+            # while the application runs, so the gateway asks for them rather
+            # than freezing them at construction time.
+            trust_custom_endpoints=lambda: (
+                self.config_manager.config.provider.trust_custom_endpoint
+            ),
+            allow_remote_local_models=lambda: (
+                self.config_manager.config.provider.allow_remote_local_models
+            ),
+        )
+
         self.session = Session()
         self.context_engine = ContextEngine()
         self.workspace: Workspace | None = None
@@ -124,12 +208,73 @@ class ApplicationContext:
         self._rebuild()
 
     # -- construction ------------------------------------------------------
+    def _build_credential_vault(self) -> CredentialVault:
+        """The credential vault, degrading to a read-only vault when needed.
+
+        The vault refuses to write to a plaintext store. When the platform has
+        no OS credential service the application still starts: the vault then
+        holds no writable backend, credentials cannot be stored, and the user
+        is told why.
+        """
+
+        try:
+            self.secure_storage_available = True
+            return CredentialVault(
+                self.config_manager.secret_store,
+                metadata_path=self.paths.credentials_file,
+                audit=self.security_audit,
+                require_secure=True,
+            )
+        except CredentialVaultError as exc:
+            logger.warning("Secure credential storage is unavailable: %s", exc.message)
+            self.secure_storage_available = False
+            return CredentialVault(
+                self.config_manager.secret_store,
+                metadata_path=self.paths.credentials_file,
+                audit=self.security_audit,
+                require_secure=False,
+                allow_insecure_writes=False,
+            )
+
+    def security_controller(self) -> SecurityController:
+        """The controller behind the secure provider settings (M3B-S1.2).
+
+        It is built with a gateway that does not resolve names, so the
+        interface never performs a network operation on the GUI thread. The
+        authoritative check -- the one that includes name resolution -- still
+        runs in the request path, and it is the one that decides.
+        """
+
+        from quantsmind_agent.gui.security_controller import SecurityController
+
+        gateway = AuthGateway(
+            vault=self.credential_vault,
+            audit=self.security_audit,
+            resolver=self.security_resolver,
+            credential_service=self.credential_service,
+            check_dns=False,
+            trust_custom_endpoints=lambda: (
+                self.config_manager.config.provider.trust_custom_endpoint
+            ),
+            allow_remote_local_models=lambda: (
+                self.config_manager.config.provider.allow_remote_local_models
+            ),
+        )
+        return SecurityController(
+            self.config_manager,
+            vault=self.credential_vault,
+            gateway=gateway,
+            audit=self.security_audit,
+            secure_storage=self.secure_storage_available,
+        )
+
     @classmethod
     def create(
         cls,
         *,
         paths: AppPaths | None = None,
         config_manager: ConfigManager | None = None,
+        security_resolver: Any | None = None,
     ) -> ApplicationContext:
         """Build a fully wired context, tolerating a broken config file."""
 
@@ -141,7 +286,11 @@ class ApplicationContext:
             logger.warning("Falling back to default configuration: %s", exc.message)
             manager.reset()
 
-        context = cls(config_manager=manager, paths=resolved_paths)
+        context = cls(
+            config_manager=manager,
+            paths=resolved_paths,
+            security_resolver=security_resolver,
+        )
         context._build_store()
         context._restore_workspace()
         return context
@@ -316,9 +465,8 @@ class ApplicationContext:
         every turn, so a replacement instance is picked up immediately.
         """
 
-        from quantsmind_agent.agent import AgentCore
-
         config = self.config_manager.config
+
         session = self.session
 
         permissions = PermissionBroker(
@@ -405,13 +553,17 @@ class ApplicationContext:
     def _build_model_provider(self, config: Configuration) -> Any:
         """The configured provider, or a router over several.
 
-        Routing is built only when it has been configured *and* has somewhere to
-        go. With one endpoint a router would add a layer and change nothing, so
+        Routing is built only when it has been configured *and* has somewhere
+        to go. With one endpoint a router would add a layer and change nothing, so
         the single-provider path stays exactly as it was.
+
+        Every endpoint gets its **own** credential resolution (M3B-S1.1). The
+        old code passed one callable to all of them, so a fallback endpoint
+        received the primary endpoint's key.
         """
 
         routing = config.routing
-        primary = build_provider(config.provider, api_key=self.config_manager.api_key_value)
+        primary = self._build_endpoint_provider(config.provider)
         if not routing.enabled or not routing.fallbacks:
             return primary
 
@@ -425,12 +577,60 @@ class ApplicationContext:
         for index, fallback in enumerate(routing.fallbacks, start=1):
             candidates.append(
                 RouteCandidate(
-                    provider=build_provider(fallback, api_key=self.config_manager.api_key_value),
+                    provider=self._build_endpoint_provider(fallback),
                     model=fallback.model,
                     label=f"{fallback.name or fallback.base_url}#{index}",
                 )
             )
         return ProviderRouter(candidates, policy=RoutingPolicy(max_attempts=routing.max_attempts))
+
+    def _build_endpoint_provider(self, settings: ProviderSettings) -> Any:
+        """A provider whose credential is released only after authorisation.
+
+        The callable is evaluated at request time, inside the provider's
+        header construction, so the gateway authorises the endpoint first and
+        a refused endpoint never causes a secret to be loaded.
+        """
+
+        try:
+            identity = settings.identity()
+            endpoint = canonicalize_endpoint(settings.base_url)
+        except (EndpointPolicyError, QuantsMindError) as exc:
+            raise LLMConfigurationError(
+                f"The provider endpoint could not be resolved: {exc}",
+                user_message=(
+                    "The provider address in Settings could not be understood, so no API "
+                    "key was sent. Check the base URL."
+                ),
+                details={"base_url": settings.base_url},
+            ) from exc
+
+        required = settings.requires_api_key()
+        gateway = self.auth_gateway
+
+        def resolve_credential() -> str | None:
+            return gateway.credential_for(
+                identity,
+                endpoint,
+                required=required,
+                configured_env_name=settings.api_key_env,
+            )
+
+        options = gateway.client_options(endpoint, credential_bearing=required)
+        self.security_audit.record(
+            AuditEventType.PROVIDER_SELECTED,
+            provider_id=identity.provider_id,
+            model=settings.model,
+            endpoint_id=endpoint.endpoint_id,
+            decision="selected",
+            reason_code=identity.trust.value,
+        )
+        return build_provider(
+            settings,
+            api_key=resolve_credential,
+            follow_redirects=bool(options["follow_redirects"]),
+            trust_env=bool(options["trust_env"]),
+        )
 
     # -- workspace ---------------------------------------------------------
     @property
@@ -767,17 +967,161 @@ class ApplicationContext:
     def status_line(self) -> str:
         return self.session.summary()
 
+    def credential_resolution(
+        self,
+        settings: ProviderSettings | None = None,
+        *,
+        authorize: bool = False,
+        record: bool = False,
+    ) -> CredentialResolution:
+        """The authoritative credential decision for a configuration.
+
+        ``authorize=False`` is the diagnostic mode: it never performs a name
+        resolution or writes an audit record. Readiness and the request path
+        additionally ask the gateway for the endpoint decision.
+        """
+
+        provider = settings or self.config_manager.config.provider
+        try:
+            endpoint = canonicalize_endpoint(provider.base_url)
+            identity = provider.identity()
+        except (EndpointPolicyError, QuantsMindError):
+            return CredentialResolution.unavailable(
+                provider_id=provider.provider_id or "unknown",
+                credential_id=f"provider:{provider.provider_id or 'unknown'}:default:api_key",
+                reason_code="invalid_endpoint",
+                detail="the configured provider endpoint could not be parsed",
+            )
+        if authorize:
+            return self.auth_gateway.resolve_credential(
+                identity,
+                endpoint,
+                required=provider.requires_api_key(),
+                configured_env_name=provider.api_key_env,
+                record=record,
+            )
+        return self.credential_service.resolve(
+            identity,
+            required=provider.requires_api_key(),
+            configured_env_name=provider.api_key_env,
+        )
+
+    def masked_credential(self) -> str:
+        """A UI-safe description of the active credential (never the value)."""
+
+        return self.credential_resolution().masked()
+
+    def readiness_report(self) -> ReadinessReport:
+        """Structured readiness: the same decisions the request path makes."""
+
+        if self.workspace is None:
+            return ReadinessReport(
+                ready=False,
+                code=ReadinessCode.WORKSPACE_MISSING,
+                reason="Open a project folder first.",
+            )
+
+        provider = self.config_manager.config.provider
+        try:
+            endpoint = canonicalize_endpoint(provider.base_url)
+            identity = provider.identity()
+        except (EndpointPolicyError, QuantsMindError):
+            return ReadinessReport(
+                ready=False,
+                code=ReadinessCode.ENDPOINT_INVALID,
+                reason=(
+                    "The provider address in Settings is invalid, so no API key can be "
+                    "sent. Correct the base URL."
+                ),
+            )
+
+        if identity.identity_mismatch:
+            return ReadinessReport(
+                ready=False,
+                code=ReadinessCode.IDENTITY_MISMATCH,
+                reason=(
+                    "The provider identity in Settings does not match the model address, "
+                    "so no API key was sent. Open Settings and choose the provider again."
+                ),
+                endpoint_reason="provider_endpoint_mismatch",
+            )
+
+        required = provider.requires_api_key()
+        resolution = self.credential_service.resolve(
+            identity,
+            required=required,
+            configured_env_name=provider.api_key_env,
+        )
+        if not resolution.usable:
+            if resolution.status is CredentialStatus.UNAVAILABLE:
+                code = ReadinessCode.CREDENTIAL_UNAVAILABLE
+                reason = (
+                    "The credential store could not be read. Check the OS credential "
+                    "service and restart."
+                )
+            elif resolution.reason_code == "credential_disabled":
+                code = ReadinessCode.CREDENTIAL_DISABLED
+                reason = (
+                    "The API key for this provider is disabled. Open Settings to enable "
+                    "it or enter a new one."
+                )
+            elif resolution.reason_code == "credential_revoked":
+                code = ReadinessCode.CREDENTIAL_DISABLED
+                reason = (
+                    "The API key for this provider was removed. Open Settings to enter a new one."
+                )
+            else:
+                code = ReadinessCode.CREDENTIAL_MISSING
+                reason = "No API key configured. Open Settings to add one."
+            return ReadinessReport(
+                ready=False,
+                code=code,
+                reason=reason,
+                credential=resolution,
+                endpoint_reason=resolution.reason_code,
+            )
+
+        if not provider.model:
+            return ReadinessReport(
+                ready=False,
+                code=ReadinessCode.MODEL_MISSING,
+                reason="No model selected. Open Settings to choose one.",
+                credential=resolution,
+            )
+
+        decision = self.auth_gateway.authorize(identity, endpoint, record=False)
+        if not decision.allowed:
+            return ReadinessReport(
+                ready=False,
+                code=ReadinessCode.ENDPOINT_DENIED,
+                reason=(
+                    "The model endpoint was refused by the security policy "
+                    f"({decision.reason_code}). Open Settings to correct the provider "
+                    "address."
+                ),
+                credential=resolution,
+                endpoint_reason=decision.reason_code,
+            )
+
+        if resolution.status is CredentialStatus.DEGRADED:
+            return ReadinessReport(
+                ready=True,
+                code=ReadinessCode.CREDENTIAL_STORAGE_DEGRADED,
+                reason=("Ready, but the API key is stored without a secure OS credential store."),
+                credential=resolution,
+            )
+        return ReadinessReport(
+            ready=True,
+            code=ReadinessCode.READY,
+            reason="Ready",
+            credential=resolution,
+        )
+
     def readiness(self) -> tuple[bool, str]:
         """Whether a request can be sent, plus a user-facing reason."""
 
-        config = self.config_manager.config
-        if self.workspace is None:
-            return False, "Open a project folder first."
-        if config.provider.requires_api_key() and not self.config_manager.has_api_key():
-            return False, "No API key configured. Open Settings to add one."
-        if not config.provider.model:
-            return False, "No model selected. Open Settings to choose one."
-        return True, "Ready"
+        report = self.readiness_report()
+        return report.ready, report.reason
 
     def attach_bridge(self, bridge: Any) -> None:
         """Attach the GUI worker bridge (called once by the window)."""
@@ -931,13 +1275,18 @@ def _paths_from_args(args: argparse.Namespace) -> AppPaths:
 
 def _run_check_config(context: ApplicationContext) -> int:
     config = context.config_manager.config
-    ready, reason = context.readiness()
+    report = context.readiness_report()
+    resolution = report.credential or context.credential_resolution()
     print(f"config file : {context.config_manager.config_file}")
     print(f"log file    : {context.paths.log_file}")
     print(f"provider    : {config.provider.name}")
     print(f"base url    : {config.provider.base_url}")
     print(f"model       : {config.provider.model}")
-    print(f"api key     : {context.config_manager.masked_api_key()}")
+    print(f"api key     : {resolution.masked()}")
+    print(
+        f"credential  : {resolution.status.value} ({resolution.source.value}, "
+        f"{resolution.storage_status.value})"
+    )
     print(f"workspace   : {context.workspace.root if context.workspace else '(none)'}")
     print(f"tools       : {', '.join(context.tools.names) if context.tools else '(none)'}")
     print(f"conversations: {len(context.list_conversations())} stored")
@@ -945,8 +1294,8 @@ def _run_check_config(context: ApplicationContext) -> int:
         title = context.conversation_title or context.resumed_conversation_id
         print(f"resumed     : {title} ({context.resumed_conversation_id})")
         print(f"last turn   : {context.resumed_outcome}")
-    print(f"ready       : {'yes' if ready else 'no'} ({reason})")
-    return 0 if ready else 1
+    print(f"ready       : {'yes' if report.ready else 'no'} ({report.reason})")
+    return 0 if report.ready else 1
 
 
 def _run_list_conversations(context: ApplicationContext) -> int:

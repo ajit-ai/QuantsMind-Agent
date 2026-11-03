@@ -9,14 +9,17 @@ Configuration
 Configuration has four parts, and they are deliberately separate:
 
 1. **Settings** (not secret) -- ``config.toml`` in the per-user config directory.
-2. **Credentials** (secret) -- the Windows Credential Manager, or
-   ``secrets.json`` when a keyring is unavailable.
+2. **Credentials** (secret) -- the operating-system credential store. A
+   ``secrets.json`` left by an earlier version remains readable for an explicit
+   migration, but new keys are never written there when no credential service is
+   available.
 3. **Stored data** -- conversations and task records in the per-user data
    directory. Persistence is on by default and can be disabled.
 4. **Live session state** -- workspace and conversation context in memory for
    the current run.
 
-Environment variables are an optional overriding source.
+Environment variables are an optional source, consulted only for the provider
+that owns them.
 
 Provider settings
 =================
@@ -42,7 +45,8 @@ Field                  Meaning
 ``timeout_seconds``    Per-request timeout (5-3600 s).
 ``max_output_tokens``  Upper bound on the response (128-200000).
 ``temperature``        Sampling temperature, 0.0-2.0.
-``api_key_env``        Environment variable consulted before the secret store.
+``api_key_env``        Environment variable consulted after the secret store, and
+                       only for the provider that owns that name.
 ``organization``       Optional organisation header.
 =====================  =======================================================================
 
@@ -136,38 +140,64 @@ API key handling
 
 Resolution order:
 
-1. the environment variable named by ``api_key_env`` (default ``QM_API_KEY``);
-2. the secret store.
+1. the provider-bound credential in the secure store
+   (``provider:<provider_id>:default:api_key``), or a legacy credential an
+   operator has explicitly bound to that provider;
+2. that provider's own environment variable (``OPENROUTER_API_KEY``,
+   ``OPENAI_API_KEY``, ``GROQ_API_KEY`` and so on);
+3. ``api_key_env``, but only when the configured provider owns that generic
+   name. ``QM_API_KEY`` belongs to OpenAI, the default provider, and is never
+   read for another service.
+
+A credential is bound to one endpoint identity. Editing the base URL to point at
+a different service clears the binding in Settings; the previous provider's key
+is not carried over, and a request is refused rather than sent with it.
 
 Rules the implementation guarantees:
 
 * the key is never written to ``config.toml``;
 * the key is never written to the log file -- a redaction filter scrubs
   ``Authorization``/``api_key`` patterns from every record;
+* if no OS credential service is usable, saving a key fails visibly and writes
+  nothing to disk. An existing ``secrets.json`` still authenticates and is
+  reported as plaintext (degraded);
+* ``secrets.json`` is never overwritten or deleted automatically; moving a legacy
+  value to its provider-bound slot is an explicit, read-back-verified action;
 * the Settings dialog never renders a stored key; the field is empty on open
   and shows ``sk-******op`` as masked status text;
-* ``tests/unit/test_secrets_paths.py`` asserts the masking contract, and
-  ``tests/gui/test_main_window.py`` asserts no key reaches the transcript.
+* readiness, the Settings hint, the security panel and the request path all use
+  the same credential decision, so they cannot promise a key the request would
+  refuse.
 
-Clearing a key: Settings -> **Clear stored key**, or delete ``secrets.json``.
+Clearing a key: Settings -> **Clear stored key**. The provider's own slot is
+removed; a shared legacy slot is left alone because it may belong to another
+provider.
 
 Environment variables
 =====================
 
-===================  ===========================================
-Variable             Effect
-===================  ===========================================
-``QM_API_KEY``       API key (highest precedence)
-``QM_CONFIG_DIR``    Override the configuration directory
-``QM_LOG_DIR``       Override the log directory
-``QT_QPA_PLATFORM``  Set to ``offscreen`` for headless GUI tests
-===================  ===========================================
+======================  ===========================================
+Variable                Effect
+======================  ===========================================
+``OPENAI_API_KEY``      Key for OpenAI
+``OPENROUTER_API_KEY``  Key for OpenRouter
+``GROQ_API_KEY``        Key for Groq
+``DEEPSEEK_API_KEY``    Key for DeepSeek
+``MINIMAX_API_KEY``     Key for MiniMax
+``TOGETHER_API_KEY``    Key for Together
+``FIREWORKS_API_KEY``   Key for Fireworks
+``QM_API_KEY``          Key for the default provider (OpenAI) only
+``QM_CONFIG_DIR``       Override the configuration directory
+``QM_LOG_DIR``          Override the log directory
+``QT_QPA_PLATFORM``     Set to ``offscreen`` for headless GUI tests
+======================  ===========================================
 
 .. code-block:: powershell
 
-    $env:QM_API_KEY = "sk-..."
+    $env:OPENROUTER_API_KEY = "sk-..."
     quantsmind-agent
 
+A provider-specific variable is only read when that provider is configured.
 Using the GUI is still the recommended way to configure a key, because it goes
 through the credential store rather than the process environment.
 

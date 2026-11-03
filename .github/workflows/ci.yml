@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "release/**"]
+    tags: ["v*"]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, "release/**"]
   workflow_dispatch:
 
 # Cancel superseded runs on the same ref.
@@ -26,6 +27,7 @@ jobs:
   lint:
     name: Lint, format and types
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -61,6 +63,7 @@ jobs:
   test:
     name: Tests (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -119,6 +122,14 @@ jobs:
       - name: GUI tests
         run: python scripts/run_qt_tests.py tests/gui -q
 
+      # Credential resolution, provider/endpoint identity and audit redaction
+      # are security invariants, not conveniences. They must hold on every
+      # supported OS, including the Windows target, not only on Linux.
+      # Windows-only sandbox tests skip themselves before importing Windows
+      # APIs; the pinned-transport and credential tests run on every OS.
+      - name: Security tests
+        run: pytest tests/security -q
+
       # The product executes real commands and touches real files. Prove the
       # safety policy on a host with no display before trusting the suite above.
       # One line on purpose: GitHub's default shell on Windows is PowerShell,
@@ -132,21 +143,29 @@ jobs:
       # coverage and must keep being. run_qt_tests.py disposes Qt while the
       # application is still alive and then exits with pytest's own code, so
       # coverage.xml is written before the runner leaves.
+      # No coverage floor is enforced yet: the first Ubuntu py3.12 run establishes
+      # the genuine baseline. A floor is proposed only after that result has been
+      # reviewed.
       - name: Coverage summary
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
         run: python scripts/run_qt_tests.py --cov=quantsmind_agent --cov-report=term-missing --cov-report=xml -q
 
+      # `if: always()` keeps the measurement available when the coverage step
+      # fails; the failing step still fails the job.
       - name: Upload coverage
-        if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
+        if: always() && matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
           path: coverage.xml
+          if-no-files-found: warn
           retention-days: 14
 
   build:
     name: Package build
+    needs: [lint, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -188,6 +207,7 @@ jobs:
   manual-acceptance-required:
     name: Manual Windows 11 acceptance required
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: always()
     steps:
       - name: Reminder

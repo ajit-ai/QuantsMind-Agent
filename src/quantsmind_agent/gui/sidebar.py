@@ -34,6 +34,8 @@ class Sidebar(QWidget):
     open_workspace_requested = Signal()
     close_workspace_requested = Signal()
     settings_requested = Signal()
+    #: The security panel was asked for (M3B-S1.2).
+    security_requested = Signal()
     new_conversation_requested = Signal()
     #: A stored conversation was chosen from the list, by id.
     conversation_selected = Signal(str)
@@ -133,6 +135,14 @@ class Sidebar(QWidget):
         self._settings_button.setToolTip("Provider, model, API key and agent limits")
         self._settings_button.clicked.connect(self.settings_requested.emit)
         grid.addWidget(self._settings_button, 3, 0, 1, 2)
+
+        self._security_button = QPushButton("Security\u2026")
+        self._security_button.setToolTip(
+            "Provider identities, credential status, endpoint authorisation and the "
+            "security audit trail"
+        )
+        self._security_button.clicked.connect(self.security_requested.emit)
+        grid.addWidget(self._security_button, 4, 0, 1, 2)
         return box
 
     def _session_box(self) -> QGroupBox:

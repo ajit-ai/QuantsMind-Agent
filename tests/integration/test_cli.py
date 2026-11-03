@@ -137,8 +137,29 @@ class TestCheckConfig:
         config_dir.mkdir(parents=True, exist_ok=True)
         # main() builds its own store; _no_os_credential_store points it at this
         # file, so the seeded value is the one it resolves.
+        #
+        # M3B-S1.1: the legacy slot is shared by every provider, so it no
+        # longer authenticates the configured provider on its own. A credential
+        # is bound to a provider identity, and the value is only reported
+        # masked, never in full.
         (config_dir / "secrets.json").write_text(
             '{"provider:openai_compatible:api_key": "super-secret-key-424242"}',
+            encoding="utf-8",
+        )
+        main(["--check-config", "--no-log-file"])
+        out = capsys.readouterr().out
+        assert "super-secret-key-424242" not in out
+        # The legacy slot alone does not resolve for the configured provider.
+        assert "api key     : (not set)" in out
+
+    def test_a_provider_bound_credential_is_reported_masked(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        config_dir = Path(os.environ["QM_CONFIG_DIR"])
+        config_dir.mkdir(parents=True, exist_ok=True)
+        # The provider-bound slot is the one the application reads (M3B-S1.1).
+        (config_dir / "secrets.json").write_text(
+            '{"provider:openai:default:api_key": "super-secret-key-424242"}',
             encoding="utf-8",
         )
         main(["--check-config", "--no-log-file"])

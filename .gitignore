@@ -28,6 +28,10 @@ docs/build/
 *.manifest
 *.spec.bak
 
+# Generated distribution output (not source)
+dist-onefile/
+dist-v02-manual/
+
 # Editors / OS
 .idea/
 .vscode/

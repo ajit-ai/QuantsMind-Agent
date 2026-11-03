@@ -219,8 +219,10 @@ Network surface
 ===============
 
 The only outbound request is to the configured ``base_url``. There is no
-follow-the-link fetching, no tool that fetches a URL, and redirects are followed
-by ``httpx`` within the configured host policy.
+follow-the-link fetching, no tool that fetches a URL, and redirects are refused
+rather than followed, so a 3xx cannot move an authenticated request to another
+host. The application does not claim protection against DNS rebinding for that
+request; the pinned-transport code exists but is dormant and unwired.
 
 Residual risks
 ==============
@@ -242,7 +244,12 @@ Residual risks
    * - Credential leaks via a log
      - redaction filter plus tests asserting the masked form
    * - Secret file readable by other local users
-     - owner-only permissions; keyring preferred where available
+     - operating-system credential store; a legacy plaintext file is a degraded
+       read-only fallback, never a write target
+   * - OS-level sandbox
+     - not implemented in the product; the experimental package is dormant and
+       never wired by the application, so approved commands run with user
+       privileges
    * - Symlinked or junctioned repository used to escape
      - direct paths rejected by resolved-path containment; discovery skips
        reparse points
