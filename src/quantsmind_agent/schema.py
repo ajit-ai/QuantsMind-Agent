@@ -110,7 +110,7 @@ class AssistantMessage(Message):
     total_tokens: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        payload = super().to_dict()
+        payload = Message.to_dict(self)
         payload["tool_calls"] = [call.to_dict() for call in self.tool_calls]
         payload["model"] = self.model
         return payload
@@ -140,7 +140,7 @@ class ToolMessage(Message):
     ok: bool = True
 
     def to_dict(self) -> dict[str, Any]:
-        payload = super().to_dict()
+        payload = Message.to_dict(self)
         payload["tool_name"] = self.tool_name
         payload["tool_call_id"] = self.tool_call_id
         payload["ok"] = self.ok

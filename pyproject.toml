@@ -109,6 +109,10 @@ known-first-party = ["quantsmind_agent"]
 # --------------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.12"
+# The sandbox binds Win32 APIs through ctypes, so those calls are checked
+# against the Windows typeshed. Linux-targeted mypy analysis is therefore not
+# provided; Linux and macOS runtime behaviour is covered by the CI test matrix.
+platform = "win32"
 files = ["src/quantsmind_agent", "tests", "scripts"]
 strict = true
 warn_unreachable = true

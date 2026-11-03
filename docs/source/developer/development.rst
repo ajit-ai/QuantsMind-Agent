@@ -43,6 +43,10 @@ Tooling configuration
 * **ruff** -- line length 100, target ``py311``, rules ``E W F I B C4 UP SIM RUF``.
   Run ``ruff check --fix .`` and ``ruff format .`` before committing.
 * **mypy** -- ``strict = true`` over ``src``, ``tests`` and ``scripts``.
+  Analysis targets Windows (``platform = "win32"``) because the sandbox binds
+  Win32 APIs through ``ctypes`` and those calls are checked against the Windows
+  typeshed. The trade-off is that mypy provides no Linux-targeted analysis;
+  Linux and macOS runtime behaviour is covered by the CI test matrix.
   Three modules are annotated through the stricter manual approach the type
   checker needs:
 
