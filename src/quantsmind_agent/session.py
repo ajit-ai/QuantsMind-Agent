@@ -57,6 +57,25 @@ class HistoryEntry:
         return self.tool_result is not None
 
 
+def _history_rank(message: Message) -> int:
+    """Tie-break for entries recorded at the same instant.
+
+    A coarse system clock can give a tool result and the answer that follows it
+    the same timestamp. Ranking by what the entry is, rather than by whether it
+    is a message, keeps a turn in the order it happened.
+    """
+
+    if isinstance(message, SystemMessage):
+        return 0
+    if isinstance(message, UserMessage):
+        return 1
+    if isinstance(message, AssistantMessage):
+        return 2 if message.tool_calls else 4
+    if isinstance(message, ToolMessage):
+        return 3
+    return 1
+
+
 def _message_from_dict(payload: dict[str, Any]) -> Message | None:
     """Rebuild one stored message, tolerating a role this version does not know.
 
@@ -346,20 +365,30 @@ class Session:
     def ordered_history(self) -> list[HistoryEntry]:
         """Messages and tool results merged into the order they happened.
 
-        Sorted by the time each thing was produced. Equal timestamps keep messages
-        ahead of tool results, because the assistant message that asked for a tool
-        call is always created before it runs; within one kind, insertion order is
-        preserved.
+        Sorted by the time each thing was produced. Entries sharing a timestamp
+        are ordered by what they are: a system message, the user's request, the
+        assistant request for a tool, the tool result, and finally the assistant's
+        answer. A coarse system clock can give a result and the answer that
+        follows it the same timestamp, so message-versus-tool is not enough.
+
+        Within one timestamp and rank, insertion order is preserved. A timestamp
+        tie between different turns is inherently ambiguous without a persisted
+        monotonic sequence, so it cannot be fully disambiguated here.
         """
 
         entries: list[tuple[float, int, int, HistoryEntry]] = []
         for index, message in enumerate(self._messages):
             entries.append(
-                (message.created_at, 0, index, HistoryEntry(message.created_at, message))
+                (
+                    message.created_at,
+                    _history_rank(message),
+                    index,
+                    HistoryEntry(message.created_at, message),
+                )
             )
         for index, result in enumerate(self._tool_results):
             entries.append(
-                (result.created_at, 1, index, HistoryEntry(result.created_at, None, result))
+                (result.created_at, 3, index, HistoryEntry(result.created_at, None, result))
             )
         entries.sort(key=lambda item: (item[0], item[1], item[2]))
         return [item[3] for item in entries]

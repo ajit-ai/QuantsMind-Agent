@@ -23,7 +23,7 @@ from quantsmind_agent.conversations import (
     snapshot_session,
     truncate,
 )
-from quantsmind_agent.schema import AssistantMessage, UserMessage
+from quantsmind_agent.schema import AssistantMessage, SystemMessage, ToolCall, UserMessage
 from quantsmind_agent.session import Session
 from quantsmind_agent.tools import ToolResult
 
@@ -38,6 +38,18 @@ def _kinds(session: Session) -> list[str]:
         elif entry.message is not None:
             names.append(entry.message.role.value)
     return names
+
+
+def _contents(session: Session) -> list[str]:
+    """Ordered history as readable labels, including assistant request vs answer."""
+
+    labels: list[str] = []
+    for entry in session.ordered_history():
+        if entry.tool_result is not None:
+            labels.append(f"tool:{entry.tool_result.tool}")
+        elif entry.message is not None:
+            labels.append(f"{entry.message.role.value}:{entry.message.content}")
+    return labels
 
 
 def _live_session() -> Session:
@@ -117,6 +129,61 @@ class TestOrderedHistory:
 
         assert entries[0].message is not None
         assert entries[1].is_tool
+
+    def test_a_tool_result_precedes_the_final_answer_on_a_timestamp_tie(self) -> None:
+        session = Session()
+        session.add_message(UserMessage(content="read it", created_at=500.0))
+        session.add_message(
+            AssistantMessage(
+                content="checking",
+                tool_calls=[ToolCall(id="call-1", name="read_file")],
+                created_at=500.0,
+            )
+        )
+        session.record_tool_result(ToolResult.success("read_file", "read mod.py", created_at=500.0))
+        session.add_message(AssistantMessage(content="It returns one.", created_at=500.0))
+
+        assert _contents(session) == [
+            "user:read it",
+            "assistant:checking",
+            "tool:read_file",
+            "assistant:It returns one.",
+        ]
+
+    def test_a_system_message_precedes_a_user_message_on_a_timestamp_tie(self) -> None:
+        session = Session()
+        session.add_message(SystemMessage(content="be careful", created_at=500.0))
+        session.add_message(UserMessage(content="go", created_at=500.0))
+
+        assert _contents(session) == ["system:be careful", "user:go"]
+
+    def test_a_restored_tied_history_keeps_the_semantic_order(
+        self, store: ConversationStore
+    ) -> None:
+        session = Session()
+        session.add_message(SystemMessage(content="be careful", created_at=500.0))
+        session.add_message(UserMessage(content="read it", created_at=500.0))
+        session.add_message(
+            AssistantMessage(
+                content="checking",
+                tool_calls=[ToolCall(id="call-1", name="read_file")],
+                created_at=500.0,
+            )
+        )
+        session.record_tool_result(ToolResult.success("read_file", "read mod.py", created_at=500.0))
+        session.add_message(AssistantMessage(content="It returns one.", created_at=500.0))
+        store.save(snapshot_session(session))
+
+        reopened = Session()
+        assert reopened.restore_from(store.load(session.id) or {})
+
+        assert _contents(reopened) == [
+            "system:be careful",
+            "user:read it",
+            "assistant:checking",
+            "tool:read_file",
+            "assistant:It returns one.",
+        ]
 
     def test_tool_results_survive_a_restore(self, store: ConversationStore) -> None:
         store.save(_record("conv-tools"))

@@ -111,7 +111,10 @@ jobs:
       - name: Unit tests
         run: pytest tests/unit -q
 
+      # Independent groups keep running after an ordinary failure so one broken
+      # suite does not hide the others; a cancelled workflow still stops them.
       - name: Integration tests
+        if: ${{ !cancelled() }}
         run: pytest tests/integration -q
 
 # Run through scripts/run_qt_tests.py: on CPython 3.11 the interpreter
@@ -120,6 +123,7 @@ jobs:
       # disposes Qt while it is still alive and then exits with pytest's own
       # code, so a real failure still fails the build.
       - name: GUI tests
+        if: ${{ !cancelled() }}
         run: python scripts/run_qt_tests.py tests/gui -q
 
       # Credential resolution, provider/endpoint identity and audit redaction
@@ -128,6 +132,7 @@ jobs:
       # Windows-only sandbox tests skip themselves before importing Windows
       # APIs; the pinned-transport and credential tests run on every OS.
       - name: Security tests
+        if: ${{ !cancelled() }}
         run: pytest tests/security -q
 
       # The product executes real commands and touches real files. Prove the
@@ -137,6 +142,7 @@ jobs:
       # wrapped command silently passes "\" as an argument and pytest then
       # collects from the drive root.
       - name: Command policy and write/edit/delete unit tests
+        if: ${{ !cancelled() }}
         run: pytest tests/unit/test_command_policy.py tests/unit/test_command_tools.py tests/unit/test_write_tools.py tests/unit/test_git_tools.py -q
 
       # The whole suite runs here, GUI tests included: they are part of the measured
@@ -147,7 +153,7 @@ jobs:
       # the genuine baseline. A floor is proposed only after that result has been
       # reviewed.
       - name: Coverage summary
-        if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
+        if: ${{ !cancelled() && matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest' }}
         run: python scripts/run_qt_tests.py --cov=quantsmind_agent --cov-report=term-missing --cov-report=xml -q
 
       # `if: always()` keeps the measurement available when the coverage step
@@ -158,7 +164,7 @@ jobs:
         with:
           name: coverage-xml
           path: coverage.xml
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
   build:

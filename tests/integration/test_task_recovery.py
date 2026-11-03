@@ -367,6 +367,20 @@ class TestVerificationReporting:
 
         assert results[0].status is CheckStatus.BLOCKED
 
+    def test_a_hard_denied_command_is_blocked_when_it_is_not_installed(self, project: Path) -> None:
+        task = Task(id="t1", objective="verify", workspace=str(project))
+        orchestrator = approved_orchestrator(project, task)
+
+        # mimikatz is on the hard-deny list and is not installed on any runner,
+        # so this pins the order of the policy and availability checks rather
+        # than the host's installed programs.
+        results = orchestrator.verify([Check(id="danger", argv=("mimikatz",))])
+
+        assert results[0].status is CheckStatus.BLOCKED
+        assert "refused by command policy" in results[0].detail
+        assert results[0].output == ""
+        assert results[0].exit_code is None
+
     def test_a_hanging_check_is_inconclusive_rather_than_failing(self, project: Path) -> None:
         import time as _time
 

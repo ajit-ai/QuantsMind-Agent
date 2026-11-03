@@ -380,6 +380,22 @@ def run_checks(
     for check in checks:
         if on_start is not None:
             on_start(check)
+        verdict = classify_command(list(check.argv), workspace_root=workspace_root)
+        # A hard-denied program is refused whether or not it is installed on this
+        # host. Checking availability first would report an absent destructive
+        # program as merely skipped, which hides the policy decision.
+        if verdict.rule.startswith("blocked-program:"):
+            results.append(
+                CheckResult(
+                    check_id=check.id,
+                    command=tuple(check.argv),
+                    status=CheckStatus.BLOCKED,
+                    detail=f"refused by command policy: {verdict.risk_label}",
+                    output="",
+                )
+            )
+            continue
+
         available, reason = check.available()
         if not available:
             results.append(
@@ -393,7 +409,6 @@ def run_checks(
             )
             continue
 
-        verdict = classify_command(list(check.argv), workspace_root=workspace_root)
         if not verdict.permitted:
             results.append(
                 CheckResult(
