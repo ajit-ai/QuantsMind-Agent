@@ -38,7 +38,10 @@ class WorkspaceWatcher:
         self._on_change = on_change
         self._interval = max(0.2, interval)
         self._settle = max(0.0, settle)
-        self._directories: set[str] = {"."}
+        # Only directories explicitly passed to set_directories() are watched.
+        # The GUI's explorer.expanded_directories() includes "." explicitly, so
+        # root watching is preserved there; do not register it implicitly here.
+        self._directories: set[str] = set()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -67,7 +70,12 @@ class WorkspaceWatcher:
     def set_directories(self, directories: Iterable[str]) -> None:
         """Replace the watched set with the explorer's expanded directories."""
 
-        cleaned = {"."}
+        # Watch exactly what the caller registers. Do not inject "." implicitly:
+        # on POSIX a write under a watched child directory propagates that
+        # child's mtime into the root snapshot, which made poll_once() report a
+        # spurious "." entry whenever any subdirectory changed. Callers that
+        # want root watching (e.g. the GUI explorer) pass "." explicitly.
+        cleaned: set[str] = set()
         for directory in directories:
             try:
                 self._workspace.resolve(directory)

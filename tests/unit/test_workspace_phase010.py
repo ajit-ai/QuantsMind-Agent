@@ -414,6 +414,74 @@ class TestWorkspaceWatcher:
         (workspace.root / "docs" / "added.md").write_text("# added\n", encoding="utf-8")
         assert watcher.poll_once() == ["docs"]
 
+    def test_root_not_watched_when_not_registered(self, workspace: Workspace) -> None:
+        """A root-level change is reported only when "." is explicitly registered.
+
+        Regression: set_directories() used to inject "." implicitly, so a write
+        at the workspace root produced a spurious "." report even when only a
+        subdirectory was registered.
+        """
+
+        watcher = WorkspaceWatcher(workspace, lambda _changed: None, interval=60.0)
+        watcher.set_directories(["docs"])
+        (workspace.root / "root-only.txt").write_text("new\n", encoding="utf-8")
+        assert watcher.poll_once() == []
+
+    def test_nested_child_mtime_does_not_report_root(self, workspace: Workspace) -> None:
+        """A nested write must never surface the root as a changed directory.
+
+        On POSIX, adding a file under docs/ updates the docs/ directory mtime,
+        which is part of the root snapshot. With implicit "." registration that
+        produced a spurious "." alongside "docs". Whether the nested change is
+        itself detected is OS-dependent, but the root must never be reported
+        when "." is not explicitly registered.
+        """
+
+        watcher = WorkspaceWatcher(workspace, lambda _changed: None, interval=60.0)
+        watcher.set_directories(["docs"])
+        nested = workspace.root / "docs" / "nested"
+        nested.mkdir()
+        first = watcher.poll_once()
+        (nested / "deep.md").write_text("# deep\n", encoding="utf-8")
+        second = watcher.poll_once()
+        assert "." not in first
+        assert "." not in second
+        # A direct write into the registered directory is always detected.
+        (workspace.root / "docs" / "direct.md").write_text("# direct\n", encoding="utf-8")
+        assert watcher.poll_once() == ["docs"]
+
+    def test_explicit_root_registration_still_watches_root(self, workspace: Workspace) -> None:
+        """Explicit "." registration preserves root watching (GUI relies on it)."""
+
+        watcher = WorkspaceWatcher(workspace, lambda _changed: None, interval=60.0)
+        watcher.set_directories([".", "docs"])
+        (workspace.root / "root-only.txt").write_text("new\n", encoding="utf-8")
+        assert watcher.poll_once() == ["."]
+
+    def test_set_directories_replaces_previous_set(self, workspace: Workspace) -> None:
+        """set_directories() replaces the watched set rather than accumulating it."""
+
+        watcher = WorkspaceWatcher(workspace, lambda _changed: None, interval=60.0)
+        watcher.set_directories(["docs"])
+        watcher.set_directories(["src"])
+        # docs is no longer watched after replacement.
+        (workspace.root / "docs" / "replaced.md").write_text("# x\n", encoding="utf-8")
+        assert watcher.poll_once() == []
+        # src is now watched.
+        (workspace.root / "src" / "watched.py").write_text("x = 1\n", encoding="utf-8")
+        assert watcher.poll_once() == ["src"]
+
+    def test_repeated_writes_are_reported_each_time(self, workspace: Workspace) -> None:
+        """Each write/poll cycle reports the watched directory exactly once."""
+
+        watcher = WorkspaceWatcher(workspace, lambda _changed: None, interval=60.0)
+        watcher.set_directories(["docs"])
+        for name in ("first.md", "second.md", "third.md"):
+            (workspace.root / "docs" / name).write_text("# x\n", encoding="utf-8")
+            assert watcher.poll_once() == ["docs"]
+            # No phantom report when nothing changed between polls.
+            assert watcher.poll_once() == []
+
     def test_start_and_stop(self, workspace: Workspace) -> None:
         watcher = WorkspaceWatcher(workspace, lambda _changed: None, interval=60.0)
         initial = watcher.running
