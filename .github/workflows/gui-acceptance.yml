@@ -92,8 +92,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   macos:
-    name: macOS GUI (macOS 14, arm64)
-    runs-on: macos-14
+    name: macOS GUI (macOS latest, arm64)
+    runs-on: macos-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
