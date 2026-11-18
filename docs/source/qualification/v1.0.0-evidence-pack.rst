@@ -1,0 +1,436 @@
+.. _qualification-v100-evidence-pack:
+
+
+===========================================
+v1.0.0 human-gate evidence pack (templates)
+===========================================
+
+.. contents::
+   :local:
+   :depth: 2
+
+**Execution status: NOT TESTED.** This document contains blank recording
+templates for the human and external gates in :doc:`defect-triage`. It is not
+evidence. Do not copy a row into a release report as ``PASS`` unless the named
+reviewer has observed it and the supporting record exists.
+
+The detailed *how to test* procedures already exist:
+
+* :doc:`manual-beta-acceptance` -- the Windows 11 beta plan, fixture and safety rules.
+* :doc:`../testing/native-gui-acceptance` -- the native GUI checklist (QF-003).
+* :doc:`../testing/live-provider-validation-v0.5` -- provider test ideas (QF-002).
+
+This pack is the *what to record* layer: a consistent identity block per run and
+one result table per gate, so that evidence from different testers is comparable
+and can be triaged.
+
+Scope and status vocabulary
+===========================
+
+Use the vocabulary in :doc:`index`: ``PASS``, ``FAIL``, ``BLOCKED``,
+``NOT TESTED``, ``NOT APPLICABLE``. A queued job is not a pass; a local stub is
+not a real provider; an automated window check is not human GUI acceptance.
+
+Windows-only scope for v1.0.0. macOS and Linux artifacts are out of scope for
+this release. Signing (QF-001 / G25) is tracked separately in
+``packaging/WINDOWS-SIGNING.md`` and is **not** closed by anything in this pack.
+
+Recording rules (apply to every gate)
+=====================================
+
+#. Use a disposable project or the generated acceptance fixture. No production
+   repository, customer data or credentials.
+#. Use a dedicated, low-limit, **revocable** test key, entered through Settings.
+   Never paste it into a terminal, report, screenshot, issue or chat message.
+#. Record the **artifact hash**, machine/OS, date, provider and model for every
+   run. A result without an artifact identity is not evidence.
+#. Scrub logs: remove keys, prompts containing secrets and full production
+   paths. Record a short excerpt, not a full transcript.
+#. A stop condition (workspace escape, approval bypass, key in UI/log, data
+   loss, install damage, crash during approval) means: stop, preserve the log,
+   notify the coordinator, record ``FAIL``.
+#. Do not count a test as passed if the tester only repeated automated checks.
+#. Every ``FAIL`` needs a triage decision: fixed in a named build, accepted as a
+   documented limitation, or blocking release.
+
+Common run identity (copy into every gate)
+------------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Field
+     - Value to record
+   * - Gate / test ID
+     - e.g. ``QF-003 / GUI-04``
+   * - Reviewer (name)
+     - Named human; not the build operator for independent gates
+   * - Date / time (UTC)
+     - ``YYYY-MM-DDTHH:MMZ``
+   * - Artifact + SHA-256
+     - Exact MSI or executable hash under test
+   * - Build commit / version
+     - e.g. ``506f78a`` / ``0.9.0`` (candidate version when available)
+   * - Machine / OS
+     - Host or VM identifier; Windows 11 x64 build number
+   * - Provider / model
+     - Real provider and model, or local endpoint (QF-002 only)
+   * - Result
+     - ``PASS`` / ``FAIL`` / ``BLOCKED`` / ``NOT TESTED``
+   * - Evidence ref
+     - Scrubbed log excerpt id, screenshot id, or recording location
+   * - Triage decision
+     - Required only for ``FAIL``
+
+QF-002 -- Real provider / real local endpoint
+=============================================
+
+Close-out requires a real cloud provider or a real local endpoint, a read-only
+task **and** a plan/edit/approval task on the disposable fixture, one wrong-key
+request, and a forced timeout or rate-limit path where the provider permits it.
+Tool activity must appear before the answer and claims must match fixture files.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 12 12 42
+
+   * - Check
+     - Result
+     - Evidence ref
+     - Notes / observed behaviour
+   * - Provider + model identified and key entered through Settings
+     - NOT TESTED
+     -
+     -
+   * - Read-only task completes; tool activity precedes the answer
+     - NOT TESTED
+     -
+     -
+   * - Answer matches the disposable fixture files
+     - NOT TESTED
+     -
+     -
+   * - Plan/edit/approval task reaches the approval dialog and is answered
+     - NOT TESTED
+     -
+     -
+   * - Wrong-key request is reported safely (no raw key in output)
+     - NOT TESTED
+     -
+     -
+   * - Timeout / rate-limit path is handled per provider behaviour
+     - NOT TESTED
+     -
+     -
+   * - (Optional) local endpoint, no key -- G17
+     - NOT TESTED
+     -
+     -
+
+QF-003 -- Human GUI and approval acceptance
+===========================================
+
+Close-out requires a named reviewer recording each required check as pass or
+fail on a real Windows 11 desktop. Execute
+:doc:`../testing/native-gui-acceptance`; include close-while-approval-pending,
+high-DPI/scaled display and keyboard navigation if in v1.0.0 scope. Capture
+screenshots without credentials or sensitive paths.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 12 12 42
+
+   * - Check
+     - Result
+     - Evidence ref
+     - Notes / observed behaviour
+   * - Titled window opens and closes cleanly
+     - NOT TESTED
+     -
+     -
+   * - Chat / Task views and controls visible, not clipped
+     - NOT TESTED
+     -
+     -
+   * - Text readable at intended display scaling / high DPI
+     - NOT TESTED
+     -
+     -
+   * - Keyboard navigation reaches primary controls
+     - NOT TESTED
+     -
+     -
+   * - Approval text is understandable to the reviewer
+     - NOT TESTED
+     -
+     -
+   * - Allow / Allow Once / Deny / Allow for Session each behave as documented
+     - NOT TESTED
+     -
+     -
+   * - Close while approval pending is handled safely
+     - NOT TESTED
+     -
+     -
+   * - Blocked command never reaches approval
+     - NOT TESTED
+     -
+     -
+
+QF-004 -- Clean-machine independent install
+===========================================
+
+Close-out requires the complete lifecycle reproduced on a clean machine by
+someone other than the build operator. Use a clean Windows 11 x64 VM or separate
+machine: no Python, no source checkout, no prior install, no test credential.
+Verify the MSI hash before installing.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 12 12 42
+
+   * - Check
+     - Result
+     - Evidence ref
+     - Notes / observed behaviour
+   * - MSI SHA-256 verified before install
+     - NOT TESTED
+     -
+     -
+   * - SmartScreen / security-product outcome recorded (unsigned build)
+     - NOT TESTED
+     -
+     -
+   * - Install succeeds without Python or source present
+     - NOT TESTED
+     -
+     -
+   * - Launch and open a disposable workspace
+     - NOT TESTED
+     -
+     -
+   * - Close, then uninstall
+     - NOT TESTED
+     -
+     -
+   * - No shortcuts, processes, install directory or installed-apps entry remain
+     - NOT TESTED
+     -
+     -
+   * - Performed by someone other than the build operator
+     - NOT TESTED
+     -
+     -
+
+QF-005 -- External beta evidence
+================================
+
+Close-out requires :doc:`manual-beta-acceptance` run with at least three
+technical testers on at least two machines, using disposable projects and
+revocable keys; every failure triaged with the build/hash that produced it; no
+unresolved blocker or critical data-safety issue; a written decision on every
+failure. Maps to gate G20.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 38 12 12 38
+
+   * - Item
+     - Result
+     - Evidence ref
+     - Notes
+   * - Tester count (target >= 3) and distinct machines (target >= 2)
+     - NOT TESTED
+     -
+     -
+   * - At least one tester is not the build operator
+     - NOT TESTED
+     -
+     -
+   * - All runs used disposable projects and revocable keys
+     - NOT TESTED
+     -
+     -
+   * - Every failure triaged with artifact hash + build
+     - NOT TESTED
+     -
+     -
+   * - No unresolved blocker or critical data-safety issue
+     - NOT TESTED
+     -
+     -
+   * - Written decision on every failure
+     - NOT TESTED
+     -
+     -
+
+Per-tester index (one row each):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 20 18 20 24
+
+   * - Tester
+     - Machine / OS
+     - Artifact SHA-256
+     - Sessions completed
+     - Evidence ref
+   * -
+     -
+     -
+     -
+     -
+
+QF-009 -- 0.9-to-1.0 upgrade and rollback
+=========================================
+
+Close-out requires a v1.0.0 candidate, v0.9.0 installed first with a workspace,
+conversation and task evidence, an in-place upgrade, verification that settings,
+credentials (without exposing them), conversation history, task snapshots and
+schema versions survive, then uninstall v1.0.0, reinstall v0.9.0 and verify a
+documented rollback path. Maps to gate G20-adjacent upgrade criteria.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 12 12 36
+
+   * - Check
+     - Result
+     - Evidence ref
+     - Notes / observed behaviour
+   * - v0.9.0 installed; workspace, conversation and task evidence created
+     - NOT TESTED
+     -
+     -
+   * - v1.0.0 candidate identified with hash
+     - NOT TESTED
+     -
+     -
+   * - In-place upgrade succeeds
+     - NOT TESTED
+     -
+     -
+   * - Settings and credential availability survive (no key exposed)
+     - NOT TESTED
+     -
+     -
+   * - Conversation history survives
+     - NOT TESTED
+     -
+     -
+   * - Task snapshots and schema versions survive
+     - NOT TESTED
+     -
+     -
+   * - Rollback: uninstall v1.0.0, reinstall v0.9.0, evidence intact
+     - NOT TESTED
+     -
+     -
+
+QF-010 -- Long-session resource behaviour
+=========================================
+
+Close-out requires at least 20 turns in one session on a disposable project,
+including a long-running command and several approvals; record working set, UI
+responsiveness, log size and process count. If 20 turns cannot be supported,
+state the tested limit in the beta plan and user documentation. Maps to gate G26.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 12 12 42
+
+   * - Check
+     - Result
+     - Evidence ref
+     - Notes / observed behaviour
+   * - Turns completed (target >= 20) in a single session
+     - NOT TESTED
+     -
+     -
+   * - Long-running command exercised
+     - NOT TESTED
+     -
+     -
+   * - Several approvals answered during the session
+     - NOT TESTED
+     -
+     -
+   * - Working set measured (start / end)
+     - NOT TESTED
+     -
+     -
+   * - UI stayed responsive
+     - NOT TESTED
+     -
+     -
+   * - Log size measured and rotation behaviour observed
+     - NOT TESTED
+     -
+     -
+   * - Process count measured (start / end)
+     - NOT TESTED
+     -
+     -
+   * - Supported session limit stated if < 20 turns
+     - NOT TESTED
+     -
+     -
+
+Gate rollup
+===========
+
+Update only after a named reviewer has recorded the evidence above.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 24 16 48
+
+   * - Gate
+     - Defect
+     - Status
+     - Evidence / decision
+   * - QF-001 / G25
+     - Signing and trusted publisher
+     - OPEN
+     - External to this pack; see ``packaging/WINDOWS-SIGNING.md``
+   * - QF-002
+     - Real provider / local endpoint
+     - NOT TESTED
+     -
+   * - QF-003
+     - Human GUI and approval
+     - NOT TESTED
+     -
+   * - QF-004
+     - Clean-machine install
+     - NOT TESTED
+     -
+   * - QF-005 / G20
+     - External beta
+     - NOT TESTED
+     -
+   * - QF-006 / G23
+     - Junction discovery
+     - FIXED IN SOURCE
+     - Internal candidate passed G23; public artifact not yet rebuilt
+   * - QF-007 / G24
+     - Documentation
+     - FIXED IN SOURCE
+     - Strict docs build passes; not published
+   * - QF-008
+     - Green release-commit CI
+     - SATISFIED
+     - CI, Docs, gui-acceptance and package green on ``main``
+   * - QF-009
+     - Upgrade and rollback
+     - NOT TESTED
+     -
+   * - QF-010 / G26
+     - Long-session behaviour
+     - NOT TESTED
+     -
+
+Completion of every row above is necessary but not sufficient for v1.0.0: a
+signed, timestamped artifact verified on a clean machine (QF-001) and a final
+release decision are still required.

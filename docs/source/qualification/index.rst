@@ -54,11 +54,14 @@ Documents
    v1.0.0-readiness
    defect-triage
    manual-beta-acceptance
+   v1.0.0-evidence-pack
 
 * :doc:`v1.0.0-readiness` -- full report, evidence inventory and gate table.
 * :doc:`defect-triage` -- open defects and qualification gaps, severity and
   close-out criteria.
 * :doc:`manual-beta-acceptance` -- executable beta plan. **Not executed.**
+* :doc:`v1.0.0-evidence-pack` -- blank recording templates for the human and
+  external gates (QF-002/003/004/005/009/010). **Not executed.**
 
 Status vocabulary
 =================
