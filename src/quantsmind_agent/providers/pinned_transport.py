@@ -32,7 +32,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from quantsmind_agent.provider_identity import classify_address
+from quantsmind_agent.security.provider_identity import classify_address
 
 __all__ = [
     "AddressNotAllowed",

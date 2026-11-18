@@ -16,9 +16,9 @@ from typing import Any
 import pytest
 
 from quantsmind_agent.errors import ToolNotFoundError
-from quantsmind_agent.permissions import ApprovalOutcome, PermissionBroker
-from quantsmind_agent.tools import ToolRegistry
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.runtime.tools import ToolRegistry
+from quantsmind_agent.security.permissions import ApprovalOutcome, PermissionBroker
+from quantsmind_agent.services.workspace.containment import Workspace
 from tests.fakes import FakeModelProvider, text_response, tool_response
 from tests.harness import AgentHarness
 

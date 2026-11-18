@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from quantsmind_agent.errors import PermissionDeniedError
-from quantsmind_agent.permissions import (
+from quantsmind_agent.security.permissions import (
     Decision,
     Permission,
     PermissionBroker,
@@ -32,6 +32,8 @@ class TestPermissionTaxonomy:
             "EXECUTE_COMMAND",
             "GIT",
             "NETWORK",
+            "CHANGESET_APPLY",
+            "CHANGESET_ROLLBACK",
         }
 
 

@@ -12,7 +12,7 @@ Four read-only tools, all requiring :attr:`Permission.READ_WORKSPACE`:
     Compact tree of the project up to a configurable depth.
 
 None of them accept absolute paths; every path argument is workspace-relative
-and validated by :class:`~quantsmind_agent.workspace.Workspace`.
+and validated by :class:`~quantsmind_agent.services.workspace.containment.Workspace`.
 
 File *writes* are intentionally reserved for v0.2 -- see
 ``docs/source/releases/v0.1.rst``.
@@ -23,11 +23,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.errors import InvalidPathError
-from quantsmind_agent.logging_setup import get_logger
-from quantsmind_agent.permissions import Permission
-from quantsmind_agent.tools import ToolResult, ToolSpec
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.runtime.tools import ToolResult, ToolSpec
+from quantsmind_agent.security.permissions import Permission
+from quantsmind_agent.services.workspace.containment import Workspace
 
 __all__ = [
     "ListDirectoryTool",

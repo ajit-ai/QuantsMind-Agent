@@ -21,7 +21,7 @@ from quantsmind_agent.schema import (
     ToolMessage,
     UserMessage,
 )
-from quantsmind_agent.session import Session
+from quantsmind_agent.services.conversations.session import Session
 
 ASSISTANT_KEYS = {
     "id",

@@ -14,11 +14,8 @@ from typing import Any, ClassVar
 
 import pytest
 
-from quantsmind_agent.orchestrator import Orchestrator, hash_file
 from quantsmind_agent.recovery import analyse_task, apply_decision, approval_is_stale
-from quantsmind_agent.task_policy import TaskPolicy, approval_for_plan
-from quantsmind_agent.task_store import TaskStore
-from quantsmind_agent.tasks import (
+from quantsmind_agent.services.tasks.models import (
     AcceptanceCriterion,
     CheckStatus,
     Plan,
@@ -31,8 +28,11 @@ from quantsmind_agent.tasks import (
     TaskStatus,
     ToolExecutionRecord,
 )
+from quantsmind_agent.services.tasks.orchestrator import Orchestrator, hash_file
+from quantsmind_agent.services.tasks.policy import TaskPolicy, approval_for_plan
+from quantsmind_agent.services.workspace.containment import Workspace
+from quantsmind_agent.task_store import TaskStore
 from quantsmind_agent.verification import Check, discover_checks
-from quantsmind_agent.workspace import Workspace
 
 
 class StubResult:

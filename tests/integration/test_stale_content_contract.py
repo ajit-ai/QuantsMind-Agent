@@ -21,9 +21,13 @@ from pathlib import Path
 
 import pytest
 
-from quantsmind_agent.permissions import ApprovalOutcome, PermissionBroker, StaticPermissionProvider
-from quantsmind_agent.tools import ToolRegistry
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.runtime.tools import ToolRegistry
+from quantsmind_agent.security.permissions import (
+    ApprovalOutcome,
+    PermissionBroker,
+    StaticPermissionProvider,
+)
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.workspace_tools import build_default_tools
 from quantsmind_agent.write_tools import build_mutating_tools
 

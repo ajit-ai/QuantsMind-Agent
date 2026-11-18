@@ -40,12 +40,12 @@ from quantsmind_agent.code_index import (
     find_uses,
     parse_symbols,
 )
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.errors import InvalidPathError
-from quantsmind_agent.logging_setup import get_logger
-from quantsmind_agent.permissions import Permission
 from quantsmind_agent.project_intel import ProjectIntelligence, task_context
-from quantsmind_agent.tools import ToolResult, ToolSpec
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.runtime.tools import ToolResult, ToolSpec
+from quantsmind_agent.security.permissions import Permission
+from quantsmind_agent.services.workspace.containment import Workspace
 
 __all__ = [
     "CodeOutlineTool",

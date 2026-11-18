@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 
-from quantsmind_agent.llm import (
+from quantsmind_agent.providers.gateway import (
     ChatRequest,
     ModelGateway,
     ProviderCapabilities,

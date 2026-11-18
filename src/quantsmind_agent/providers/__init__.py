@@ -10,10 +10,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from quantsmind_agent.config import ProviderSettings
+from quantsmind_agent.app.settings import ProviderSettings
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.errors import LLMConfigurationError
-from quantsmind_agent.llm import ModelProvider
-from quantsmind_agent.logging_setup import get_logger
+from quantsmind_agent.providers.gateway import ModelProvider
 from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
 
 __all__ = [

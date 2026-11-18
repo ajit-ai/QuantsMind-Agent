@@ -17,9 +17,9 @@ from typing import Any
 import pytest
 
 from quantsmind_agent.app import ApplicationContext
-from quantsmind_agent.config import ConfigManager
-from quantsmind_agent.permissions import ApprovalOutcome, PermissionRequest
-from quantsmind_agent.secrets import FileSecretStore
+from quantsmind_agent.app.settings import ConfigManager
+from quantsmind_agent.security.permissions import ApprovalOutcome, PermissionRequest
+from quantsmind_agent.security.secrets import FileSecretStore
 from tests.fakes import FakeModelProvider, text_response, tool_response
 
 pytestmark = pytest.mark.integration
@@ -89,7 +89,7 @@ def _context(
 ) -> ApplicationContext:
     manager = ConfigManager(app_paths, secret_store=FileSecretStore(app_paths.secrets_file))
     context = ApplicationContext.create(paths=app_paths, config_manager=manager)
-    context.open_workspace(project)
+    context.open_workspace(project, trusted=True)
     context.agent._gateway.set_provider(provider)
     context.tools.permissions.set_approver(approver or (lambda request: ApprovalOutcome.ALLOW_ONCE))
     return context

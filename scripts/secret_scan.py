@@ -1,13 +1,18 @@
-"""Pre-commit guard: fail if a credential-shaped string is about to be committed.
+"""Repository credential-shape guard.
 
-Scans the files git would add and reports anything that looks like a live key.
-Complements ``.gitignore`` and the redaction filter -- those prevent leaks at
-runtime; this prevents one at commit time.
+The default scan covers the complete repository source: every tracked file and
+every untracked, non-ignored file. ``--staged`` covers only files staged for
+commit. Complements ``.gitignore`` and the redaction filter -- those prevent leaks at
+runtime; this prevents one at rest.
 
 Usage::
 
-    python scripts/secret_scan.py            # scan files git would add
-    python scripts/secret_scan.py --staged   # scan the staged index
+    python scripts/secret_scan.py            # scan all tracked source + untracked files
+    python scripts/secret_scan.py --staged   # scan only files staged for commit
+
+The default mode is what CI runs; ``--staged`` remains a pre-commit convenience.
+Gitignored build output is excluded by git's own ignore machinery for untracked
+files, and no repository source directory is skipped by this scanner.
 """
 
 from __future__ import annotations
@@ -36,25 +41,39 @@ PATTERNS: dict[str, re.Pattern[str]] = {
 SAFE_MARKERS = ("sk-test-", "sk-***", "sk-your", "example", "placeholder", "not-set")
 
 
-def _git(*args: str) -> list[str]:
-    result = subprocess.run(
-        ["git", *args], capture_output=True, text=True, check=False, cwd=Path.cwd()
-    )
-    return [line for line in result.stdout.splitlines() if line.strip()]
+def _git_z(*args: str) -> list[str]:
+    result = subprocess.run(["git", *args], capture_output=True, check=False, cwd=Path.cwd())
+    return [
+        entry.decode("utf-8", errors="surrogateescape")
+        for entry in result.stdout.split(b"\0")
+        if entry
+    ]
 
 
 def candidates(staged: bool) -> list[Path]:
-    listing = (
-        _git("diff", "--cached", "--name-only", "--diff-filter=ACM")
-        if staged
-        else _git("ls-files", "--others", "--exclude-standard")
-    )
-    paths = [Path(entry) for entry in listing]
-    existing = [path for path in paths if path.is_file()]
-    # Always include tracked modifications, not just new files.
-    for entry in _git("diff", "--name-only", "--diff-filter=ACM"):
+    """Return the files the scanner must inspect.
+
+    The default scans the complete repository source: every file git tracks,
+    plus untracked files that are not ignored. A clean checkout therefore scans
+    the same files a dirty working tree scans; it does not silently degrade to
+    scanning only what differs from HEAD.
+
+    ``--staged`` keeps the pre-commit behaviour and scans only the files staged
+    for commit, which is useful before a commit but is not the CI gate.
+    """
+    if staged:
+        listing = _git_z("diff", "--cached", "--name-only", "--diff-filter=ACM", "-z")
+    else:
+        listing = _git_z("ls-files", "-z", "--cached") + _git_z(
+            "ls-files", "-z", "--others", "--exclude-standard"
+        )
+    existing: list[Path] = []
+    seen: set[str] = set()
+    for entry in listing:
         path = Path(entry)
-        if path.is_file() and path not in existing:
+        key = path.as_posix()
+        if path.is_file() and key not in seen:
+            seen.add(key)
             existing.append(path)
     return existing
 

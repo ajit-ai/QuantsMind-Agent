@@ -16,7 +16,9 @@ from typing import Any
 import pytest
 
 from quantsmind_agent.errors import InvalidPathError
-from quantsmind_agent.permissions import (
+from quantsmind_agent.revisions import RevisionJournal, capture_revision
+from quantsmind_agent.runtime.tools import ToolRegistry
+from quantsmind_agent.security.permissions import (
     ApprovalOutcome,
     Decision,
     Permission,
@@ -24,9 +26,7 @@ from quantsmind_agent.permissions import (
     PermissionRule,
     StaticPermissionProvider,
 )
-from quantsmind_agent.revisions import RevisionJournal, capture_revision
-from quantsmind_agent.tools import ToolRegistry
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.write_tools import build_mutating_tools, build_undo_tool
 
 README = "README.md"

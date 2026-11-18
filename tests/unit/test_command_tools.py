@@ -9,17 +9,21 @@ from pathlib import Path
 
 import pytest
 
-from quantsmind_agent.command_tools import (
+from quantsmind_agent.app.settings import AgentSettings
+from quantsmind_agent.errors import CommandTimeoutError
+from quantsmind_agent.runtime.tools import ToolRegistry
+from quantsmind_agent.runtime.tools.builtin.command import (
     MAX_OUTPUT_CHARS,
     RunCommandTool,
     build_command_tools,
     tokenize_command,
 )
-from quantsmind_agent.config import AgentSettings
-from quantsmind_agent.errors import CommandTimeoutError
-from quantsmind_agent.permissions import ApprovalOutcome, PermissionBroker, StaticPermissionProvider
-from quantsmind_agent.tools import ToolRegistry
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.security.permissions import (
+    ApprovalOutcome,
+    PermissionBroker,
+    StaticPermissionProvider,
+)
+from quantsmind_agent.services.workspace.containment import Workspace
 
 #: An interpreter that exists on every supported platform.
 PYTHON = sys.executable

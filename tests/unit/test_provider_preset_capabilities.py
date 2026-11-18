@@ -32,9 +32,9 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO / "scripts") not in sys.path:
     sys.path.insert(0, str(REPO / "scripts"))
 
-from quantsmind_agent.config import PROVIDER_PRESETS, ProviderSettings  # noqa: E402
-from quantsmind_agent.llm import ProviderCapabilities  # noqa: E402
+from quantsmind_agent.app.settings import PROVIDER_PRESETS, ProviderSettings  # noqa: E402
 from quantsmind_agent.providers import OPENAI_COMPAT, build_provider  # noqa: E402
+from quantsmind_agent.providers.gateway import ProviderCapabilities  # noqa: E402
 
 
 def _as_the_gui_configures_it(preset_key: str) -> ProviderSettings:

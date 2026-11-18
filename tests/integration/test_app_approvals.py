@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from quantsmind_agent.app import ApplicationContext
-from quantsmind_agent.permissions import ApprovalOutcome
+from quantsmind_agent.security.permissions import ApprovalOutcome
 from tests.fakes import FakeModelProvider, text_response, tool_response
 
 pytestmark = pytest.mark.integration
@@ -36,19 +36,19 @@ EDIT = {
 def _context(
     app_paths: Any, sample_project: Path, provider: FakeModelProvider
 ) -> ApplicationContext:
-    from quantsmind_agent.config import ConfigManager
+    from quantsmind_agent.app.settings import ConfigManager
 
     manager = ConfigManager(app_paths, secret_store=_file_store(app_paths))
     manager.config.provider.base_url = "http://localhost:11434/v1"
     manager.config.provider.api_key_env = "QM_UNUSED_KEY"
     context = ApplicationContext.create(paths=app_paths, config_manager=manager)
-    context.open_workspace(sample_project)
+    context.open_workspace(sample_project, trusted=True)
     context.agent._gateway.set_provider(provider)
     return context
 
 
 def _file_store(app_paths: Any) -> Any:
-    from quantsmind_agent.secrets import FileSecretStore
+    from quantsmind_agent.security.secrets import FileSecretStore
 
     return FileSecretStore(app_paths.secrets_file)
 
@@ -143,8 +143,8 @@ class TestDeniedEdit:
 
         import threading
 
-        from quantsmind_agent.gui.approval import ApprovalBridge, build_prompt
-        from quantsmind_agent.permissions import Permission, PermissionRequest
+        from quantsmind_agent.gui.security.approval import ApprovalBridge, build_prompt
+        from quantsmind_agent.security.permissions import Permission, PermissionRequest
 
         bridge = ApprovalBridge()
         prompt = build_prompt(
@@ -175,8 +175,8 @@ class TestDeniedEdit:
     def test_shutdown_denies_a_pending_request(self, app_paths: Any) -> None:
         import threading
 
-        from quantsmind_agent.gui.approval import ApprovalBridge, build_prompt
-        from quantsmind_agent.permissions import Permission, PermissionRequest
+        from quantsmind_agent.gui.security.approval import ApprovalBridge, build_prompt
+        from quantsmind_agent.security.permissions import Permission, PermissionRequest
 
         bridge = ApprovalBridge()
         prompt = build_prompt(
@@ -248,7 +248,7 @@ class TestSessionGrantsDoNotOutliveTheirScope:
         other = sample_project.parent / "other_project"
         other.mkdir()
 
-        context.open_workspace(other)
+        context.open_workspace(other, trusted=True)
 
         assert not context.tools.permissions.session_grants
         asked.clear()

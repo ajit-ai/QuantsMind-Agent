@@ -10,11 +10,11 @@ from typing import Any
 import pytest
 
 from quantsmind_agent.app import ApplicationContext
-from quantsmind_agent.config import ConfigManager
+from quantsmind_agent.app.settings import ConfigManager
 from quantsmind_agent.events import AgentEventType
-from quantsmind_agent.llm import ChatRequest, ChatResponse, StreamChunk
-from quantsmind_agent.permissions import ApprovalOutcome
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.providers.gateway import ChatRequest, ChatResponse, StreamChunk
+from quantsmind_agent.security.permissions import ApprovalOutcome
+from quantsmind_agent.services.workspace.containment import Workspace
 from tests.fakes import FakeModelProvider, text_response, tool_response
 from tests.harness import AgentHarness
 
@@ -151,7 +151,7 @@ class TestApplicationContext:
         # The setting was inert until it was wired through: a user who lowered
         # it saw no change in what the model was told.
         context.config_manager.config.agent.max_command_output_chars = 64
-        context.open_workspace(str(sample_project))
+        context.open_workspace(str(sample_project), trusted=True)
 
         result = _print_x(context, 5000)
 
@@ -162,7 +162,7 @@ class TestApplicationContext:
     def test_saving_the_cap_rebuilds_the_command_tool(
         self, context: ApplicationContext, sample_project: Path
     ) -> None:
-        context.open_workspace(str(sample_project))
+        context.open_workspace(str(sample_project), trusted=True)
         context.config_manager.config.agent.max_command_output_chars = 128
 
         context.apply_configuration()
@@ -181,22 +181,26 @@ class TestApplicationContext:
     def test_opening_a_workspace_registers_tools(
         self, context: ApplicationContext, sample_project: Path
     ) -> None:
-        workspace = context.open_workspace(str(sample_project))
+        workspace = context.open_workspace(str(sample_project), trusted=True)
         assert workspace.root == sample_project.resolve()
         assert context.tools is not None
         # Exact equality, not a subset: a tool appearing or disappearing without
         # a decision is a security-relevant change, so it must fail here. v0.2
         # adds the write/edit/delete tools, undo_file, run_command and the
         # read-only Git tools to the four v0.1 readers; v0.3 adds the
-        # read-only code-navigation and project-context tools.
+        # read-only code-navigation and project-context tools; v0.12 adds the
+        # interactive terminal tool.
         assert context.tools.names == [
             "code_outline",
             "delete_file",
             "edit_file",
             "find_references",
+            "git_commit",
             "git_diff",
             "git_log",
+            "git_stage",
             "git_status",
+            "git_unstage",
             "list_directory",
             "project_context",
             "project_structure",
@@ -204,6 +208,7 @@ class TestApplicationContext:
             "read_file",
             "run_command",
             "search_content",
+            "terminal",
             "undo_file",
             "write_file",
         ]
@@ -215,14 +220,14 @@ class TestApplicationContext:
         config = context.config_manager.config
         config.agent.git_enabled = False
         context.apply_configuration()
-        context.open_workspace(str(sample_project))
+        context.open_workspace(str(sample_project), trusted=True)
         assert context.tools is not None
         assert [name for name in context.tools.names if name.startswith("git_")] == []
 
     def test_closing_a_workspace_clears_tools(
         self, context: ApplicationContext, sample_project: Path
     ) -> None:
-        context.open_workspace(str(sample_project))
+        context.open_workspace(str(sample_project), trusted=True)
         context.close_workspace()
         assert context.workspace is None
         assert context.tools is not None
@@ -234,13 +239,13 @@ class TestApplicationContext:
         from quantsmind_agent.errors import InvalidWorkspaceError
 
         with pytest.raises(InvalidWorkspaceError) as info:
-            context.open_workspace(tmp_path / "does-not-exist")
+            context.open_workspace(tmp_path / "does-not-exist", trusted=True)
         assert "could not be opened" in info.value.user_message
 
     def test_last_workspace_is_persisted_and_restored(
         self, context: ApplicationContext, sample_project: Path, config_manager: ConfigManager
     ) -> None:
-        context.open_workspace(str(sample_project))
+        context.open_workspace(str(sample_project), trusted=True)
         assert context.config_manager.config.last_workspace == str(sample_project.resolve())
         restored = ApplicationContext.create(
             paths=config_manager.paths, config_manager=config_manager
@@ -270,7 +275,7 @@ class TestApplicationContext:
     ) -> None:
         from quantsmind_agent.schema import UserMessage
 
-        context.open_workspace(str(sample_project))
+        context.open_workspace(str(sample_project), trusted=True)
         context.session.add_message(UserMessage(content="hi"))
         context.reset_conversation()
         assert context.session.messages == []
@@ -281,7 +286,7 @@ class TestApplicationContext:
     def test_status_line_mentions_the_project(
         self, context: ApplicationContext, sample_project: Path
     ) -> None:
-        context.open_workspace(str(sample_project))
+        context.open_workspace(str(sample_project), trusted=True)
         assert sample_project.name in context.status_line()
 
     def test_shutdown_without_a_bridge_is_safe(self, context: ApplicationContext) -> None:

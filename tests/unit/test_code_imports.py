@@ -18,7 +18,7 @@ from quantsmind_agent.code_imports import (
     parse_imports,
     resolve_import,
 )
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 
 
 @pytest.fixture

@@ -26,12 +26,12 @@ from typing import Any
 import pytest
 
 from quantsmind_agent.app import ApplicationContext
-from quantsmind_agent.config import ConfigManager
-from quantsmind_agent.llm import ChatRequest, ChatResponse, StreamChunk
-from quantsmind_agent.permissions import ApprovalOutcome, Permission
-from quantsmind_agent.secrets import FileSecretStore
-from quantsmind_agent.tools import ToolResult, ToolSpec
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.app.settings import ConfigManager
+from quantsmind_agent.providers.gateway import ChatRequest, ChatResponse, StreamChunk
+from quantsmind_agent.runtime.tools import ToolResult, ToolSpec
+from quantsmind_agent.security.permissions import ApprovalOutcome, Permission
+from quantsmind_agent.security.secrets import FileSecretStore
+from quantsmind_agent.services.workspace.containment import Workspace
 from tests.fakes import FakeModelProvider, text_response, tool_response
 from tests.harness import AgentHarness
 
@@ -181,7 +181,7 @@ def test_a_cancelled_turn_is_persisted_as_unfinished(app_paths: Any, sample_proj
 
     manager = ConfigManager(app_paths, secret_store=FileSecretStore(app_paths.secrets_file))
     context = ApplicationContext.create(paths=app_paths, config_manager=manager)
-    context.open_workspace(sample_project)
+    context.open_workspace(sample_project, trusted=True)
 
     agent_ref: dict[str, Any] = {"agent": context.agent}
     context.agent._gateway.set_provider(CancellingOnAnswer(agent_ref))

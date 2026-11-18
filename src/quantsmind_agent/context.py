@@ -19,9 +19,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from quantsmind_agent.logging_setup import get_logger
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.schema import Message, UserMessage
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from quantsmind_agent.project_intel import ProjectIntelligence

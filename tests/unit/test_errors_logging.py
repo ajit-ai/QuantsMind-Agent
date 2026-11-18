@@ -7,15 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from quantsmind_agent.errors import (
-    InvalidPathError,
-    InvalidWorkspaceError,
-    MissingAPIKeyError,
-    PermissionDeniedError,
-    QuantsMindError,
-    ToolNotFoundError,
-)
-from quantsmind_agent.logging_setup import (
+from quantsmind_agent.diagnostics.logging import (
     REDACTED,
     get_logger,
     redact,
@@ -23,6 +15,14 @@ from quantsmind_agent.logging_setup import (
     safe_mapping,
     setup_logging,
     shutdown_logging,
+)
+from quantsmind_agent.errors import (
+    InvalidPathError,
+    InvalidWorkspaceError,
+    MissingAPIKeyError,
+    PermissionDeniedError,
+    QuantsMindError,
+    ToolNotFoundError,
 )
 
 SECRET = "sk-fake-example-key-not-a-real-credential"

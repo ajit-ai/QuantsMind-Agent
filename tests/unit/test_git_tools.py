@@ -11,7 +11,8 @@ from unittest import mock
 import pytest
 
 from quantsmind_agent.git_tools import build_git_tools
-from quantsmind_agent.permissions import (
+from quantsmind_agent.runtime.tools import ToolRegistry
+from quantsmind_agent.security.permissions import (
     ApprovalOutcome,
     Decision,
     Permission,
@@ -19,8 +20,7 @@ from quantsmind_agent.permissions import (
     PermissionRule,
     StaticPermissionProvider,
 )
-from quantsmind_agent.tools import ToolRegistry
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 
 
 def _git(root: Path, *args: str) -> None:
@@ -210,9 +210,19 @@ class TestContainmentAndPermissions:
         assert not registry.execute("git_status", {}).ok
 
     def test_tools_declare_the_git_permission_and_are_read_only(self, repo: Path) -> None:
+        """Read-only git tools declare the GIT permission; git_commit is EXECUTE_COMMAND.
+
+        git_status, git_diff, git_log are read-only and use Permission.GIT.
+        git_commit requires explicit approval via EXECUTE_COMMAND.
+        """
+        read_only_tools = ["git_status", "git_diff", "git_log"]
         for tool in build_git_tools(Workspace(repo)):
-            assert tool.spec.permission is Permission.GIT
-            assert tool.spec.read_only is True
+            if tool.spec.name in read_only_tools:
+                assert tool.spec.permission is Permission.GIT
+                assert tool.spec.read_only is True
+            elif tool.spec.name == "git_commit":
+                assert tool.spec.permission is Permission.EXECUTE_COMMAND
+                assert tool.spec.read_only is False
 
 
 class TestNoMutationCapability:
@@ -224,15 +234,16 @@ class TestNoMutationCapability:
     """
 
     #: Verbs that would change repository state.
+    #: "commit" is excluded because git commit is now a supported command
+    #    (WP5), gated behind explicit human approval.
+    #: "restore" is excluded because git restore --staged is used by git_unstage.
     MUTATION_VERBS = (
-        "commit",
         "push",
         "checkout",
         "switch",
         "reset",
         "merge",
         "rebase",
-        "restore",
         "clean",
         "stash",
         "cherry-pick",

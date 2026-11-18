@@ -7,7 +7,7 @@ Every error raised by a subsystem carries:
 * a ``user_message`` which is safe to display in the GUI.
 
 Stack traces are never part of ``str(error)``; they are logged in debug mode
-only. See :mod:`quantsmind_agent.logging_setup`.
+only. See :mod:`quantsmind_agent.diagnostics.logging`.
 """
 
 from __future__ import annotations

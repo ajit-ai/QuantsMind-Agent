@@ -41,7 +41,7 @@ from quantsmind_agent.sandbox.probe import (
     ProbeHarness,
 )
 from quantsmind_agent.sandbox.windows import sandbox_supported
-from quantsmind_agent.security_audit import AuditEventType, SecurityAuditLog
+from quantsmind_agent.security.audit import AuditEventType, SecurityAuditLog
 
 __all__ = ["SandboxRunner"]
 

@@ -31,8 +31,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from quantsmind_agent.gui.approval import build_prompt
-from quantsmind_agent.permissions import ApprovalOutcome, Permission, PermissionRequest
+from quantsmind_agent.gui.security.approval import build_prompt
+from quantsmind_agent.security.permissions import ApprovalOutcome, Permission, PermissionRequest
 from tests.fakes import text_response
 from tests.gui.harness import GuiHarness
 

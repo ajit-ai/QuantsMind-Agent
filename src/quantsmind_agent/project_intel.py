@@ -29,7 +29,7 @@ Design constraints, all deliberate:
 
 Nothing here is persisted. A project map is derived entirely from the filesystem,
 so caching it across restarts would mean caching a claim about files that have
-almost certainly changed -- see :mod:`quantsmind_agent.conversations` for what *is*
+almost certainly changed -- see :mod:`quantsmind_agent.services.conversations.store` for what *is*
 stored, and why it is stable metadata only.
 """
 
@@ -42,9 +42,14 @@ from typing import Any
 
 from quantsmind_agent.code_imports import module_name_for, parse_imports, resolve_import
 from quantsmind_agent.code_index import Symbol, parse_symbols
+from quantsmind_agent.diagnostics.governance import (
+    DEGRADATION_FACTOR,
+    ResourceAction,
+    ResourceGovernor,
+)
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.errors import InvalidPathError
-from quantsmind_agent.logging_setup import get_logger
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 
 __all__ = [
     "FileFacts",
@@ -778,11 +783,17 @@ class ProjectIntelligence:
         max_bytes: int = 2_000_000,
         max_entries: int = 4_000,
         max_indexed_files: int = 600,
+        resources: ResourceGovernor | None = None,
     ) -> None:
         self._workspace = workspace
         self._max_bytes = max_bytes
         self._max_entries = max_entries
         self._max_indexed_files = max_indexed_files
+        #: Resource governance. Indexing is optional work (policy 2), so it
+        #: degrades and, at the refuse threshold, stops. Without a governor the
+        #: intelligence behaves exactly as it did before this hook existed.
+        self._resources = resources
+        self._resource_note = ""
         self._map = ProjectMap(workspace, max_bytes=max_bytes)
         self._profile: ProjectProfile | None = None
         self._indexed = False
@@ -832,6 +843,17 @@ class ProjectIntelligence:
         return self._indexed
 
     @property
+    def resource_note(self) -> str:
+        """Why the map is thinner than the workspace, in the governor's words.
+
+        Empty when indexing ran at full budget. A UI that shows "no symbols
+        found" has to be able to say that the walk was degraded, not that the
+        project is empty.
+        """
+
+        return self._resource_note
+
+    @property
     def indexed_files(self) -> int:
         return self._map.size
 
@@ -844,11 +866,23 @@ class ProjectIntelligence:
 
         Bounded by file count, because a monorepo has to fail gracefully rather
         than spend a turn's budget on it. What was skipped is recorded.
+
+        Resource governance applies here: indexing is optional work, so a
+        degraded process indexes fewer files and a process past the refuse
+        threshold indexes none. The refusal is stored, not swallowed, so the UI
+        can say why the map is thin.
         """
 
         # Reading the profile first is what decides which roots are worth indexing.
         _ = self.profile
-        candidates = self._index_candidates()
+        budget = self._resource_budget()
+        if budget is None:
+            self._indexed = False
+            logger.warning(
+                "Workspace indexing skipped under memory pressure: %s", self._resource_note
+            )
+            return 0
+        candidates = self._index_candidates(**budget)
         self._map.load(candidates)
         self._indexed = True
         logger.info(
@@ -859,13 +893,48 @@ class ProjectIntelligence:
         )
         return self._map.size
 
-    def _index_candidates(self) -> list[str]:
+    def _resource_budget(self) -> dict[str, int] | None:
+        """The indexing budget the governor will allow right now.
+
+        ``None`` means the work was refused. Degradation shrinks both the file
+        count and the directory walk, so a degraded pass is cheaper in exactly
+        the two ways this class spends.
+        """
+
+        if self._resources is None:
+            return {"max_files": self._max_indexed_files, "max_entries": self._max_entries}
+        decision = self._resources.decide(ResourceAction.WORKSPACE_INDEX)
+        if not decision.allowed:
+            self._resource_note = decision.describe()
+            return None
+        bounds = self._resources.bounds(
+            max_files=self._max_indexed_files,
+            max_bytes=self._max_bytes,
+            action=ResourceAction.WORKSPACE_INDEX,
+        )
+        if bounds.degraded:
+            self._resource_note = decision.describe()
+        else:
+            self._resource_note = ""
+        entries = (
+            round(self._max_entries * DEGRADATION_FACTOR) if bounds.degraded else self._max_entries
+        )
+        return {"max_files": bounds.max_files, "max_entries": max(1, entries)}
+
+    def _index_candidates(
+        self,
+        *,
+        max_files: int | None = None,
+        max_entries: int | None = None,
+    ) -> list[str]:
         """Python files under the source roots, excluding tests, capped."""
 
+        limit = self._max_indexed_files if max_files is None else max_files
+        entries = self._max_entries if max_entries is None else max_entries
         roots = self.profile.source_roots or (".",)
         found: list[str] = []
         for root in roots:
-            for entry in _walk(self._workspace, self._max_entries):
+            for entry in _walk(self._workspace, entries):
                 if entry.is_dir or not entry.path.endswith(PYTHON_SUFFIX):
                     continue
                 top = entry.path.split("/")[0]
@@ -874,7 +943,7 @@ class ProjectIntelligence:
                 if top in _TEST_DIR_NAMES:
                     continue
                 found.append(entry.path)
-                if len(found) >= self._max_indexed_files:
+                if len(found) >= limit:
                     return found
         return found
 

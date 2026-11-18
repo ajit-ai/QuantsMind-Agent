@@ -13,12 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from quantsmind_agent import config as config_module
-from quantsmind_agent.app import ApplicationContext, _build_parser, _paths_from_args, main
-from quantsmind_agent.config import ConfigManager
-from quantsmind_agent.conversations import snapshot_session
-from quantsmind_agent.secrets import FileSecretStore
-from quantsmind_agent.tools import ToolResult
+from quantsmind_agent.app import ApplicationContext
+from quantsmind_agent.app import settings as config_module
+from quantsmind_agent.app.cli import _build_parser, _paths_from_args, main
+from quantsmind_agent.app.settings import ConfigManager
+from quantsmind_agent.runtime.tools import ToolResult
+from quantsmind_agent.security.secrets import FileSecretStore
+from quantsmind_agent.services.conversations.store import snapshot_session
 
 pytestmark = pytest.mark.integration
 
@@ -123,7 +124,15 @@ class TestCheckConfig:
     def test_reports_tools_for_an_opened_workspace(
         self, capsys: pytest.CaptureFixture[str], sample_project: Path
     ) -> None:
-        code = main(["--check-config", "--no-log-file", "--workspace", str(sample_project)])
+        code = main(
+            [
+                "--check-config",
+                "--no-log-file",
+                "--workspace",
+                str(sample_project),
+                "--trust-workspace",
+            ]
+        )
         out = capsys.readouterr().out
         assert "read_file" in out
         assert str(sample_project.resolve()) in out
@@ -180,7 +189,18 @@ class TestCheckConfig:
             '[provider]\nbase_url = "http://localhost:11434/v1"\nmodel = "qwen2.5-coder"\n',
             encoding="utf-8",
         )
-        assert main(["--check-config", "--no-log-file", "--workspace", str(sample_project)]) == 0
+        assert (
+            main(
+                [
+                    "--check-config",
+                    "--no-log-file",
+                    "--workspace",
+                    str(sample_project),
+                    "--trust-workspace",
+                ]
+            )
+            == 0
+        )
         out = capsys.readouterr().out
         assert "ready       : yes" in out
         assert "qwen2.5-coder" in out
@@ -209,10 +229,10 @@ def _store_a_conversation(
     set of paths.
     """
 
-    from quantsmind_agent.conversations import ConversationStore
-    from quantsmind_agent.paths import default_paths
+    from quantsmind_agent.persistence.paths import default_paths
     from quantsmind_agent.schema import AssistantMessage, UserMessage
-    from quantsmind_agent.session import Session
+    from quantsmind_agent.services.conversations.session import Session
+    from quantsmind_agent.services.conversations.store import ConversationStore
 
     session = Session()
     session.add_message(UserMessage(content=title))
@@ -332,7 +352,7 @@ class TestConversationCommands:
     def test_a_deleted_conversation_is_not_listed_or_resumed(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from quantsmind_agent.paths import default_paths
+        from quantsmind_agent.persistence.paths import default_paths
 
         _store_a_conversation("Explain the parser")
         store = default_paths().data_dir / "conversations"
@@ -393,7 +413,7 @@ class TestStartup:
     def test_cli_and_context_share_the_same_paths(
         self, config_manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quantsmind_agent.paths import default_paths
+        from quantsmind_agent.persistence.paths import default_paths
 
         monkeypatch.setenv("QM_CONFIG_DIR", str(config_manager.paths.config_dir))
         monkeypatch.setenv("QM_LOG_DIR", str(config_manager.paths.log_dir))

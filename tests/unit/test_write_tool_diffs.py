@@ -11,10 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from quantsmind_agent.permissions import ApprovalOutcome, PermissionBroker, StaticPermissionProvider
 from quantsmind_agent.revisions import RevisionJournal
-from quantsmind_agent.tools import ToolRegistry
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.runtime.tools import ToolRegistry
+from quantsmind_agent.security.permissions import (
+    ApprovalOutcome,
+    PermissionBroker,
+    StaticPermissionProvider,
+)
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.write_tools import build_mutating_tools, build_undo_tool
 
 README = "README.md"
@@ -155,7 +159,7 @@ class TestDeleteHasNoDiff:
 def _small_limit_registry(project: Path) -> ToolRegistry:
     """A registry whose tools refuse pre-images above a tiny limit."""
 
-    from quantsmind_agent.workspace import Workspace as WorkspaceType
+    from quantsmind_agent.services.workspace.containment import Workspace as WorkspaceType
 
     workspace = WorkspaceType(project)
     registry = ToolRegistry(

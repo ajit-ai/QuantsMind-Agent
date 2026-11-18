@@ -13,9 +13,9 @@ import httpx
 import pytest
 
 from quantsmind_agent.errors import LLMTimeoutError, ModelUnavailableError
-from quantsmind_agent.llm import ChatRequest, ProviderCapabilities, StreamChunk
+from quantsmind_agent.providers.gateway import ChatRequest, ProviderCapabilities, StreamChunk
 from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
-from quantsmind_agent.routing import (
+from quantsmind_agent.providers.routing import (
     ProviderRouter,
     RouteCandidate,
     RoutingPolicy,

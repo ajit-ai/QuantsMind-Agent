@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.verification import discover_checks
-from quantsmind_agent.workspace import Workspace
 from quantsmind_agent.workspace_intel import (
     MAX_SNAPSHOT_FILES,
     SNAPSHOT_SCHEMA_VERSION,

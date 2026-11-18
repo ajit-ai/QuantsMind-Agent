@@ -13,9 +13,7 @@ from typing import Any, ClassVar
 
 import pytest
 
-from quantsmind_agent.orchestrator import Orchestrator
-from quantsmind_agent.task_policy import TaskPolicy, approval_for_plan
-from quantsmind_agent.tasks import (
+from quantsmind_agent.services.tasks.models import (
     ApprovalRecord,
     Plan,
     PlannedStep,
@@ -27,7 +25,9 @@ from quantsmind_agent.tasks import (
     TaskStatus,
     validate_plan,
 )
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.tasks.orchestrator import Orchestrator
+from quantsmind_agent.services.tasks.policy import TaskPolicy, approval_for_plan
+from quantsmind_agent.services.workspace.containment import Workspace
 
 
 class StubResult:
@@ -364,7 +364,7 @@ class TestScheduling:
     def test_counters_survive_a_round_trip(
         self, project: Path, parts: tuple[Any, Any, Any]
     ) -> None:
-        from quantsmind_agent.tasks import Task as TaskModel
+        from quantsmind_agent.services.tasks.models import Task as TaskModel
 
         workspace, registry, policy = parts
         task = make_task(project, max_steps=5)

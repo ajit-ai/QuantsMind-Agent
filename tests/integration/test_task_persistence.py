@@ -14,10 +14,7 @@ from typing import Any
 
 import pytest
 
-from quantsmind_agent.orchestrator import Orchestrator
-from quantsmind_agent.task_policy import TaskPolicy, approval_for_plan
-from quantsmind_agent.task_store import TaskStore
-from quantsmind_agent.tasks import (
+from quantsmind_agent.services.tasks.models import (
     DIGEST_VERSION,
     SCHEMA_VERSION,
     Plan,
@@ -27,7 +24,10 @@ from quantsmind_agent.tasks import (
     TaskStatus,
     migrate,
 )
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.tasks.orchestrator import Orchestrator
+from quantsmind_agent.services.tasks.policy import TaskPolicy, approval_for_plan
+from quantsmind_agent.services.workspace.containment import Workspace
+from quantsmind_agent.task_store import TaskStore
 
 pytestmark = pytest.mark.integration
 

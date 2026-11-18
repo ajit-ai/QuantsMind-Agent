@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from quantsmind_agent.tasks import (
+from quantsmind_agent.services.tasks.models import (
     StepStatus,
     Task,
     TaskStatus,

@@ -29,15 +29,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from quantsmind_agent.logging_setup import get_logger
+from quantsmind_agent.diagnostics.governance import ResourceAction, ResourceGovernor
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.project_intel import (
     PYTHON_SUFFIX,
     ProjectIntelligence,
     ProjectProfile,
     discover,
 )
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.verification import Check, discover_checks
-from quantsmind_agent.workspace import Workspace
 
 __all__ = [
     "MAX_SNAPSHOT_FILES",
@@ -653,25 +654,40 @@ class WorkspaceIntelligence(ProjectIntelligence):
         max_entries: int = 4_000,
         max_indexed_files: int = 600,
         max_files: int = MAX_SNAPSHOT_FILES,
+        resources: ResourceGovernor | None = None,
     ) -> None:
         super().__init__(
             workspace,
             max_bytes=max_bytes,
             max_entries=max_entries,
             max_indexed_files=max_indexed_files,
+            resources=resources,
         )
         self._max_files = max(0, int(max_files))
         self._snapshot: WorkspaceSnapshot | None = None
 
     @property
     def snapshot(self) -> WorkspaceSnapshot:
-        """The current snapshot, discovered on first use and reused after that."""
+        """The current snapshot, discovered on first use and reused after that.
+
+        Snapshot discovery is background analysis, so the governor is allowed to
+        shrink the file budget. A snapshot built from fewer files still reports
+        itself as incomplete rather than pretending the project is small.
+        """
 
         if self._snapshot is None:
+            budget = self._max_files
+            if self._resources is not None:
+                bounds = self._resources.bounds(
+                    max_files=self._max_files,
+                    max_bytes=self._max_bytes,
+                    action=ResourceAction.BACKGROUND_ANALYSIS,
+                )
+                budget = bounds.max_files
             self._snapshot = discover_workspace(
                 self.workspace,
                 max_entries=self._max_entries,
-                max_files=self._max_files,
+                max_files=budget,
                 profile=self.profile,
             )
         return self._snapshot

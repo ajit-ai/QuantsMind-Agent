@@ -6,7 +6,7 @@ from pathlib import Path
 
 from quantsmind_agent.context import DEFAULT_SYSTEM_PROMPT, ContextEngine
 from quantsmind_agent.schema import AssistantMessage, Message, MessageRole, UserMessage
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 
 
 class TestSystemPrompt:

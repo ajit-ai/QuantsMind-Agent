@@ -66,9 +66,22 @@ Documentation = "https://github.com/ajit-ai/QuantsMind-Agent/tree/main/docs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/quantsmind_agent"]
+exclude = ["**/__pycache__", "**/*.pyc"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/docs", "/scripts", "/README.md"]
+include = [
+  "/src",
+  "/tests",
+  "/docs",
+  "/scripts",
+  "/packaging",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/SECURITY.md",
+  "/CONTRIBUTING.md",
+  "/LICENSE",
+]
+exclude = ["**/__pycache__", "**/*.pyc", "/docs/build", "/artifacts", "/dist", "/dist-onefile", "/dist-v02-manual"]
 
 # --------------------------------------------------------------------------
 # ruff

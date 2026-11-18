@@ -21,24 +21,27 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from quantsmind_agent.auth_gateway import (
+from quantsmind_agent.app.settings import PROVIDER_PRESETS, ProviderSettings
+from quantsmind_agent.errors import LLMProtocolError
+from quantsmind_agent.providers.gateway import ChatRequest
+from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
+from quantsmind_agent.schema import SystemMessage, UserMessage
+from quantsmind_agent.security.audit import AuditEventType, SecurityAuditLog
+from quantsmind_agent.security.auth_gateway import (
     AuthenticationGatewayError,
     AuthGateway,
     AuthorizationDecision,
 )
-from quantsmind_agent.config import PROVIDER_PRESETS, ProviderSettings
-from quantsmind_agent.credential_vault import (
+from quantsmind_agent.security.credential_vault import (
     CredentialState,
     CredentialVault,
 )
-from quantsmind_agent.errors import LLMProtocolError
-from quantsmind_agent.llm import ChatRequest
-from quantsmind_agent.permissions import (
+from quantsmind_agent.security.permissions import (
     Decision,
     PermissionBroker,
     StaticPermissionProvider,
 )
-from quantsmind_agent.provider_identity import (
+from quantsmind_agent.security.provider_identity import (
     EndpointIdentity,
     EndpointPolicyError,
     ProviderIdentity,
@@ -47,11 +50,8 @@ from quantsmind_agent.provider_identity import (
     rebind_explicit_provider_id,
     resolve_provider_identity,
 )
-from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
-from quantsmind_agent.schema import SystemMessage, UserMessage
-from quantsmind_agent.secrets import SecretStore
-from quantsmind_agent.security_audit import AuditEventType, SecurityAuditLog
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.security.secrets import SecretStore
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.workspace_tools import build_default_tools
 
 #: Fake credentials. They are canaries: if one of these ever appears in a log,
@@ -408,7 +408,7 @@ class TestEndpointAuthorization:
 
 
 def _endpoint_hash(base_url: str) -> str:
-    from quantsmind_agent.provider_identity import _endpoint_hash as digest
+    from quantsmind_agent.security.provider_identity import _endpoint_hash as digest
 
     return digest(canonicalize_endpoint(base_url))
 
@@ -594,7 +594,7 @@ class TestSecretSafeDiagnostics:
         assert OPENROUTER_KEY not in rendered
 
     def test_the_redactor_removes_a_canary_from_free_text(self) -> None:
-        from quantsmind_agent.logging_setup import redact
+        from quantsmind_agent.diagnostics.logging import redact
 
         assert OPENROUTER_KEY not in redact(f"the key is {OPENROUTER_KEY} here")
 
@@ -671,7 +671,7 @@ class TestCompatibility:
 
     def test_the_permission_broker_still_asks_before_a_write(self) -> None:
         broker = PermissionBroker(StaticPermissionProvider.for_v0_2())
-        from quantsmind_agent.permissions import Permission, PermissionRequest
+        from quantsmind_agent.security.permissions import Permission, PermissionRequest
 
         request = PermissionRequest(
             permission=Permission.WRITE_WORKSPACE,
@@ -685,7 +685,7 @@ class TestCompatibility:
     def test_the_openrouter_rehearsal_behaviour_is_unchanged(self) -> None:
         """The M3B-1B demonstration still holds: a structured call, then DENY."""
 
-        from quantsmind_agent.permissions import (
+        from quantsmind_agent.security.permissions import (
             ApprovalOutcome,
             Permission,
             PermissionRequest,

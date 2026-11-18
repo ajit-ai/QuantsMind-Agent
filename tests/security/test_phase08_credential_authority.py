@@ -22,30 +22,30 @@ from tests.security.test_m3b_s11_credential_security import (
 )
 
 from quantsmind_agent.app import ApplicationContext, ReadinessCode
-from quantsmind_agent.auth_gateway import AuthenticationGatewayError
-from quantsmind_agent.config import ConfigManager
-from quantsmind_agent.credential_resolution import (
+from quantsmind_agent.app.settings import ConfigManager
+from quantsmind_agent.gui.security.controller import (
+    CredentialStatus as ControllerStatus,
+)
+from quantsmind_agent.gui.security.controller import SecurityController
+from quantsmind_agent.persistence.paths import AppPaths
+from quantsmind_agent.security.audit import AuditEventType, SecurityAuditLog
+from quantsmind_agent.security.auth_gateway import AuthenticationGatewayError
+from quantsmind_agent.security.credential_resolution import (
     CredentialResolutionService,
     CredentialSource,
     CredentialStatus,
 )
-from quantsmind_agent.credential_vault import CredentialVault, CredentialVaultError
-from quantsmind_agent.gui.security_controller import (
-    CredentialStatus as ControllerStatus,
-)
-from quantsmind_agent.gui.security_controller import SecurityController
-from quantsmind_agent.paths import AppPaths
-from quantsmind_agent.provider_identity import (
+from quantsmind_agent.security.credential_vault import CredentialVault, CredentialVaultError
+from quantsmind_agent.security.provider_identity import (
     ProviderIdentity,
     canonicalize_endpoint,
     resolve_provider_identity,
 )
-from quantsmind_agent.secrets import (
+from quantsmind_agent.security.secrets import (
     FileSecretStore,
     SecretStoreError,
     StorageStatus,
 )
-from quantsmind_agent.security_audit import AuditEventType, SecurityAuditLog
 
 OPENROUTER_SLOT = "provider:openrouter:default:api_key"
 LEGACY_SLOT = "provider:openai_compatible:api_key"
@@ -95,7 +95,7 @@ def _context(
         config_manager=manager,
         security_resolver=resolver or (lambda host: ["93.184.216.34"]),
     )
-    context.open_workspace(workspace)
+    context.open_workspace(workspace, trusted=True)
     return context
 
 
@@ -265,7 +265,7 @@ class TestMigrationStoragePolicy:
     def _controller(
         self, tmp_path: Path, store: FakeSecretStore | FileSecretStore
     ) -> SecurityController:
-        from quantsmind_agent.auth_gateway import AuthGateway
+        from quantsmind_agent.security.auth_gateway import AuthGateway
 
         paths = _paths(tmp_path)
         manager = ConfigManager(paths, secret_store=store)

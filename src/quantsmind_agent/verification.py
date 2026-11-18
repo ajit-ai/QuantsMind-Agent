@@ -29,8 +29,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from quantsmind_agent.command_policy import classify_command
-from quantsmind_agent.tasks import CheckResult, CheckStatus
+from quantsmind_agent.security.command_policy import classify_command
+from quantsmind_agent.services.tasks.models import CheckResult, CheckStatus
 
 __all__ = ["MAX_OUTPUT_CHARS", "Check", "discover_checks", "run_checks"]
 

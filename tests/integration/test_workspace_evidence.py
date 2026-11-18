@@ -13,11 +13,7 @@ from typing import Any
 
 import pytest
 
-from quantsmind_agent.orchestrator import Orchestrator
-from quantsmind_agent.services import TaskService
-from quantsmind_agent.task_policy import TaskPolicy
-from quantsmind_agent.task_store import TaskStore
-from quantsmind_agent.tasks import (
+from quantsmind_agent.services.tasks.models import (
     SCHEMA_VERSION,
     Plan,
     PlannedStep,
@@ -26,7 +22,11 @@ from quantsmind_agent.tasks import (
     TraceKind,
     migrate,
 )
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.tasks.orchestrator import Orchestrator
+from quantsmind_agent.services.tasks.policy import TaskPolicy
+from quantsmind_agent.services.tasks.service import TaskService
+from quantsmind_agent.services.workspace.containment import Workspace
+from quantsmind_agent.task_store import TaskStore
 from quantsmind_agent.workspace_intel import discover_workspace
 
 pytestmark = pytest.mark.integration

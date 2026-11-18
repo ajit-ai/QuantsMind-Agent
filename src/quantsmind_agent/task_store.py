@@ -38,8 +38,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from quantsmind_agent.conversations import _scrub_deep
-from quantsmind_agent.tasks import SCHEMA_VERSION, PlanRejected, Task, TaskStatus
+from quantsmind_agent.services.conversations.store import _scrub_deep
+from quantsmind_agent.services.tasks.models import SCHEMA_VERSION, PlanRejected, Task, TaskStatus
 
 __all__ = ["DEFAULT_MAX_TASKS", "TaskStore", "TaskSummary"]
 

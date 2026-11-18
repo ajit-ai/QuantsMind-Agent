@@ -47,6 +47,7 @@ from __future__ import annotations
 from typing import Any
 
 from quantsmind_agent.code_imports import importers_of
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.diffs import revision_diff
 from quantsmind_agent.edit_ops import EditOperation, apply_edit, detect_eol
 from quantsmind_agent.errors import (
@@ -54,12 +55,16 @@ from quantsmind_agent.errors import (
     StaleContentError,
     ToolFailedError,
 )
-from quantsmind_agent.logging_setup import get_logger
-from quantsmind_agent.permissions import Permission
 from quantsmind_agent.project_intel import ProjectIntelligence
 from quantsmind_agent.revisions import FileRevision, RevisionJournal, capture_revision
-from quantsmind_agent.tools import ToolResult, ToolSpec
-from quantsmind_agent.workspace import FileFingerprint, Workspace
+from quantsmind_agent.runtime.tools import ToolResult, ToolSpec
+from quantsmind_agent.security.audit import (
+    AuditEventType,
+    AuditPersistenceError,
+    SecurityAuditLog,
+)
+from quantsmind_agent.security.permissions import Permission
+from quantsmind_agent.services.workspace.containment import FileFingerprint, Workspace
 
 __all__ = [
     "DeleteFileTool",
@@ -180,6 +185,42 @@ def _check_expected_hash(
         )
 
 
+def _record_mutation(
+    audit: SecurityAuditLog | None,
+    *,
+    tool: str,
+    path: str,
+    outcome: str,
+    before_sha: str,
+    after_sha: str,
+    size: int,
+    changeset_id: str = "",
+) -> None:
+    """Say on disk that a workspace file changed.
+
+    This runs after the bytes are already there, so a failed write cannot undo
+    the mutation and must not pretend to: the record is fsync-ed, and if even
+    that fails the loss is logged and the audit surfaces it as degraded rather
+    than turning a completed change into an error.
+    """
+
+    if audit is None:
+        return
+    try:
+        audit.record(
+            AuditEventType.FILE_MUTATED,
+            decision=outcome,
+            outcome=outcome,
+            reason_code=f"{tool}_applied",
+            subject=path,
+            detail=f"sha256 {before_sha or 'absent'} -> {after_sha or 'absent'}, {size} bytes",
+            changeset_id=changeset_id,
+            durable=True,
+        )
+    except AuditPersistenceError as exc:
+        logger.warning("mutation of %s was not audited: %s", path, exc)
+
+
 class WriteFileTool:
     """Create or replace a text file inside the workspace."""
 
@@ -190,6 +231,7 @@ class WriteFileTool:
         max_bytes: int = 2_000_000,
         journal: RevisionJournal | None = None,
         intelligence: ProjectIntelligence | None = None,
+        audit: SecurityAuditLog | None = None,
     ) -> None:
         self._workspace = workspace
         self._max_bytes = max_bytes
@@ -197,6 +239,7 @@ class WriteFileTool:
         #: Told about the write so a cached symbol or import record for this file
         #: is never answered after the file has changed.
         self._intelligence = intelligence
+        self._audit = audit
         self.spec = ToolSpec(
             name="write_file",
             description=(
@@ -269,6 +312,15 @@ class WriteFileTool:
             create_parents=bool(arguments.get("create_parents", False)),
         )
         undoable = _record_revision(self._journal, before.path, "write_file", pre_image, after)
+        _record_mutation(
+            self._audit,
+            tool="write_file",
+            path=after.path,
+            outcome="created" if not before.exists else "replaced",
+            before_sha=before.sha256 or "",
+            after_sha=after.sha256,
+            size=after.size,
+        )
         # A created file can add a package or an entry point; a replaced one cannot
         # change the project layout, only its own contents.
         if self._intelligence is not None:
@@ -311,11 +363,13 @@ class EditFileTool:
         max_bytes: int = 2_000_000,
         journal: RevisionJournal | None = None,
         intelligence: ProjectIntelligence | None = None,
+        audit: SecurityAuditLog | None = None,
     ) -> None:
         self._workspace = workspace
         self._max_bytes = max_bytes
         self._journal = journal
         self._intelligence = intelligence
+        self._audit = audit
         self.spec = ToolSpec(
             name="edit_file",
             description=(
@@ -421,6 +475,15 @@ class EditFileTool:
         )
         after = self._workspace.write_text(path, outcome.content)
         undoable = _record_revision(self._journal, before.path, "edit_file", pre_image, after)
+        _record_mutation(
+            self._audit,
+            tool="edit_file",
+            path=after.path,
+            outcome="edited",
+            before_sha=before.sha256 or "",
+            after_sha=after.sha256,
+            size=after.size,
+        )
         if self._intelligence is not None:
             self._intelligence.note_written(after.path)
         affected = _affected_files(self._workspace, after.path)
@@ -459,9 +522,11 @@ class DeleteFileTool:
         workspace: Workspace,
         *,
         intelligence: ProjectIntelligence | None = None,
+        audit: SecurityAuditLog | None = None,
     ) -> None:
         self._workspace = workspace
         self._intelligence = intelligence
+        self._audit = audit
         self.spec = ToolSpec(
             name="delete_file",
             description=(
@@ -503,6 +568,15 @@ class DeleteFileTool:
         before = self._workspace.fingerprint(path)
         _check_expected_hash(path, before, arguments.get("expected_sha256"))
         removed = self._workspace.delete_file(path)
+        _record_mutation(
+            self._audit,
+            tool="delete_file",
+            path=removed.path,
+            outcome="deleted",
+            before_sha=removed.sha256 or "",
+            after_sha="",
+            size=0,
+        )
         if self._intelligence is not None:
             # Both directions matter: the file's own record goes, and so does every
             # edge that pointed at it, so no caller is reported for a module that is
@@ -527,6 +601,7 @@ def build_mutating_tools(
     max_file_bytes: int = 2_000_000,
     journal: RevisionJournal | None = None,
     intelligence: ProjectIntelligence | None = None,
+    audit: SecurityAuditLog | None = None,
 ) -> list[Any]:
     """Instantiate the v0.2 write/edit/delete tools bound to ``workspace``.
 
@@ -537,12 +612,20 @@ def build_mutating_tools(
 
     return [
         WriteFileTool(
-            workspace, max_bytes=max_file_bytes, journal=journal, intelligence=intelligence
+            workspace,
+            max_bytes=max_file_bytes,
+            journal=journal,
+            intelligence=intelligence,
+            audit=audit,
         ),
         EditFileTool(
-            workspace, max_bytes=max_file_bytes, journal=journal, intelligence=intelligence
+            workspace,
+            max_bytes=max_file_bytes,
+            journal=journal,
+            intelligence=intelligence,
+            audit=audit,
         ),
-        DeleteFileTool(workspace, intelligence=intelligence),
+        DeleteFileTool(workspace, intelligence=intelligence, audit=audit),
     ]
 
 
@@ -562,6 +645,7 @@ class UndoFileTool:
         journal: RevisionJournal,
         *,
         intelligence: ProjectIntelligence | None = None,
+        audit: SecurityAuditLog | None = None,
     ) -> None:
         self._workspace = workspace
         self._journal = journal
@@ -569,6 +653,7 @@ class UndoFileTool:
         #: has to hear about it too -- otherwise the agent undoes an edit and keeps
         #: answering questions from the version it just discarded.
         self._intelligence = intelligence
+        self._audit = audit
         self.spec = ToolSpec(
             name="undo_file",
             description=(
@@ -653,6 +738,15 @@ class UndoFileTool:
                 self._intelligence.note_written(rel)
 
         self._journal.consume(path, revision)
+        _record_mutation(
+            self._audit,
+            tool="undo_file",
+            path=rel,
+            outcome=f"undid_{revision.tool}",
+            before_sha=revision.result_sha256 or "",
+            after_sha=restored_sha256 or "",
+            size=restored_bytes or 0,
+        )
         logger.info("undo_file reverted %s (%s) recorded by %s", rel, restored, revision.tool)
         return ToolResult.success(
             self.spec.name,
@@ -705,10 +799,11 @@ def build_undo_tool(
     journal: RevisionJournal,
     *,
     intelligence: ProjectIntelligence | None = None,
+    audit: SecurityAuditLog | None = None,
 ) -> UndoFileTool:
     """Instantiate the undo tool bound to ``workspace`` and ``journal``."""
 
-    return UndoFileTool(workspace, journal, intelligence=intelligence)
+    return UndoFileTool(workspace, journal, intelligence=intelligence, audit=audit)
 
 
 def describe_eol(text: str) -> str:

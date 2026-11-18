@@ -23,11 +23,8 @@ from typing import Any
 
 import pytest
 
-from quantsmind_agent.orchestrator import Orchestrator
-from quantsmind_agent.permissions import ApprovalOutcome
-from quantsmind_agent.sessions import Checkpoint
-from quantsmind_agent.task_store import TaskStore
-from quantsmind_agent.tasks import (
+from quantsmind_agent.security.permissions import ApprovalOutcome
+from quantsmind_agent.services.tasks.models import (
     ApprovalRecord,
     Plan,
     PlannedStep,
@@ -38,6 +35,9 @@ from quantsmind_agent.tasks import (
     TraceEvent,
     TraceKind,
 )
+from quantsmind_agent.services.tasks.orchestrator import Orchestrator
+from quantsmind_agent.sessions import Checkpoint
+from quantsmind_agent.task_store import TaskStore
 from tests.fakes import FakeModelProvider, text_response
 from tests.gui.harness import GuiHarness
 
@@ -237,7 +237,7 @@ class TestApprovalIsAHardGate:
         assert orchestrator.task.executions == []
 
     def test_a_plan_reaching_outside_the_workspace_is_refused(self, opened: GuiHarness) -> None:
-        from quantsmind_agent.tasks import PlanRejected
+        from quantsmind_agent.services.tasks.models import PlanRejected
 
         window = opened.window
         escaping = Plan(
@@ -369,7 +369,7 @@ class TestPlanGenerationUsesStructuredOutput:
         assert window._plan_thread is None
 
     def test_an_unusable_model_answer_is_refused_with_reasons(self, opened: GuiHarness) -> None:
-        from quantsmind_agent.planner import PlanProposal
+        from quantsmind_agent.services.tasks.planner import PlanProposal
 
         window = opened.window
         window.show_task_view()
@@ -380,8 +380,8 @@ class TestPlanGenerationUsesStructuredOutput:
         assert window._pending_plan is None
 
     def test_a_valid_proposal_is_offered_for_review(self, opened: GuiHarness) -> None:
-        from quantsmind_agent.planner import PlanProposal
-        from quantsmind_agent.tasks import Plan, PlannedStep
+        from quantsmind_agent.services.tasks.models import Plan, PlannedStep
+        from quantsmind_agent.services.tasks.planner import PlanProposal
 
         window = opened.window
         window.show_task_view()

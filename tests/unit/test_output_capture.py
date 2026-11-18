@@ -14,7 +14,7 @@ import io
 import sys
 from pathlib import Path
 
-from quantsmind_agent.command_tools import CappedReader
+from quantsmind_agent.runtime.tools.builtin.command import CappedReader
 
 
 def _read(text: str, cap: int) -> CappedReader:
@@ -100,14 +100,14 @@ class TestThroughTheTool:
     def test_a_failing_suite_keeps_its_traceback(self, tmp_path: Path) -> None:
         # End to end: a real failing pytest run through a deliberately tiny cap,
         # which is the situation that used to lose the failure entirely.
-        from quantsmind_agent.command_tools import build_command_tools
-        from quantsmind_agent.permissions import (
+        from quantsmind_agent.runtime.tools import ToolRegistry
+        from quantsmind_agent.runtime.tools.builtin.command import build_command_tools
+        from quantsmind_agent.security.permissions import (
             ApprovalOutcome,
             PermissionBroker,
             StaticPermissionProvider,
         )
-        from quantsmind_agent.tools import ToolRegistry
-        from quantsmind_agent.workspace import Workspace
+        from quantsmind_agent.services.workspace.containment import Workspace
 
         broken = tmp_path / "test_broken.py"
         broken.write_text(

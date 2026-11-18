@@ -21,11 +21,11 @@ if str(SRC) not in sys.path:  # pragma: no cover - import bootstrap
 
 from pydantic import SecretStr  # noqa: E402
 
-from quantsmind_agent.config import PROVIDER_ENV_VARS, ConfigManager  # noqa: E402
-from quantsmind_agent.logging_setup import shutdown_logging  # noqa: E402
-from quantsmind_agent.paths import AppPaths  # noqa: E402
-from quantsmind_agent.secrets import SecretStore  # noqa: E402
-from quantsmind_agent.workspace import Workspace  # noqa: E402
+from quantsmind_agent.app.settings import PROVIDER_ENV_VARS, ConfigManager  # noqa: E402
+from quantsmind_agent.diagnostics.logging import shutdown_logging  # noqa: E402
+from quantsmind_agent.persistence.paths import AppPaths  # noqa: E402
+from quantsmind_agent.security.secrets import SecretStore  # noqa: E402
+from quantsmind_agent.services.workspace.containment import Workspace  # noqa: E402
 
 #: Every variable the application may read as a credential. Ambient values are
 #: removed for every test so a developer's real key can never influence a run.

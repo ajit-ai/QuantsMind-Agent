@@ -7,7 +7,7 @@ import tomllib
 import pytest
 from pydantic import ValidationError
 
-from quantsmind_agent.config import (
+from quantsmind_agent.app.settings import (
     PROVIDER_PRESETS,
     AgentSettings,
     ConfigManager,

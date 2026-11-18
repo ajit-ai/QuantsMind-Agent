@@ -28,9 +28,9 @@ from quantsmind_agent.errors import (
     ModelUnavailableError,
     NetworkError,
 )
-from quantsmind_agent.llm import ChatRequest, ProviderCapabilities
+from quantsmind_agent.providers.gateway import ChatRequest, ProviderCapabilities
 from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
-from quantsmind_agent.routing import FailureKind, classify_failure
+from quantsmind_agent.providers.routing import FailureKind, classify_failure
 from quantsmind_agent.schema import SystemMessage, UserMessage
 from tests.fakes import mock_transport
 
@@ -333,7 +333,7 @@ class TestHttpStatusMapping:
     def test_only_a_rate_limit_or_a_server_error_may_move_to_another_endpoint(self) -> None:
         """A rejected key or a bad request must not silently become another provider."""
 
-        from quantsmind_agent.routing import FALLBACK_ELIGIBLE
+        from quantsmind_agent.providers.routing import FALLBACK_ELIGIBLE
 
         assert {FailureKind.RATE_LIMIT, FailureKind.SERVER} == FALLBACK_ELIGIBLE
 
@@ -402,13 +402,13 @@ class TestConfiguration:
     """Section E: the configuration rules the provider depends on."""
 
     def test_a_loopback_endpoint_needs_no_credential(self) -> None:
-        from quantsmind_agent.config import ProviderSettings
+        from quantsmind_agent.app.settings import ProviderSettings
 
         settings = ProviderSettings(name="local", base_url="http://127.0.0.1:7860/v1", model="m")
         assert settings.requires_api_key() is False
 
     def test_a_remote_endpoint_needs_a_credential(self) -> None:
-        from quantsmind_agent.config import ProviderSettings
+        from quantsmind_agent.app.settings import ProviderSettings
 
         settings = ProviderSettings(name="cloud", base_url="https://api.example.com/v1", model="m")
         assert settings.requires_api_key() is True
@@ -417,7 +417,7 @@ class TestConfiguration:
         """The schema allows http; the operator chooses. What it must never do is
         skip TLS verification, and the provider never sets verify=False."""
 
-        from quantsmind_agent.config import ProviderSettings
+        from quantsmind_agent.app.settings import ProviderSettings
 
         settings = ProviderSettings(name="cloud", base_url="http://api.example.com/v1", model="m")
         assert settings.base_url == "http://api.example.com/v1"
@@ -434,7 +434,7 @@ class TestConfiguration:
     def test_an_empty_model_identifier_is_refused_by_the_schema(self) -> None:
         from pydantic import ValidationError
 
-        from quantsmind_agent.config import ProviderSettings
+        from quantsmind_agent.app.settings import ProviderSettings
 
         with pytest.raises(ValidationError):
             ProviderSettings(name="cloud", base_url="https://api.example.com/v1", model="  ")
@@ -442,7 +442,7 @@ class TestConfiguration:
     def test_an_empty_base_url_is_refused_by_the_schema(self) -> None:
         from pydantic import ValidationError
 
-        from quantsmind_agent.config import ProviderSettings
+        from quantsmind_agent.app.settings import ProviderSettings
 
         with pytest.raises(ValidationError):
             ProviderSettings(name="cloud", base_url="   ", model="m")

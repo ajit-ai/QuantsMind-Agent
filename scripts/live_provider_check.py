@@ -24,16 +24,16 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from quantsmind_agent.config import ConfigManager
+from quantsmind_agent.app.settings import ConfigManager
 from quantsmind_agent.errors import LLMError
-from quantsmind_agent.llm import (
+from quantsmind_agent.persistence.paths import default_paths
+from quantsmind_agent.providers import build_provider
+from quantsmind_agent.providers.gateway import (
     ChatRequest,
     ModelGateway,
     StructuredOutput,
     StructuredOutputError,
 )
-from quantsmind_agent.paths import default_paths
-from quantsmind_agent.providers import build_provider
 from quantsmind_agent.schema import UserMessage
 
 PROMPT = "Reply with exactly the word: acknowledged"
@@ -184,7 +184,7 @@ def check_plan(gateway: ModelGateway, settings: Any, results: dict[str, Any]) ->
 
     import tempfile
 
-    from quantsmind_agent.planner import TaskPlanner
+    from quantsmind_agent.services.tasks.planner import TaskPlanner
 
     with tempfile.TemporaryDirectory(prefix="qm-live-plan-") as folder:
         workspace = Path(folder)

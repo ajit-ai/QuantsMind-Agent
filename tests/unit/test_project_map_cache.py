@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from quantsmind_agent.project_intel import ProjectIntelligence, task_context
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 
 
 @pytest.fixture

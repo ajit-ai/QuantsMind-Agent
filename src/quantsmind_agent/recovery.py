@@ -10,7 +10,7 @@ the ones where the record and the world disagree:
 * the workspace is gone, or has become a different project;
 * the plan moved while the task was away, so the approval no longer matches.
 
-Every one of those becomes a :class:`~quantsmind_agent.tasks.RecoveryDecision`
+Every one of those becomes a :class:`~quantsmind_agent.services.tasks.models.RecoveryDecision`
 with the consequences spelled out, and the task stops in ``PAUSED`` until the
 user answers. What recovery will not do is replay the last tool call. A command
 that may have already installed a dependency, written a file or pushed a branch
@@ -27,8 +27,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from quantsmind_agent.orchestrator import hash_file
-from quantsmind_agent.tasks import (
+from quantsmind_agent.services.tasks.models import (
     ApprovalRecord,
     RecoveryDecision,
     StepStatus,
@@ -36,6 +35,7 @@ from quantsmind_agent.tasks import (
     TaskStatus,
     plan_digest,
 )
+from quantsmind_agent.services.tasks.orchestrator import hash_file
 
 __all__ = ["RecoveryReport", "analyse_task"]
 

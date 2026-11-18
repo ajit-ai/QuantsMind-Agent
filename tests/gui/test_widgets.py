@@ -18,9 +18,9 @@ import pytest
 
 pytest.importorskip("PySide6.QtWidgets", reason="PySide6 is required for GUI tests")
 
-from quantsmind_agent.gui.activity import ActivityView
-from quantsmind_agent.gui.conversation import ConversationView
-from quantsmind_agent.gui.sidebar import Sidebar
+from quantsmind_agent.gui.conversation.activity import ActivityView
+from quantsmind_agent.gui.conversation.transcript import ConversationView
+from quantsmind_agent.gui.shell.sidebar import Sidebar
 
 pytestmark = pytest.mark.gui
 

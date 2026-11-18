@@ -44,8 +44,8 @@ if TYPE_CHECKING:
 
     from quantsmind_agent.app import ApplicationContext
     from quantsmind_agent.events import AgentEvent
-    from quantsmind_agent.paths import AppPaths
-    from quantsmind_agent.permissions import ApprovalOutcome, PermissionRequest
+    from quantsmind_agent.persistence.paths import AppPaths
+    from quantsmind_agent.security.permissions import ApprovalOutcome, PermissionRequest
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -234,7 +234,7 @@ def _isolated_paths() -> AppPaths:
     does. Nothing is written to the real profile.
     """
 
-    from quantsmind_agent.paths import AppPaths, default_paths
+    from quantsmind_agent.persistence.paths import AppPaths, default_paths
 
     real = default_paths()
     base = Path(tempfile.mkdtemp(prefix="qm-accept-profile-"))
@@ -369,7 +369,7 @@ def product_c_stale_edit(ctx: ApplicationContext, workspace: Path) -> None:
     stale precondition*, and the bytes on disk are byte-for-byte unchanged.
     """
 
-    from quantsmind_agent.permissions import ApprovalOutcome
+    from quantsmind_agent.security.permissions import ApprovalOutcome
 
     target = workspace / "calc.py"
     original = target.read_bytes()
@@ -412,7 +412,7 @@ def product_e_command(ctx: ApplicationContext) -> None:
     can be checked rather than merely a success flag.
     """
 
-    from quantsmind_agent.permissions import ApprovalOutcome
+    from quantsmind_agent.security.permissions import ApprovalOutcome
 
     with approval_probe(ctx, ApprovalOutcome.ALLOW_ONCE) as approvals:
         result = ctx.tools.execute(
@@ -446,7 +446,7 @@ def product_f_blocked_command(ctx: ApplicationContext) -> None:
     before the process is created.
     """
 
-    from quantsmind_agent.permissions import ApprovalOutcome
+    from quantsmind_agent.security.permissions import ApprovalOutcome
 
     with approval_probe(ctx, ApprovalOutcome.ALLOW_FOR_SESSION) as approvals:
         result = ctx.tools.execute(
@@ -474,7 +474,7 @@ def product_g_git(ctx: ApplicationContext) -> None:
     executable is reported as a prerequisite problem, not as a Git-tool defect.
     """
 
-    from quantsmind_agent.permissions import ApprovalOutcome
+    from quantsmind_agent.security.permissions import ApprovalOutcome
 
     with approval_probe(ctx, ApprovalOutcome.ALLOW_ONCE) as approvals:
         result = ctx.tools.execute("git_status", {})
@@ -503,7 +503,7 @@ def product_j_traversal(ctx: ApplicationContext, sentinel: Path) -> None:
     relative path. Nothing outside the disposable area is ever written.
     """
 
-    from quantsmind_agent.permissions import ApprovalOutcome
+    from quantsmind_agent.security.permissions import ApprovalOutcome
 
     expected = "must not be touched"
     sentinel.write_text(expected, encoding="utf-8")
@@ -540,7 +540,7 @@ def product_p_tools_apply_permitted_changes(ctx: ApplicationContext, workspace: 
     file state is asserted, so a tool that silently no-ops fails here.
     """
 
-    from quantsmind_agent.permissions import ApprovalOutcome
+    from quantsmind_agent.security.permissions import ApprovalOutcome
 
     def read_probe() -> tuple[str, bool]:
         """Read the probe file, tolerating its absence.
@@ -599,8 +599,8 @@ def product_p_tools_apply_permitted_changes(ctx: ApplicationContext, workspace: 
 def main() -> int:
     bootstrap()
     from quantsmind_agent.app import ApplicationContext
-    from quantsmind_agent.config import ConfigManager
-    from quantsmind_agent.permissions import ApprovalOutcome
+    from quantsmind_agent.app.settings import ConfigManager
+    from quantsmind_agent.security.permissions import ApprovalOutcome
 
     workspace = make_workspace()
     paths = _isolated_paths()
@@ -608,7 +608,7 @@ def main() -> int:
     print(f"profile   : {paths.config_dir}\n", flush=True)
 
     ctx = ApplicationContext.create(paths=paths, config_manager=ConfigManager(paths))
-    ctx.open_workspace(workspace)
+    ctx.open_workspace(workspace, trusted=True)
     print(f"tools     : {', '.join(ctx.tools.names)}")
     print(f"ready     : {ctx.readiness()}\n", flush=True)
 

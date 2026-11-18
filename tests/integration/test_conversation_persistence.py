@@ -16,10 +16,10 @@ from typing import Any
 import pytest
 
 from quantsmind_agent.app import ApplicationContext
-from quantsmind_agent.config import ConfigManager
-from quantsmind_agent.permissions import ApprovalOutcome
+from quantsmind_agent.app.settings import ConfigManager
 from quantsmind_agent.schema import AssistantMessage, UserMessage
-from quantsmind_agent.secrets import FileSecretStore
+from quantsmind_agent.security.permissions import ApprovalOutcome
+from quantsmind_agent.security.secrets import FileSecretStore
 from tests.fakes import FakeModelProvider, text_response, tool_response
 
 pytestmark = pytest.mark.integration
@@ -40,7 +40,7 @@ def _context(
     manager = ConfigManager(app_paths, secret_store=FileSecretStore(app_paths.secrets_file))
     context = ApplicationContext.create(paths=app_paths, config_manager=manager)
     if project is not None:
-        context.open_workspace(project)
+        context.open_workspace(project, trusted=True)
     if provider is not None:
         context.agent._gateway.set_provider(provider)
     context.tools.permissions.set_approver(lambda request: ApprovalOutcome.ALLOW_ONCE)
@@ -266,7 +266,7 @@ class TestMissingAndUnusableState:
         self, app_paths: Any, project: Path
     ) -> None:
         context = _context(app_paths)
-        context.open_workspace(project)
+        context.open_workspace(project, trusted=True)
 
         assert context.open_conversation("does-not-exist") is False
 

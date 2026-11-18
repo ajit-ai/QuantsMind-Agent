@@ -12,10 +12,10 @@ from typing import Any
 
 import pytest
 
-from quantsmind_agent.services import INTERRUPTED_STATUSES, TaskService
+from quantsmind_agent.services.tasks.models import Plan, PlannedStep, StepStatus, Task, TaskStatus
+from quantsmind_agent.services.tasks.service import INTERRUPTED_STATUSES, TaskService
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.task_store import TaskStore
-from quantsmind_agent.tasks import Plan, PlannedStep, StepStatus, Task, TaskStatus
-from quantsmind_agent.workspace import Workspace
 
 pytestmark = pytest.mark.integration
 

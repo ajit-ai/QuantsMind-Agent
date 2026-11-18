@@ -5,7 +5,7 @@ a socket guard that refuses any connection, so a test that accidentally
 reached the network would fail rather than pass quietly.
 
 The rules under test live in
-:class:`~quantsmind_agent.gui.security_controller.SecurityController`, which
+:class:`~quantsmind_agent.gui.security.controller.SecurityController`, which
 has no Qt dependency, so they can be qualified without a display.
 """
 
@@ -20,23 +20,27 @@ from typing import Any
 import pytest
 from tests.security.test_m3b_s11_credential_security import FakeSecretStore
 
-from quantsmind_agent.auth_gateway import (
-    AuthenticationGatewayError,
-    AuthGateway,
-)
-from quantsmind_agent.config import ConfigManager
-from quantsmind_agent.credential_vault import (
-    CredentialVault,
-    CredentialVaultError,
-)
-from quantsmind_agent.gui.security_controller import (
+from quantsmind_agent.app.settings import ConfigManager
+from quantsmind_agent.gui.security.controller import (
     CredentialStatus,
     EndpointState,
     SecurityController,
 )
-from quantsmind_agent.paths import AppPaths
-from quantsmind_agent.permissions import Decision, PermissionBroker, StaticPermissionProvider
-from quantsmind_agent.security_audit import AuditEventType, SecurityAuditLog
+from quantsmind_agent.persistence.paths import AppPaths
+from quantsmind_agent.security.audit import AuditEventType, SecurityAuditLog
+from quantsmind_agent.security.auth_gateway import (
+    AuthenticationGatewayError,
+    AuthGateway,
+)
+from quantsmind_agent.security.credential_vault import (
+    CredentialVault,
+    CredentialVaultError,
+)
+from quantsmind_agent.security.permissions import (
+    Decision,
+    PermissionBroker,
+    StaticPermissionProvider,
+)
 
 OPENROUTER_KEY = "sk-canary-openrouter-0000000000"
 OPENAI_KEY = "sk-canary-openai-1111111111"
@@ -474,7 +478,7 @@ class TestEndpointAuthorisationAndAudit:
 
     def test_the_permission_broker_is_unchanged(self, tmp_path: Path) -> None:
         broker = PermissionBroker(StaticPermissionProvider.for_v0_2())
-        from quantsmind_agent.permissions import Permission, PermissionRequest
+        from quantsmind_agent.security.permissions import Permission, PermissionRequest
 
         request = PermissionRequest(
             permission=Permission.WRITE_WORKSPACE,
@@ -486,6 +490,6 @@ class TestEndpointAuthorisationAndAudit:
 
 
 def _endpoint_of(identity: Any):  # type: ignore[no-untyped-def]
-    from quantsmind_agent.provider_identity import canonicalize_endpoint
+    from quantsmind_agent.security.provider_identity import canonicalize_endpoint
 
     return canonicalize_endpoint(identity.endpoint_id)

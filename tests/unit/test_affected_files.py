@@ -12,14 +12,14 @@ from pathlib import Path
 import pytest
 
 from quantsmind_agent.code_imports import importers_of
-from quantsmind_agent.permissions import (
+from quantsmind_agent.revisions import RevisionJournal
+from quantsmind_agent.runtime.tools import ToolRegistry
+from quantsmind_agent.security.permissions import (
     ApprovalOutcome,
     PermissionBroker,
     StaticPermissionProvider,
 )
-from quantsmind_agent.revisions import RevisionJournal
-from quantsmind_agent.tools import ToolRegistry
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.write_tools import build_mutating_tools
 
 GEOMETRY = "def distance(a, b):\n    return 0.0\n"

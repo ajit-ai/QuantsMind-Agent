@@ -19,13 +19,13 @@ pytest.importorskip("PySide6.QtWidgets", reason="PySide6 is required for GUI tes
 
 from PySide6.QtWidgets import QLineEdit
 
-from quantsmind_agent.auth_gateway import AuthGateway
-from quantsmind_agent.config import ConfigManager
-from quantsmind_agent.credential_vault import CredentialVault
-from quantsmind_agent.gui.security_controller import SecurityController
-from quantsmind_agent.gui.security_panel import SecurityDialog, SecurityPanel
-from quantsmind_agent.paths import AppPaths
-from quantsmind_agent.security_audit import SecurityAuditLog
+from quantsmind_agent.app.settings import ConfigManager
+from quantsmind_agent.gui.security.center import SecurityDialog, SecurityPanel
+from quantsmind_agent.gui.security.controller import SecurityController
+from quantsmind_agent.persistence.paths import AppPaths
+from quantsmind_agent.security.audit import SecurityAuditLog
+from quantsmind_agent.security.auth_gateway import AuthGateway
+from quantsmind_agent.security.credential_vault import CredentialVault
 from tests.security.test_m3b_s11_credential_security import FakeSecretStore
 
 pytestmark = pytest.mark.gui
@@ -34,7 +34,12 @@ OPENROUTER_KEY = "sk-canary-openrouter-0000000000"
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 
-def _controller(tmp_path: Path, store: FakeSecretStore | None = None) -> SecurityController:
+def _controller(
+    tmp_path: Path,
+    store: FakeSecretStore | None = None,
+    *,
+    with_sink: bool = False,
+) -> SecurityController:
     paths = AppPaths(
         config_dir=tmp_path / "config",
         log_dir=tmp_path / "logs",
@@ -48,6 +53,12 @@ def _controller(tmp_path: Path, store: FakeSecretStore | None = None) -> Securit
     )
     manager.load()
     audit = SecurityAuditLog()
+    if with_sink:
+        from quantsmind_agent.security.audit_sink import RotatingAuditSink
+
+        audit = SecurityAuditLog(
+            sink=RotatingAuditSink(paths.audit_log_file, anchor_path=paths.audit_anchor_file)
+        )
     vault = CredentialVault(backend, metadata_path=None, audit=audit, require_secure=True)
     gateway = AuthGateway(
         vault=vault,
@@ -266,16 +277,24 @@ class TestAuditViewer:
         assert "credential.created" in rendered
         assert OPENROUTER_KEY not in rendered
 
-    def test_the_audit_viewer_is_labelled_session_only(self, qapp: object, tmp_path: Path) -> None:
-        from PySide6.QtWidgets import QLabel
-
+    def test_an_unattached_store_is_labelled_as_memory_only(
+        self, qapp: object, tmp_path: Path
+    ) -> None:
         panel = SecurityPanel(_controller(tmp_path))
-        text = " ".join(
-            label.text()
-            for label in panel.findChildren(QLabel)
-            if "session" in label.text().lower()
-        )
-        assert "Session-only" in text
+        note = panel._audit_note.text()
+        assert "memory" in note.lower()
+        assert "written to disk" not in note.lower()
+        assert panel._include_archive.isEnabled() is False
+
+    def test_an_attached_store_is_labelled_durable_without_claiming_protection(
+        self, qapp: object, tmp_path: Path
+    ) -> None:
+        panel = SecurityPanel(_controller(tmp_path, with_sink=True))
+        note = panel._audit_note.text().lower()
+        assert "audit.jsonl" in note
+        assert "detectable" in note
+        assert "not proof against tampering" in note
+        assert panel._include_archive.isEnabled() is True
 
     def test_the_filter_by_provider_narrows_the_table(self, qapp: object, tmp_path: Path) -> None:
         controller = _controller(tmp_path)

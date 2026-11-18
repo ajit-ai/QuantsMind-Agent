@@ -26,7 +26,7 @@ import ast
 from dataclasses import dataclass
 
 from quantsmind_agent.errors import InvalidPathError
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 
 
 def importers_of(

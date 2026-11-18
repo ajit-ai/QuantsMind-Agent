@@ -19,9 +19,9 @@ from quantsmind_agent.errors import (
     ModelUnavailableError,
     NetworkError,
 )
-from quantsmind_agent.llm import ChatRequest, ProviderCapabilities
+from quantsmind_agent.providers.gateway import ChatRequest, ProviderCapabilities
 from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
-from quantsmind_agent.routing import (
+from quantsmind_agent.providers.routing import (
     FailureKind,
     ProviderRouter,
     RouteCandidate,

@@ -9,8 +9,8 @@ import pytest
 from pydantic import SecretStr
 
 from quantsmind_agent.errors import ConfigurationError
-from quantsmind_agent.paths import AppPaths, default_paths
-from quantsmind_agent.secrets import (
+from quantsmind_agent.persistence.paths import AppPaths, default_paths
+from quantsmind_agent.security.secrets import (
     FileSecretStore,
     KeyringSecretStore,
     SecretStore,

@@ -13,10 +13,10 @@ from typing import cast
 import pytest
 from PySide6.QtWidgets import QGridLayout, QPushButton, QWidget
 
-from quantsmind_agent.gui.main_window import _safe_filename
-from quantsmind_agent.gui.sidebar import Sidebar
-from quantsmind_agent.permissions import ApprovalOutcome
+from quantsmind_agent.gui.shell.sidebar import Sidebar
+from quantsmind_agent.gui.shell.window import _safe_filename
 from quantsmind_agent.schema import UserMessage
+from quantsmind_agent.security.permissions import ApprovalOutcome
 from tests.fakes import FakeModelProvider, text_response, tool_response
 from tests.gui.harness import GuiHarness
 

@@ -14,7 +14,10 @@ from typing import Any
 
 import pytest
 
-from quantsmind_agent.conversations import (
+from quantsmind_agent.runtime.tools import ToolResult
+from quantsmind_agent.schema import AssistantMessage, SystemMessage, ToolCall, UserMessage
+from quantsmind_agent.services.conversations.session import Session
+from quantsmind_agent.services.conversations.store import (
     SCHEMA_VERSION,
     ConversationStore,
     StorageLimits,
@@ -23,9 +26,6 @@ from quantsmind_agent.conversations import (
     snapshot_session,
     truncate,
 )
-from quantsmind_agent.schema import AssistantMessage, SystemMessage, ToolCall, UserMessage
-from quantsmind_agent.session import Session
-from quantsmind_agent.tools import ToolResult
 
 
 def _kinds(session: Session) -> list[str]:

@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 import pytest
 
-from quantsmind_agent.config import PROVIDER_PRESETS, ProviderSettings
+from quantsmind_agent.app.settings import PROVIDER_PRESETS, ProviderSettings
 from quantsmind_agent.errors import (
     LLMProtocolError,
     LLMTimeoutError,
@@ -26,14 +26,14 @@ from quantsmind_agent.errors import (
     ModelUnavailableError,
     NetworkError,
 )
-from quantsmind_agent.llm import (
+from quantsmind_agent.providers import build_provider, registered_provider_names
+from quantsmind_agent.providers.gateway import (
     ChatRequest,
     ChatResponse,
     ModelGateway,
     ProviderCapabilities,
     StreamChunk,
 )
-from quantsmind_agent.providers import build_provider, registered_provider_names
 from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
 from quantsmind_agent.schema import ToolCall, UserMessage
 

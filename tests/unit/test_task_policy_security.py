@@ -19,15 +19,7 @@ from typing import Any, ClassVar
 import pytest
 
 from quantsmind_agent.errors import WorkspaceError
-from quantsmind_agent.orchestrator import Orchestrator
-from quantsmind_agent.task_policy import (
-    OperationKind,
-    TaskPolicy,
-    approval_for_plan,
-    classify,
-    command_touches_network,
-)
-from quantsmind_agent.tasks import (
+from quantsmind_agent.services.tasks.models import (
     ApprovalRecord,
     Plan,
     PlannedStep,
@@ -37,7 +29,15 @@ from quantsmind_agent.tasks import (
     TaskBudget,
     validate_plan,
 )
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.tasks.orchestrator import Orchestrator
+from quantsmind_agent.services.tasks.policy import (
+    OperationKind,
+    TaskPolicy,
+    approval_for_plan,
+    classify,
+    command_touches_network,
+)
+from quantsmind_agent.services.workspace.containment import Workspace
 
 
 class StubResult:
@@ -487,8 +487,8 @@ class TestSecretsStayOutOfRecords:
         assert "[redacted]" in stored
 
     def test_tool_output_is_redacted_before_it_is_stored(self, tmp_path: Path) -> None:
+        from quantsmind_agent.services.tasks.models import ToolExecutionRecord
         from quantsmind_agent.task_store import TaskStore
-        from quantsmind_agent.tasks import ToolExecutionRecord
 
         store = TaskStore(tmp_path / ".tasks")
         task = Task(id="t", objective="o", workspace=str(tmp_path))

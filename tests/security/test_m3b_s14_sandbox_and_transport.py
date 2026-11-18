@@ -39,7 +39,7 @@ from quantsmind_agent.sandbox.windows import (
     build_child_environment,
     sandbox_supported,
 )
-from quantsmind_agent.security_audit import AuditEventType, SecurityAuditLog
+from quantsmind_agent.security.audit import AuditEventType, SecurityAuditLog
 
 pytestmark = pytest.mark.skipif(
     not sandbox_supported(), reason="the sandbox boundary is Windows-only"

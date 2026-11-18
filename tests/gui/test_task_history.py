@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from quantsmind_agent.gui.task_panel import TaskPanel
+from quantsmind_agent.gui.task.panel import TaskPanel
+from quantsmind_agent.services.tasks.models import Plan, PlannedStep, StepStatus, Task, TaskStatus
 from quantsmind_agent.task_store import TaskStore
-from quantsmind_agent.tasks import Plan, PlannedStep, StepStatus, Task, TaskStatus
 
 pytestmark = pytest.mark.gui
 

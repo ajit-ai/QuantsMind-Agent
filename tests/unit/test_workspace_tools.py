@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from quantsmind_agent.permissions import Permission, PermissionBroker, StaticPermissionProvider
-from quantsmind_agent.tools import ToolRegistry
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.runtime.tools import ToolRegistry
+from quantsmind_agent.security.permissions import (
+    Permission,
+    PermissionBroker,
+    StaticPermissionProvider,
+)
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.workspace_tools import build_default_tools
 
 

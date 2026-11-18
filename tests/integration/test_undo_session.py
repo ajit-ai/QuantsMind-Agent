@@ -14,16 +14,16 @@ from typing import Any
 import pytest
 
 from quantsmind_agent.app import ApplicationContext
-from quantsmind_agent.config import ConfigManager
-from quantsmind_agent.permissions import (
+from quantsmind_agent.app.settings import ConfigManager
+from quantsmind_agent.security.permissions import (
     ApprovalOutcome,
     Decision,
     Permission,
     PermissionRequest,
 )
-from quantsmind_agent.secrets import FileSecretStore
-from quantsmind_agent.session import Session
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.security.secrets import FileSecretStore
+from quantsmind_agent.services.conversations.session import Session
+from quantsmind_agent.services.workspace.containment import Workspace
 
 pytestmark = pytest.mark.integration
 
@@ -33,7 +33,7 @@ README = "README.md"
 def _context(app_paths: Any, sample_project: Path) -> ApplicationContext:
     manager = ConfigManager(app_paths, secret_store=FileSecretStore(app_paths.secrets_file))
     context = ApplicationContext.create(paths=app_paths, config_manager=manager)
-    context.open_workspace(sample_project)
+    context.open_workspace(sample_project, trusted=True)
     return context
 
 
@@ -176,7 +176,7 @@ class TestApplicationWiring:
         other = tmp_path / "other_project"
         other.mkdir()
 
-        context.open_workspace(other)
+        context.open_workspace(other, trusted=True)
 
         assert context.session.revisions.size == 0
 

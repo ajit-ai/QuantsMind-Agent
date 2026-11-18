@@ -47,6 +47,7 @@ class AgentEventType(StrEnum):
     AGENT_FAILED = "agent_failed"
     AGENT_CANCELLED = "agent_cancelled"
     WORKSPACE_OPENED = "workspace_opened"
+    WORKSPACE_TRUST_CHANGED = "workspace_trust_changed"
     CONFIG_CHANGED = "config_changed"
 
 

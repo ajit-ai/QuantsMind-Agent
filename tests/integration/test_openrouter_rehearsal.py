@@ -23,19 +23,19 @@ from typing import Any
 import httpx
 import pytest
 
-from quantsmind_agent.config import PROVIDER_PRESETS, ProviderSettings
+from quantsmind_agent.app.settings import PROVIDER_PRESETS, ProviderSettings
 from quantsmind_agent.errors import ModelUnavailableError
-from quantsmind_agent.llm import ChatRequest, ModelGateway, ProviderCapabilities
-from quantsmind_agent.permissions import (
+from quantsmind_agent.providers import OPENAI_COMPAT, build_provider
+from quantsmind_agent.providers.gateway import ChatRequest, ModelGateway, ProviderCapabilities
+from quantsmind_agent.runtime.tools import ToolRegistry
+from quantsmind_agent.schema import UserMessage
+from quantsmind_agent.security.permissions import (
     ApprovalOutcome,
     Decision,
     PermissionBroker,
     StaticPermissionProvider,
 )
-from quantsmind_agent.providers import OPENAI_COMPAT, build_provider
-from quantsmind_agent.schema import UserMessage
-from quantsmind_agent.tools import ToolRegistry
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.workspace_tools import build_default_tools
 from quantsmind_agent.write_tools import build_mutating_tools
 
@@ -251,9 +251,9 @@ class TestL3WriteDenied:
 
 
 def _agent(gateway: ModelGateway, registry: ToolRegistry, workspace: Workspace) -> Any:
-    from quantsmind_agent.agent import AgentCore
     from quantsmind_agent.context import ContextEngine
-    from quantsmind_agent.session import Session
+    from quantsmind_agent.runtime.agent.core import AgentCore
+    from quantsmind_agent.services.conversations.session import Session
 
     return AgentCore(
         gateway,

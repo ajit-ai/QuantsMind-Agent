@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.errors import (
     LLMConfigurationError,
     LLMProtocolError,
@@ -32,14 +33,13 @@ from quantsmind_agent.errors import (
     NetworkError,
     QuantsMindError,
 )
-from quantsmind_agent.llm import (
+from quantsmind_agent.providers.gateway import (
     ChatRequest,
     ChatResponse,
     ProviderCapabilities,
     StreamChunk,
     parse_structured,
 )
-from quantsmind_agent.logging_setup import get_logger
 from quantsmind_agent.schema import ToolCall
 
 __all__ = ["OpenAICompatProvider"]
@@ -50,13 +50,13 @@ _DONE_SENTINEL = "[DONE]"
 
 
 class OpenAICompatProvider:
-    """A :class:`~quantsmind_agent.llm.ModelProvider` for OpenAI-style APIs."""
+    """A :class:`~quantsmind_agent.providers.gateway.ModelProvider` for OpenAI-style APIs."""
 
     name = "openai_compatible"
 
     #: What the *protocol* supports. A particular service behind this protocol
     #: may honour less; ``capabilities`` below narrows that per endpoint, and the
-    #: presets in :mod:`quantsmind_agent.config` say by how much.
+    #: presets in :mod:`quantsmind_agent.app.settings` say by how much.
     base_capabilities = ProviderCapabilities(
         tools=True,
         streaming=True,

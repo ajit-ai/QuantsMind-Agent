@@ -11,10 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from quantsmind_agent.gui.task_panel import TaskPanel
-from quantsmind_agent.sessions import Checkpoint, RecoveryDecision, RecoveryVerdict
-from quantsmind_agent.task_store import TaskStore
-from quantsmind_agent.tasks import (
+from quantsmind_agent.gui.task.panel import TaskPanel
+from quantsmind_agent.services.tasks.models import (
     Plan,
     PlannedStep,
     StepStatus,
@@ -23,6 +21,8 @@ from quantsmind_agent.tasks import (
     TraceEvent,
     TraceKind,
 )
+from quantsmind_agent.sessions import Checkpoint, RecoveryDecision, RecoveryVerdict
+from quantsmind_agent.task_store import TaskStore
 
 pytestmark = pytest.mark.gui
 

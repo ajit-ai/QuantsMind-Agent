@@ -19,9 +19,9 @@ from typing import Any
 import pytest
 
 from quantsmind_agent.app import ApplicationContext
-from quantsmind_agent.config import ConfigManager
-from quantsmind_agent.permissions import ApprovalOutcome
-from quantsmind_agent.secrets import FileSecretStore
+from quantsmind_agent.app.settings import ConfigManager
+from quantsmind_agent.security.permissions import ApprovalOutcome
+from quantsmind_agent.security.secrets import FileSecretStore
 from tests.fakes import FakeModelProvider, text_response, tool_response
 
 pytestmark = pytest.mark.integration
@@ -31,7 +31,7 @@ def _context(app_paths: Any, project: Path | None = None) -> ApplicationContext:
     manager = ConfigManager(app_paths, secret_store=FileSecretStore(app_paths.secrets_file))
     context = ApplicationContext.create(paths=app_paths, config_manager=manager)
     if project is not None:
-        context.open_workspace(project)
+        context.open_workspace(project, trusted=True)
     context.tools.permissions.set_approver(lambda request: ApprovalOutcome.ALLOW_ONCE)
     return context
 
@@ -440,7 +440,7 @@ class TestACodingWorkflowEndToEnd:
 
         # Opening the same project again rebuilds the tool stack, and the approver
         # with it: this exercises the real permission path rather than assuming.
-        context.open_workspace(broken_shop)
+        context.open_workspace(broken_shop, trusted=True)
         context.tools.permissions.set_approver(lambda request: ApprovalOutcome.ALLOW_ONCE)
         check = context.tools.execute("run_command", _pytest())
 

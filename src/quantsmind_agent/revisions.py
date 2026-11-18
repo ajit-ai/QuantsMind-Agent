@@ -10,10 +10,10 @@ was.
 
 Design constraints that come from the surrounding code rather than from taste:
 
-* **Owned by the session.** :class:`~quantsmind_agent.session.Session` holds one
+* **Owned by the session.** :class:`~quantsmind_agent.services.conversations.session.Session` holds one
   journal, so it survives the tool re-registration in
   :meth:`~quantsmind_agent.app.ApplicationContext._rebuild` and is cleared by
-  :meth:`~quantsmind_agent.session.Session.reset`, which is the same lifecycle
+  :meth:`~quantsmind_agent.services.conversations.session.Session.reset`, which is the same lifecycle
   that clears the conversation and the trust boundary.
 * **Per-path stacks.** Undoing a path consumes only that path's newest revision,
   so a session can walk back one file at a time instead of rewinding the whole

@@ -13,7 +13,16 @@ from typing import Any
 
 import pytest
 
-from quantsmind_agent.services import RecoveryRefused, TaskService
+from quantsmind_agent.services.tasks.models import (
+    Plan,
+    PlannedStep,
+    StepStatus,
+    Task,
+    TaskStatus,
+    TraceKind,
+)
+from quantsmind_agent.services.tasks.service import RecoveryRefused, TaskService
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.sessions import (
     CHECKPOINT_SCHEMA_VERSION,
     Checkpoint,
@@ -23,8 +32,6 @@ from quantsmind_agent.sessions import (
     latest_checkpoint,
 )
 from quantsmind_agent.task_store import TaskStore
-from quantsmind_agent.tasks import Plan, PlannedStep, StepStatus, Task, TaskStatus, TraceKind
-from quantsmind_agent.workspace import Workspace
 
 pytestmark = pytest.mark.security
 

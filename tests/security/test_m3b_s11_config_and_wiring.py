@@ -18,10 +18,10 @@ from tests.security.test_m3b_s11_credential_security import (
     FakeSecretStore,
 )
 
-from quantsmind_agent.config import ConfigManager
-from quantsmind_agent.credential_vault import CredentialVault, CredentialVaultError
-from quantsmind_agent.paths import AppPaths
-from quantsmind_agent.secrets import FileSecretStore, KeyringSecretStore
+from quantsmind_agent.app.settings import ConfigManager
+from quantsmind_agent.persistence.paths import AppPaths
+from quantsmind_agent.security.credential_vault import CredentialVault, CredentialVaultError
+from quantsmind_agent.security.secrets import FileSecretStore, KeyringSecretStore
 
 OPENROUTER_KEY = "sk-canary-openrouter-0000000000"
 OPENAI_KEY = "sk-canary-openai-1111111111"
@@ -152,7 +152,7 @@ class TestApplicationWiring:
 
     def test_a_refused_endpoint_yields_no_credential(self, tmp_path: Path) -> None:
         from quantsmind_agent.app import ApplicationContext
-        from quantsmind_agent.auth_gateway import AuthenticationGatewayError
+        from quantsmind_agent.security.auth_gateway import AuthenticationGatewayError
 
         store = FakeSecretStore()
         store.set("provider:openrouter:default:api_key", OPENROUTER_KEY)
@@ -171,7 +171,7 @@ class TestApplicationWiring:
     def test_the_command_tool_environment_excludes_credential_variables(
         self, tmp_path: Path
     ) -> None:
-        from quantsmind_agent.command_tools import sanitized_environment
+        from quantsmind_agent.runtime.tools.builtin.command import sanitized_environment
 
         with pytest.MonkeyPatch.context() as patch:
             patch.setenv("OPENROUTER_API_KEY", OPENROUTER_KEY)

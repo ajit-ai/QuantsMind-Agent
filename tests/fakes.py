@@ -1,7 +1,7 @@
 """Test doubles for the model gateway.
 
 ``FakeModelProvider`` implements the full
-:class:`~quantsmind_agent.llm.ModelProvider` contract from a scripted list of
+:class:`~quantsmind_agent.providers.gateway.ModelProvider` contract from a scripted list of
 responses, so the Agent Core, tool system and GUI can be exercised without any
 network access or credentials.
 
@@ -18,7 +18,12 @@ from typing import Any
 import httpx
 
 from quantsmind_agent.errors import LLMTimeoutError, ModelUnavailableError, NetworkError
-from quantsmind_agent.llm import ChatRequest, ChatResponse, ProviderCapabilities, StreamChunk
+from quantsmind_agent.providers.gateway import (
+    ChatRequest,
+    ChatResponse,
+    ProviderCapabilities,
+    StreamChunk,
+)
 from quantsmind_agent.schema import ToolCall
 
 __all__ = [
@@ -66,7 +71,7 @@ def tool_response(
 class FakeModelProvider:
     """Scripted provider: yields one response per :meth:`complete` call.
 
-    Implements :class:`~quantsmind_agent.llm.ModelProvider` structurally. It
+    Implements :class:`~quantsmind_agent.providers.gateway.ModelProvider` structurally. It
     deliberately does not subclass the Protocol: the gateway relies on duck
     typing, and inheriting would couple the fake to the production interface.
 

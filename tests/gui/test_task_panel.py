@@ -21,11 +21,11 @@ from typing import Any, ClassVar
 import pytest
 from PySide6.QtWidgets import QPushButton
 
-from quantsmind_agent.gui.task_panel import TaskPanel, WorkspaceScanBridge
-from quantsmind_agent.orchestrator import Orchestrator
-from quantsmind_agent.task_policy import TaskPolicy, approval_for_plan
-from quantsmind_agent.tasks import Plan, PlannedStep, RiskLevel, Task, TaskStatus
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.gui.task.panel import TaskPanel, WorkspaceScanBridge
+from quantsmind_agent.services.tasks.models import Plan, PlannedStep, RiskLevel, Task, TaskStatus
+from quantsmind_agent.services.tasks.orchestrator import Orchestrator
+from quantsmind_agent.services.tasks.policy import TaskPolicy, approval_for_plan
+from quantsmind_agent.services.workspace.containment import Workspace
 
 
 class StubResult:
@@ -323,7 +323,7 @@ class TestPanelRunsATask:
 
 class TestPanelRejectsWorkWithoutApproval:
     def test_a_rejected_plan_leaves_nothing_runnable(self, qapp: object, tmp_path: Path) -> None:
-        from quantsmind_agent.tasks import PlanRejected
+        from quantsmind_agent.services.tasks.models import PlanRejected
 
         panel = TaskPanel()
         workspace = Workspace(tmp_path)

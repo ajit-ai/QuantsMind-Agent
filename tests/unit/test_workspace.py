@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from quantsmind_agent.errors import InvalidPathError, InvalidWorkspaceError
-from quantsmind_agent.workspace import DEFAULT_IGNORED_DIRECTORIES, Workspace, is_within
+from quantsmind_agent.services.workspace.containment import (
+    DEFAULT_IGNORED_DIRECTORIES,
+    Workspace,
+    is_within,
+)
 
 
 class TestConstruction:

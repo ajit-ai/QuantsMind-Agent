@@ -14,19 +14,19 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from quantsmind_agent.llm import (
+from quantsmind_agent.providers.gateway import (
     ChatRequest,
     ModelGateway,
     ProviderCapabilities,
 )
-from quantsmind_agent.planner import (
+from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
+from quantsmind_agent.services.tasks.models import PlanRejected
+from quantsmind_agent.services.tasks.planner import (
     PLAN_SCHEMA,
     PLAN_SCHEMA_VERSION,
     TaskPlanner,
     plan_from_payload,
 )
-from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
-from quantsmind_agent.tasks import PlanRejected
 from tests.fakes import FakeModelProvider, text_response
 
 pytestmark = pytest.mark.integration

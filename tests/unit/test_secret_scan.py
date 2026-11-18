@@ -86,3 +86,71 @@ class TestTheProjectItselfIsClean:
     def test_no_credential_shaped_strings_in_the_repository(self) -> None:
         findings = secret_scan.scan(secret_scan.candidates(staged=False))
         assert findings == [], "credential-shaped strings found:\n" + "\n".join(findings)
+
+
+class TestCandidateSelection:
+    def _repo(self, tmp_path: Path) -> Path:
+        import subprocess
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "scanner-test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "scanner@example.com"], cwd=repo, check=True)
+        (repo / "tracked.py").write_text("print('ok')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True
+        )
+        return repo
+
+    def test_default_scan_covers_tracked_files_on_a_clean_checkout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A clean checkout must not degrade to an empty candidate list."""
+        import subprocess
+
+        repo = self._repo(tmp_path)
+        key_line = "OPENROUTER_API_KEY=" + "sk-" + "abc123def456ghi789jkl012mno345pqr"
+        (repo / "tracked.py").write_text(key_line + "\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "credential"], cwd=repo, check=True, capture_output=True
+        )
+        monkeypatch.chdir(repo)
+
+        candidates = secret_scan.candidates(staged=False)
+
+        assert Path("tracked.py") in candidates
+        assert secret_scan.scan(candidates)
+
+    def test_default_scan_includes_untracked_files_in_a_dirty_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = self._repo(tmp_path)
+        (repo / "untracked.py").write_text("x = 1\n", encoding="utf-8")
+        monkeypatch.chdir(repo)
+
+        candidates = secret_scan.candidates(staged=False)
+
+        assert Path("tracked.py") in candidates
+        assert Path("untracked.py") in candidates
+
+    def test_clean_checkout_runs_the_full_guard(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = self._repo(tmp_path)
+        (repo / "tracked.py").write_text(
+            "OPENROUTER_API_KEY=" + "sk-" + "abc123def456ghi789jkl012mno345pqr\n",
+            encoding="utf-8",
+        )
+        import subprocess
+
+        subprocess.run(["git", "add", "tracked.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "credential"], cwd=repo, check=True, capture_output=True
+        )
+        monkeypatch.chdir(repo)
+
+        assert secret_scan.main([]) == 1
+        assert "tracked.py" in capsys.readouterr().err
