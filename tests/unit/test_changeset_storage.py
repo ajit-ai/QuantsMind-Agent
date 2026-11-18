@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
 from quantsmind_agent.persistence.paths import AppPaths
 from quantsmind_agent.services.changesets.lifecycle import ChangeSetStatus
 from quantsmind_agent.services.changesets.storage import (
@@ -86,7 +87,7 @@ def test_canonical_json_sorts_keys_and_drops_insignificant_space() -> None:
 
 
 def test_canonical_json_leaves_text_unescaped_so_digests_are_portable() -> None:
-    assert "é".encode("utf-8") in canonical_json({"k": "é"})
+    assert "é".encode() in canonical_json({"k": "é"})
 
 
 @pytest.mark.parametrize("material", [{"ratio": 0.5}, {"nested": [{"x": 1.0}]}, {1: "key"}, {"o": object()}])
@@ -511,7 +512,7 @@ def test_approval_and_verification_evidence_land_on_the_declared_files(
 
 def test_a_rendered_diff_is_stored_and_reported_by_digest(store: ChangeSetStore) -> None:
     digest = store.save_diff(paths := store.paths_for(WORKSPACE_KEY, CHANGESET_ID), "--- a\n+++ b\n")
-    assert digest == content_digest("--- a\n+++ b\n".encode())
+    assert digest == content_digest(b"--- a\n+++ b\n")
     assert paths.diff_patch.read_text(encoding="utf-8") == "--- a\n+++ b\n"
 
 

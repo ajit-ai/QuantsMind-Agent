@@ -51,11 +51,11 @@ __all__ = [
     "Journal",
     "LayoutError",
     "StoredChangeSet",
+    "canonical_json",
     "content_digest",
     "digest_of",
     "new_changeset_id",
     "sha256_hex",
-    "canonical_json",
     "utc_now_stamp",
     "verify_digest",
     "workspace_key_for",
@@ -558,7 +558,7 @@ class Journal:
             record["ts"] = utc_now_stamp()
 
         line = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        encoded = f"{line}\n".encode("utf-8")
+        encoded = f"{line}\n".encode()
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
@@ -689,7 +689,7 @@ class ChangeSetStore:
         """temp + fsync + ``os.replace`` (§6.5), then verified from the file."""
 
         text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
-        atomic_write_bytes(Path(path), f"{text}\n".encode("utf-8"))
+        atomic_write_bytes(Path(path), f"{text}\n".encode())
         if read_json_object(Path(path)) is None:
             raise CorruptRecordError("the metadata just written cannot be read back", path=str(path))
 
