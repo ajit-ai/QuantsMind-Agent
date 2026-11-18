@@ -50,4 +50,7 @@ jobs:
       - name: Build unsigned portable (intermediate, never released)
         run: python scripts/build_executable.py --distpath dist-ci
       - name: Verify wheel version
+        # Default shell on windows-latest is PowerShell, which passes a literal
+        # glob to native commands. Use bash so dist/*.whl expands to the wheel.
+        shell: bash
         run: python scripts/verify_version.py dist/*.whl
