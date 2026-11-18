@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import quantsmind_agent.runtime.tools.builtin.pty_backend as _pty_backend
 from quantsmind_agent.runtime.tools.builtin.pty_backend import PtyBackend, PtyUnavailable
 
 
@@ -52,3 +54,59 @@ def test_short_lived_exit_code(tmp_path: Path) -> None:
     s.terminate()
     # No lingering child process.
     assert subprocess.run(["git", "--version"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only helper wiring")
+def test_posix_process_helpers_are_callable() -> None:
+    """Regression: the POSIX helpers must not be clobbered to None.
+
+    The Windows-absent branch at the end of pty_backend.py previously set
+    ``_terminate_process_group``, ``_close_conpty`` and ``_wait_process`` to
+    ``None`` even on POSIX, overwriting their real definitions. terminate()
+    then raised TypeError (swallowed), leaving children unreaped and exit_code
+    None after close. These helpers must be callables on every platform where
+    PtySession.terminate()/_close_fds() invoke them.
+    """
+
+    for name in ("_terminate_process_group", "_close_conpty", "_wait_process"):
+        helper = getattr(_pty_backend, name, None)
+        assert callable(helper), f"{name} must be callable on POSIX, got {helper!r}"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only process-group behavior")
+def test_posix_child_owns_its_process_group(tmp_path: Path) -> None:
+    """Regression: a POSIX PTY child must be in a separate process group.
+
+    Otherwise os.killpg(os.getpgid(child), SIGTERM) in terminate() signals the
+    host process group (the agent / test runner) rather than just the child.
+    """
+
+    b = PtyBackend()
+    try:
+        s = b.spawn(["sh"], cwd=str(tmp_path), timeout_seconds=10)
+    except PtyUnavailable:
+        pytest.skip("PTY unavailable on this host")
+    try:
+        assert os.getpgid(s.pid) != os.getpgrp()
+    finally:
+        s.terminate()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only reaping behavior")
+def test_posix_terminate_reaps_and_sets_exit_code(tmp_path: Path) -> None:
+    """Regression: terminate() must reap the POSIX child and set exit_code.
+
+    Directly asserts the contract that failed on Linux/macOS CI (exit_code
+    was None after terminate). No sleeps: the bounded wait inside terminate()
+    is the synchronization point.
+    """
+
+    b = PtyBackend()
+    try:
+        s = b.spawn(["sh"], cwd=str(tmp_path), timeout_seconds=10)
+    except PtyUnavailable:
+        pytest.skip("PTY unavailable on this host")
+    assert s.is_alive
+    s.terminate()
+    assert s.exit_code is not None
+    assert not s.is_alive

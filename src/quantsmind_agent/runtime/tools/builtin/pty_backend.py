@@ -330,13 +330,25 @@ class PtySession:
                 return
             self._closed = True
         try:
-            if self._process_handle is not None and self._get_exit_code() is None:
-                _terminate_process_group(self._process_handle, self._pid)
+            handle = self._process_handle
+            if handle is not None and self._get_exit_code() is None:
+                # Graceful shutdown: signal the whole child process group.
+                _terminate_process_group(handle, self._pid)
                 if sys.platform == "win32":
-                    _wait_process(self._process_handle, _TERMINATE_GRACE_SECONDS)
+                    _wait_process(handle, _TERMINATE_GRACE_SECONDS)
                 else:
-                    with contextlib.suppress(Exception):
-                        self._process_handle.wait(timeout=_TERMINATE_GRACE_SECONDS)
+                    try:
+                        handle.wait(timeout=_TERMINATE_GRACE_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        # A child may ignore SIGTERM (e.g. after interactive I/O
+                        # put it in a state that defers the signal). Escalate to
+                        # SIGKILL and wait again so the exit status is always
+                        # resolved and no child is left unreaped. Same bounded
+                        # grace period; never blocks indefinitely.
+                        with contextlib.suppress(Exception):
+                            handle.kill()
+                        with contextlib.suppress(Exception):
+                            handle.wait(timeout=_TERMINATE_GRACE_SECONDS)
         except Exception:  # pragma: no cover - defensive
             pass
         finally:
@@ -555,6 +567,12 @@ if sys.platform != "win32":
         for name in _CREDENTIAL_ENV_NAMES:
             env.pop(name, None)
 
+        # Start the child in its own session/process group so that
+        # PtySession.terminate()'s os.killpg(os.getpgid(pid), ...) targets only
+        # this child's tree and not the host process group (which contains the
+        # agent/test runner). Without this, the child shares the parent's group:
+        # killpg signals the parent too, the child is not reaped, and exit_code
+        # stays None after terminate(). Observed on Linux/macOS CI.
         process = subprocess.Popen(
             argv,
             cwd=cwd,
@@ -563,6 +581,7 @@ if sys.platform != "win32":
             stderr=slave_fd,
             close_fds=True,
             env=env,
+            start_new_session=True,
         )
         os.close(slave_fd)
 
@@ -1072,9 +1091,12 @@ if sys.platform == "win32":
         _WaitForSingleObject(process_handle, int(timeout * 1000))
 
 else:
+    # Only the Windows-specific symbols are undefined on POSIX. Do NOT clear
+    # the shared helpers (_close_conpty, _terminate_process_group, _wait_process):
+    # the POSIX branch above defines them and PtySession.terminate()/_close_fds()
+    # call them on every platform. Clearing them here made terminate() raise
+    # TypeError on Linux/macOS, which was swallowed and left children unreaped
+    # (exit_code stayed None after close).
     _win32_spawn = None  # type: ignore[assignment]
     _win32_resize_pty = None  # type: ignore[assignment]
-    _close_conpty = None  # type: ignore[assignment]
-    _terminate_process_group = None  # type: ignore[assignment]
     _get_exit_code = None  # type: ignore[assignment]
-    _wait_process = None  # type: ignore[assignment]
