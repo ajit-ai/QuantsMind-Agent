@@ -10,8 +10,8 @@ import inspect
 
 import pytest
 
-from quantsmind_agent import command_policy
-from quantsmind_agent.command_policy import CommandClass, classify_command, program_name
+from quantsmind_agent.security import command_policy
+from quantsmind_agent.security.command_policy import CommandClass, classify_command, program_name
 
 
 class TestProgramName:

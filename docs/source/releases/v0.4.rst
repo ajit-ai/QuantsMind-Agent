@@ -1,0 +1,276 @@
+==============
+Version 0.4
+==============
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Field
+     - Value
+   * - Version
+     - 0.4.0
+   * - Codename
+     - Controlled Autonomy
+   * - Status
+     - Alpha; bounded autonomous execution under an approved plan
+   * - Baseline
+     - ``dab3152`` (v0.3.0, frozen)
+   * - Platform
+     - Windows 11 AMD64
+
+What v0.4 is
+============
+
+v0.3 made the agent able to understand a project and to come back to the same
+conversation. v0.4 lets it carry out a piece of work without being talked through
+every step -- and puts a wall around that.
+
+The wall is the point. An agent that edits files on its own is only useful if
+somebody can see exactly what it is going to do first, can refuse, can stop it,
+and can find out afterwards what actually happened. So v0.4 is not "autonomy"; it
+is *bounded* autonomy:
+
+* you describe a change and the agent proposes a **plan**;
+* nothing at all runs until you **approve that plan**;
+* the agent executes **only the steps in the approved plan**, through the same
+  tools, permissions and approval dialogs as every other operation;
+* anything outside that scope, anything destructive, and anything touching the
+  network stops and asks again;
+* the agent then **verifies its own work** with the checks this repository
+  actually declares, and may make a **bounded number of repair attempts**;
+* the final report says what ran, what passed, and **what could not be verified**.
+
+The application stays free. There is no licence fee, no subscription, no account
+and no telemetry. Cloud model usage is billed by your provider against your key;
+local models avoid that entirely.
+
+The one rule everything else follows from
+=========================================
+
+**The model does not own the state machine.**
+
+A plan arrives from a language model, which means it arrives untrusted. It can
+name a tool that does not exist, a path outside the workspace, a dependency on a
+step that does not exist, or a dependency cycle. All of that is rejected before
+anything runs. What happens next -- which step is eligible, whether an operation
+is permitted, whether the budget allows another attempt, whether the task is
+finished -- is decided by :class:`~quantsmind_agent.orchestrator.Orchestrator`,
+in code, from the task's own records. A plan that parses is not a plan that is
+allowed.
+
+The task lifecycle
+==================
+
+.. code-block:: text
+
+    draft ──plan validated──▶ awaiting_approval ──approved──▶ approved
+       │                            │                            │
+       │                            └──rejected──▶ cancelled     ▼
+       └──plan rejected──▶ (stays draft)                       running
+                                                                     │
+                              ┌──────────────────────────────────────┤
+                              ▼                    ▼                ▼
+                          verifying             repairing         paused
+                              │                    │                │
+                              └────────┬───────────┘                │
+                                       ▼                            │
+                              completed / failed ◀──────────────────┘
+                                       │
+                              blocked (needs a decision)
+
+Every transition is persisted as it happens, so closing the application loses at
+most one action and never the evidence of what came before it.
+
+Planning and approval
+=====================
+
+A plan is an objective, acceptance criteria, and ordered steps. Each step names a
+**registered tool** from this application and its arguments -- there is no second
+execution path for the agent to use, because a step that names something that is
+not a tool is a step the orchestrator refuses.
+
+Before the first write, the plan is shown for review: what it will do, which files
+it expects to touch, how risky each step is, and what "done" means. Approval is
+bound to three things:
+
+* **a digest of the plan** -- edit one step after approving and the approval no
+  longer matches;
+* **a workspace** -- an approval for one project does not travel to another;
+* **a scope** -- approve ``src/`` and the agent may not touch ``docs/``.
+
+A revised plan does not inherit approval. It goes back to you.
+
+Acceptance criteria are part of the plan and out of the agent's reach. An agent
+that can edit its own definition of done will always conclude it succeeded; the
+report marks a criterion verified only when a passing check names it.
+
+What the policy layer enforces
+==============================
+
+There is exactly one place that decides whether an operation may run right now:
+:class:`~quantsmind_agent.task_policy.TaskPolicy`. The GUI cannot bypass it, a
+retry cannot bypass it, a recovered task cannot bypass it, and neither can a model
+that has decided it is finished. It weighs:
+
+1. **The workspace boundary**, resolved through the same
+   :class:`~quantsmind_agent.workspace.Workspace` that every other tool uses --
+   never by string comparison.
+2. **The approved plan.** A step that is not in the approved plan is refused even
+   if the tool would permit it.
+3. **Approval scope**, re-checked per target path.
+4. **Risk.** Reads and analysis proceed; deletes and commands need their own
+   approval; network access needs approval unless a configured policy names that
+   exact command.
+5. **Lifecycle.** Nothing runs before approval, while paused, or after
+   cancellation.
+
+Every check that cannot answer "yes" answers "no", and the reason is shown. Text
+is not a decision: instructions inside a plan, a file in the repository, or a
+tool's output cannot grant an approval, widen a scope, or re-authorise anything.
+
+What this is not
+----------------
+
+This is policy enforcement inside an application. It is **not** an operating
+system sandbox. A command you approve can do whatever that program can do. The
+protection is that unapproved commands never start, the workspace boundary is the
+same boundary the rest of the product uses, and every decision is recorded.
+
+Verification and repair
+=======================
+
+Checks are **discovered from the project**, not assumed: ``pyproject.toml``,
+``setup.cfg`` and a ``Makefile`` are read, and only what they declare is run. A
+project that declares no checks gets a report saying verification was unavailable,
+not an invented ``pytest`` run.
+
+Outcomes are recorded honestly, and the distinctions matter:
+
+=============  ==========================================================
+``passed``      the command ran and exited zero
+``failed``      the command ran and did not exit zero
+``skipped``     the tool is not installed here
+``blocked``     the command policy refused it, or it timed out
+``not_run``     never attempted
+=============  ==========================================================
+
+Nothing that could not run is ever counted as a pass, and the completion report
+lists them under ``unverified``. A check that hangs is reported as inconclusive
+rather than as a failure: it told us nothing about the code.
+
+A failing check may lead to a **repair**: at most three attempts per failed step
+by default. A repair may not add steps that were not in the approved plan, and
+exhausting the budget ends the task as failed rather than widening the scope.
+
+Budgets
+=======
+
+Every budget has a default *and* a hard ceiling that configuration cannot raise.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Budget
+     - Default
+     - Hard ceiling
+   * - Execution steps
+     - 20
+     - 200
+   * - Repairs per step
+     - 3
+     - 10
+   * - Active seconds
+     - 3600
+     - 28800
+   * - Checks per task
+     - 40
+     - 200
+
+The counters are part of the task and are persisted, so a restart continues the
+count rather than handing out a fresh allowance.
+
+Persistence and recovery
+========================
+
+Tasks are stored separately from conversations, in their own versioned store:
+one JSON file per task, written atomically, with a corrupt record quarantined
+rather than deleted. Keeping them apart is deliberate -- deleting a conversation
+should not delete a task's evidence, and reopening a conversation must never
+resume a task.
+
+After a restart, recovery compares the record against the world and **asks**
+rather than guessing:
+
+* a step that was in flight when the application stopped;
+* a file whose content no longer matches what was recorded;
+* a command whose outcome was never written down;
+* a workspace that is gone or has become a different project;
+* a plan that moved after approval.
+
+Each becomes a decision with its consequences spelled out. **Recovery never
+replays a side effect**: a command that may already have installed something is
+not re-run "to be sure", because the failure mode of replaying is a second side
+effect you never asked for. A task with nothing uncertain resumes on its own;
+anything else waits for you.
+
+Evidence, and what it is not
+============================
+
+A task record holds path, operation, existence and SHA-256 for each change -- not
+file contents. Copying whole files into a task record would duplicate the
+workspace and rot the moment you edited anything.
+
+**There is no automatic rollback in v0.4.** The application records what changed
+and offers recovery decisions; it does not promise to put your files back after
+anything, and it cannot undo a network request or an external change that already
+happened. Any future rollback would have to validate the current file state
+before reversing it.
+
+The task panel
+==============
+
+The task workflow lives in the application window, beside the conversation: a
+**Chat / Task** switcher at the top of the right pane, and the task view in the
+second page of a stacked widget. It is not a separate window, so the
+conversation, the tool activity and the task share one workspace, one status bar
+and one shutdown.
+
+Planning happens in the conversation. The panel cannot invent a plan, so
+"Propose plan" sends your objective to the agent in the chat view and switches
+there; when the model answers with a plan, it is validated and offered for
+review in the task view. That keeps **one** model-call path in the application
+instead of adding a second one only tasks use.
+
+The panel shows the objective, the plan, the step list with statuses, the files
+that changed, check outcomes and the final report. It runs the orchestrator on a
+worker thread, so a slow step cannot freeze the window, and shutting the window
+down stops the thread, cancels the task and joins it.
+
+Every control reflects real state: Run is disabled without a matching approval,
+Pause is disabled once the task is terminal, and Reject sits next to Approve
+because "approve everything" is not a choice.
+
+**Approving the plan is not approving every operation.** A task's steps go
+through the same permission broker as the chat, so a mutating step still asks,
+and the approval you give for a plan is bound to that plan's digest, your
+workspace and the scope you granted.
+
+Known limitations
+=================
+
+* **Policy, not isolation.** Approved commands run with your privileges.
+* **No automatic rollback**; recovery offers decisions, not reversals.
+* **No git automation.** v0.4 does not commit, push, merge or open pull requests,
+  and will not add that without a separate decision.
+* **Repair quality depends on the model.** The orchestrator bounds how often a
+  repair is tried; it cannot tell a good fix from a lucky one.
+* **Steps are single operations.** A step that needs five tool calls is five
+  steps, which makes plans longer to review than they could be.
+* **The provider credential in the development profile is expired**, so no
+  live-model behaviour was re-verified for this milestone. Everything that does
+  not need a model was.
+
+See :ref:`architecture-security-boundaries` for the security model in full, and
+``docs/source/packaging.rst`` for the Windows packages.

@@ -11,10 +11,10 @@ import threading
 from pathlib import Path
 
 from quantsmind_agent.app import ApplicationContext
-from quantsmind_agent.gui.main_window import MainWindow
-from quantsmind_agent.gui.worker import AgentWorkerBridge
-from quantsmind_agent.llm import ChatRequest, ChatResponse
-from quantsmind_agent.permissions import ApprovalOutcome
+from quantsmind_agent.gui.shell.window import MainWindow
+from quantsmind_agent.gui.shell.worker import AgentWorkerBridge
+from quantsmind_agent.providers.gateway import ChatRequest, ChatResponse
+from quantsmind_agent.security.permissions import ApprovalOutcome
 from tests.fakes import FakeModelProvider
 
 __all__ = ["GuiHarness"]
@@ -54,12 +54,17 @@ class GuiHarness:
         self.context.agent._gateway.set_provider(self.provider)
 
     def open_project(self, path: Path | str) -> None:
-        """Open ``path`` exactly as the folder-picker would.
+        """Open ``path`` as a project the user has explicitly chosen to trust.
 
-        Opening a project rebuilds the agent stack, so the scripted provider is
-        reinstalled on the new gateway afterwards.
+        GUI tests cannot answer the modal trust prompt, so the harness records
+        the same explicit decision the folder picker would persist before the
+        window opens the folder. Opening a project rebuilds the agent stack, so
+        the scripted provider is reinstalled on the new gateway afterwards.
         """
 
+        candidate = Path(path)
+        if candidate.exists():
+            self.context.trust_store.decide(candidate.resolve(), trusted=True)
         self.window._on_open_workspace(str(path))
         self.install_provider()
 

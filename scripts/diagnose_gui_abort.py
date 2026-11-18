@@ -100,6 +100,19 @@ def main(argv: list[str] | None = None) -> int:
 
     command = [sys.executable, "scripts/run_qt_tests.py", args.target, "-q", *extra]
 
+    # pytest captures at file-descriptor level by default, which means the child
+    # replaces fd 1 and fd 2 for the whole run. When the interpreter then aborts,
+    # the "Fatal Python error: Aborted" banner is written into pytest's capture
+    # buffer -- and the dying process never gets to read it back. The abort logs
+    # come out as a few dozen progress dots and no explanation at all, which is
+    # exactly the evidence the harness exists to collect.
+    #
+    # --capture=no keeps the banner at the process level so it survives the crash.
+    # It changes capture semantics, so this is measurement configuration, not a
+    # change to the suite: no test is skipped, disabled or weakened.
+    if not any(a.startswith("--capture") or a == "-s" for a in extra):
+        command.append("--capture=no")
+
     # Each run gets its own basetemp. pytest's default is a single shared
     # directory that it rewrites per run, so back-to-back runs -- or a stale
     # directory some other process still holds open -- can make every run fail

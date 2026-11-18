@@ -17,11 +17,13 @@ instance and never included in error messages.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import fields
 from typing import Any
 
 import httpx
 
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.errors import (
     LLMConfigurationError,
     LLMProtocolError,
@@ -31,8 +33,13 @@ from quantsmind_agent.errors import (
     NetworkError,
     QuantsMindError,
 )
-from quantsmind_agent.llm import ChatRequest, ChatResponse, StreamChunk
-from quantsmind_agent.logging_setup import get_logger
+from quantsmind_agent.providers.gateway import (
+    ChatRequest,
+    ChatResponse,
+    ProviderCapabilities,
+    StreamChunk,
+    parse_structured,
+)
 from quantsmind_agent.schema import ToolCall
 
 __all__ = ["OpenAICompatProvider"]
@@ -43,9 +50,20 @@ _DONE_SENTINEL = "[DONE]"
 
 
 class OpenAICompatProvider:
-    """A :class:`~quantsmind_agent.llm.ModelProvider` for OpenAI-style APIs."""
+    """A :class:`~quantsmind_agent.providers.gateway.ModelProvider` for OpenAI-style APIs."""
 
     name = "openai_compatible"
+
+    #: What the *protocol* supports. A particular service behind this protocol
+    #: may honour less; ``capabilities`` below narrows that per endpoint, and the
+    #: presets in :mod:`quantsmind_agent.app.settings` say by how much.
+    base_capabilities = ProviderCapabilities(
+        tools=True,
+        streaming=True,
+        structured_output=True,
+        context_window=None,
+        cancellation=False,
+    )
 
     def __init__(
         self,
@@ -55,8 +73,11 @@ class OpenAICompatProvider:
         organization: str | None = None,
         timeout_seconds: float = 120.0,
         requires_api_key: bool = True,
+        capabilities: ProviderCapabilities | Mapping[str, Any] | None = None,
         transport: httpx.BaseTransport | None = None,
         client: httpx.Client | None = None,
+        follow_redirects: bool = False,
+        trust_env: bool = True,
     ) -> None:
         base = str(base_url).strip().rstrip("/")
         if not base.startswith(("http://", "https://")):
@@ -72,6 +93,50 @@ class OpenAICompatProvider:
         self._api_key_source = api_key
         self._transport = transport
         self._client = client
+        #: Redirects are refused by default (M3B-S1.1). A redirect would move
+        #: the request -- and the prompt and the ``Authorization`` header with
+        #: it -- to a host the security policy never authorised.
+        self._follow_redirects = bool(follow_redirects)
+        #: Whether environment variables (proxy settings, ``.netrc``) may shape
+        #: the connection. The authentication gateway turns this off for a
+        #: credential-bearing route so a proxy variable cannot silently become
+        #: the destination of a request that carries an API key.
+        self._trust_env = bool(trust_env)
+        self.capabilities = self._resolve_capabilities(capabilities)
+
+    @classmethod
+    def _resolve_capabilities(
+        cls, overrides: ProviderCapabilities | Mapping[str, Any] | None
+    ) -> ProviderCapabilities:
+        """Merge an endpoint's declared capabilities over the protocol's own.
+
+        Only keys the endpoint actually declares are overridden, so a preset that
+        is silent about streaming adds no opinion rather than removing streaming.
+        An explicit ``None`` in the override means "unknown", which is different
+        from silence and is preserved as such.
+        """
+
+        if overrides is None:
+            return cls.base_capabilities
+        if isinstance(overrides, ProviderCapabilities):
+            return overrides
+        known = {item.name for item in fields(ProviderCapabilities)}
+        unknown = set(overrides) - known
+        if unknown:
+            raise LLMConfigurationError(
+                f"Unknown capability names: {', '.join(sorted(unknown))}",
+                user_message=(
+                    "The provider configuration names capabilities that do not exist: "
+                    f"{', '.join(sorted(unknown))}."
+                ),
+                details={"unknown": sorted(unknown), "known": sorted(known)},
+            )
+        merged = {
+            item.name: getattr(cls.base_capabilities, item.name)
+            for item in fields(cls.base_capabilities)
+        }
+        merged.update(overrides)
+        return ProviderCapabilities(**merged)
 
     # -- credential -------------------------------------------------------
     def _resolve_api_key(self) -> str | None:
@@ -102,7 +167,31 @@ class OpenAICompatProvider:
         return httpx.Client(
             timeout=httpx.Timeout(self.timeout_seconds, connect=15.0),
             transport=self._transport,
-            follow_redirects=True,
+            follow_redirects=self._follow_redirects,
+            trust_env=self._trust_env,
+            # Certificate validation is never turned off. It is stated here so
+            # that the next person to touch this constructor has to delete the
+            # line rather than not notice it.
+            verify=True,
+        )
+
+    def _refuse_redirect(self, response: httpx.Response) -> None:
+        """Report a redirect as an error instead of following it (M3B-S1.1)."""
+
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return
+        location = response.headers.get("location", "")
+        raise LLMProtocolError(
+            "The provider redirected the request",
+            user_message=(
+                "The provider redirected the request to another address. The application "
+                "does not follow redirects for authenticated requests, so no API key was "
+                "sent to the new address. Check the provider address in Settings."
+            ),
+            details={
+                "status_code": response.status_code,
+                "location_host": location.split("/")[2] if "://" in location else "",
+            },
         )
 
     def _close_http(self, client: httpx.Client) -> None:
@@ -200,6 +289,19 @@ class OpenAICompatProvider:
             payload["tool_choice"] = "auto"
         if request.stop:
             payload["stop"] = request.stop
+        if request.structured is not None:
+            # The native constrained-output form is only requested when the
+            # endpoint has declared it. Otherwise the request still goes out and
+            # the answer is parsed and validated by the application, which the
+            # response records as "parsed" rather than "native".
+            payload["response_format"] = (
+                {
+                    "type": "json_schema",
+                    "json_schema": {"name": "response", "schema": request.structured.schema},
+                }
+                if request.structured.native
+                else {"type": "json_object"}
+            )
         return payload
 
     # -- ModelProvider ----------------------------------------------------
@@ -210,6 +312,7 @@ class OpenAICompatProvider:
         try:
             try:
                 response = client.get(f"{self.base_url}/models", headers=self._headers())
+                self._refuse_redirect(response)
                 self._check_status(response)
                 body = response.json()
             except QuantsMindError:
@@ -246,6 +349,7 @@ class OpenAICompatProvider:
                     json=payload,
                     timeout=timeout,
                 )
+                self._refuse_redirect(response)
                 self._check_status(response)
                 try:
                     body = response.json()
@@ -266,7 +370,7 @@ class OpenAICompatProvider:
         finally:
             self._close_http(client)
 
-        return self.parse_completion(body, fallback_model=request.model)
+        return self.parse_completion(body, fallback_model=request.model, request=request)
 
     def stream(self, request: ChatRequest) -> Iterator[StreamChunk]:
         """Yield response increments from an SSE stream."""
@@ -283,6 +387,7 @@ class OpenAICompatProvider:
                     json=payload,
                     timeout=timeout,
                 ) as response:
+                    self._refuse_redirect(response)
                     self._check_status(response)
                     yield from self._iter_sse(response)
             except QuantsMindError:
@@ -294,7 +399,9 @@ class OpenAICompatProvider:
 
     # -- parsing ----------------------------------------------------------
     @staticmethod
-    def parse_completion(body: Any, *, fallback_model: str = "") -> ChatResponse:
+    def parse_completion(
+        body: Any, *, fallback_model: str = "", request: ChatRequest | None = None
+    ) -> ChatResponse:
         """Convert an OpenAI chat-completion body into a :class:`ChatResponse`."""
 
         if not isinstance(body, dict):
@@ -328,14 +435,28 @@ class OpenAICompatProvider:
         raw_usage = body.get("usage")
         usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
 
+        text = content if isinstance(content, str) else ""
+        structured: Any = None
+        structured_mode = ""
+        wanted = getattr(request, "structured", None)
+        if wanted is not None:
+            # Parsed and validated here, whatever the endpoint did or did not
+            # enforce. A malformed or off-schema answer raises rather than
+            # arriving as an empty result, because "no data" and "bad data" must
+            # not look the same to the caller.
+            structured = parse_structured(text, wanted.schema)
+            structured_mode = "native" if wanted.native else "parsed"
+
         return ChatResponse(
-            content=content if isinstance(content, str) else "",
+            content=text,
             model=str(body.get("model") or fallback_model),
             tool_calls=tool_calls,
             finish_reason=choice.get("finish_reason"),
             prompt_tokens=_as_int(usage.get("prompt_tokens")),
             completion_tokens=_as_int(usage.get("completion_tokens")),
             raw=body,
+            structured=structured,
+            structured_mode=structured_mode,
         )
 
     @staticmethod

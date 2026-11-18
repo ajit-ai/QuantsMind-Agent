@@ -10,10 +10,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from quantsmind_agent.config import ProviderSettings
+from quantsmind_agent.app.settings import ProviderSettings
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.errors import LLMConfigurationError
-from quantsmind_agent.llm import ModelProvider
-from quantsmind_agent.logging_setup import get_logger
+from quantsmind_agent.providers.gateway import ModelProvider
 from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
 
 __all__ = [
@@ -44,6 +44,8 @@ def build_provider(
     *,
     api_key: str | Callable[[], str | None] | None = None,
     transport: Any | None = None,
+    follow_redirects: bool = False,
+    trust_env: bool = True,
 ) -> ModelProvider:
     """Instantiate the provider described by ``settings``.
 
@@ -54,6 +56,12 @@ def build_provider(
         the key is read at request time and never cached on the provider.
     transport:
         Optional ``httpx`` transport; used by tests to stub the network.
+    follow_redirects:
+        Off by default (M3B-S1.1): a redirect would carry the prompt and the
+        ``Authorization`` header to a host the policy never authorised.
+    trust_env:
+        Whether proxy environment variables may shape the connection. The
+        authentication gateway turns this off for credential-bearing routes.
     """
 
     name = settings.name.strip() or OPENAI_COMPAT
@@ -74,5 +82,8 @@ def build_provider(
         organization=settings.organization,
         timeout_seconds=settings.timeout_seconds,
         requires_api_key=settings.requires_api_key(),
+        capabilities=settings.capabilities() or None,
         transport=transport,
+        follow_redirects=follow_redirects,
+        trust_env=trust_env,
     )

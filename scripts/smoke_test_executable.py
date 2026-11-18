@@ -213,9 +213,21 @@ def main(argv: list[str] | None = None) -> int:
         check("no traceback on startup", "Traceback (most recent call last)" not in err, "")
 
         # -- workspace and unicode path handling --------------------------
+        # Tools are registered only for a trusted workspace. A fresh config dir
+        # has no trust decision, so the workspace would open in Restricted Mode
+        # with no tools and this check would measure trust state rather than
+        # whether the frozen bundle registered its workspace tools. Use the
+        # supported CLI flag to establish the trusted precondition.
         code, out, err = run(
             exe,
-            ["--check-config", "--config-dir", str(config_dir), "--workspace", str(workspace)],
+            [
+                "--check-config",
+                "--config-dir",
+                str(config_dir),
+                "--workspace",
+                str(workspace),
+                "--trust-workspace",
+            ],
             workdir,
         )
         # Deliberately not asserting on "ready: yes". Readiness also requires a

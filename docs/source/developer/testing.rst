@@ -54,10 +54,12 @@ Isolation
 
 ``tests/conftest.py`` guarantees three things for every test:
 
-* **No ambient credentials.** ``QM_API_KEY`` and ``OPENAI_API_KEY`` are removed.
-* **No real profile.** ``AppPaths`` points at ``tmp_path``, and the secret store
-  is the file backend, so tests never touch
-  ``%LOCALAPPDATA%\QuantsMind-Agent``.
+* **No ambient credentials.** ``QM_API_KEY`` and every provider-specific
+  variable (``OPENAI_API_KEY``, ``OPENROUTER_API_KEY``, and the rest) are
+  removed.
+* **No real profile.** ``AppPaths`` points at ``tmp_path`` and the configuration
+  manager uses an in-memory secure store, so tests never touch
+  ``%LOCALAPPDATA%\QuantsMind-Agent`` or the operator's real keyring.
 * **No log noise.** The package logger is pinned to ``CRITICAL`` and handlers
   are torn down afterwards.
 
@@ -86,6 +88,13 @@ Agent loop and recovery     ``integration/test_agent_loop.py``
 Streaming and composition   ``integration/test_streaming_and_app.py``
 Widgets                     ``gui/test_widgets.py``
 Main window                 ``gui/test_main_window.py``
+Credential resolution       ``security/test_phase08_credential_authority.py``
+Provider/endpoint identity  ``security/test_m3b_s11_credential_security.py``
+Credential migration        ``security/test_m3b_s12_credential_migration.py``
+Security wiring             ``security/test_m3b_s11_config_and_wiring.py``
+Sandbox/transport           ``security/test_m3b_s14_sandbox_and_transport.py``,
+                            ``security/test_m3b_s14_pinned_transport.py``
+Security settings GUI       ``gui/test_m3b_s12_security_settings.py``
 ==========================  ======================================================
 
 .. _developer-testing-fakes:
@@ -124,6 +133,25 @@ serve ``httpx`` responses, including errors and malformed payloads:
     with pytest.raises(ModelUnavailableError):
         provider.complete(request)
 
+Continuous integration
+======================
+
+``.github/workflows/ci.yml`` runs on pushes to ``main``, ``develop`` and
+``release/**``, on version tags (``v*``), and on pull requests targeting those
+branches. The test job matrix covers Ubuntu (Python 3.11 and 3.12), Windows 3.12
+and macOS 3.12. ``tests/security`` runs as its own step on every matrix entry,
+so credential, identity and audit invariants are exercised on the Windows
+target as well as on Linux.
+
+Coverage is measured on Ubuntu with Python 3.12 over the whole suite and
+uploaded as an XML artifact. Coverage is currently reported and uploaded; no
+threshold is enforced, so a coverage drop is visible but does not fail the
+build. The measured baseline at Phase 0.8 was 88% (2111 passed, 3 skipped on
+Windows).
+
+A local run is not CI evidence. A green CI result may only be claimed for an
+exact commit that the hosted workflow actually tested.
+
 .. _developer-testing-what-is-not-covered:
 
 What is NOT covered
@@ -138,8 +166,10 @@ Honest limits of the automated suite:
 * **No interactive desktop.** Widgets are exercised offscreen: no window
   dragging, DPI scaling, native dialogs, taskbar integration or focus behaviour.
 * **No visual regression.** There are no screenshot assertions.
-* **No packaging test.** ``python -m build`` validates metadata and imports;
-  PyInstaller output is verified manually.
+* **No packaging test in the ordinary suite.** ``python -m build`` validates
+  metadata and imports. PyInstaller, MSI install and uninstall checks have
+  dedicated scripts, but their results are separate evidence and are not
+  inferred from a pytest run.
 * **No concurrency stress.** The threading tests are single-turn and
   deterministic.
 

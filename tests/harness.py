@@ -10,21 +10,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from quantsmind_agent.agent import AgentCore, StreamEmitter
-from quantsmind_agent.command_tools import build_command_tools
 from quantsmind_agent.context import ContextEngine
 from quantsmind_agent.events import AgentEvent, AgentEventType, EventBus
 from quantsmind_agent.git_tools import build_git_tools
-from quantsmind_agent.llm import ChatRequest, ModelGateway
-from quantsmind_agent.permissions import (
+from quantsmind_agent.providers.gateway import ChatRequest, ModelGateway
+from quantsmind_agent.runtime.agent.core import AgentCore, StreamEmitter
+from quantsmind_agent.runtime.tools import ToolRegistry, ToolResult
+from quantsmind_agent.runtime.tools.builtin.command import build_command_tools
+from quantsmind_agent.security.permissions import (
     ApprovalCallback,
     ApprovalOutcome,
     PermissionBroker,
     StaticPermissionProvider,
 )
-from quantsmind_agent.session import Session
-from quantsmind_agent.tools import ToolRegistry, ToolResult
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.conversations.session import Session
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.workspace_tools import build_default_tools
 from quantsmind_agent.write_tools import build_mutating_tools
 from tests.fakes import FakeModelProvider

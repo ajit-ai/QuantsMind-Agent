@@ -215,3 +215,42 @@ class TestPlatformMetadata:
     def test_requires_python_matches_the_tested_floor(self) -> None:
         text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
         assert 'requires-python = ">=3.11"' in text
+
+
+class TestVersionConsistency:
+    """One version, reported identically everywhere it can be read.
+
+    The version appears in the source module, the packaging metadata, the window
+    title, the MSI and the build metadata. Those are read by different tools at
+    different times, so a release that reports two different versions is a real
+    and confusing failure rather than a cosmetic one.
+    """
+
+    def test_pyproject_and_the_package_agree(self) -> None:
+        import tomllib
+
+        from quantsmind_agent.version import __version__
+
+        data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+        assert data["project"]["version"] == __version__
+
+    def test_version_info_matches_the_version_string(self) -> None:
+        from quantsmind_agent.version import __version__, version_info
+
+        assert ".".join(str(part) for part in version_info) == __version__
+
+    def test_the_ci_wheel_check_uses_the_built_filename(self) -> None:
+        """A stale literal filename makes the gate inspect a file nobody builds."""
+
+        import re
+
+        workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        assert "scripts/verify_version.py dist/*.whl" in workflow
+        assert not re.search(r"quantsmind_agent-\d+\.\d+\.\d+-py3-none-any\.whl", workflow)
+
+    def test_verify_version_reads_the_source_version(self) -> None:
+        import verify_version
+
+        from quantsmind_agent.version import __version__
+
+        assert __version__ == verify_version.EXPECTED_VERSION

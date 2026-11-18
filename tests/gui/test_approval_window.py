@@ -26,8 +26,8 @@ from PySide6.QtCore import QEvent, QEventLoop, Qt, QThread
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from quantsmind_agent.events import AgentEventType
-from quantsmind_agent.gui.approval import ApprovalBridge, ApprovalDialog, build_prompt
-from quantsmind_agent.permissions import ApprovalOutcome, Permission, PermissionRequest
+from quantsmind_agent.gui.security.approval import ApprovalBridge, ApprovalDialog, build_prompt
+from quantsmind_agent.security.permissions import ApprovalOutcome, Permission, PermissionRequest
 
 pytestmark = pytest.mark.gui
 
@@ -122,7 +122,7 @@ class TestOwnershipAwareTeardown:
         mistaken for flakiness.
         """
 
-        from quantsmind_agent.gui.approval import ApprovalDialog
+        from quantsmind_agent.gui.security.approval import ApprovalDialog
 
         freed: list[object] = []
         real_delete = shiboken6.delete
@@ -163,7 +163,7 @@ class TestOwnershipAwareTeardown:
     ) -> None:
         """A parentless dialog is Python owned, so it must actually be freed."""
 
-        from quantsmind_agent.gui.approval import ApprovalDialog
+        from quantsmind_agent.gui.security.approval import ApprovalDialog
 
         freed: list[object] = []
         real_delete = shiboken6.delete

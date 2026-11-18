@@ -1,0 +1,23 @@
+schema_version = 1
+
+[product]
+name = "QuantsMind-Agent"
+upgrade_code = "{7C4A2B8D-0F11-4E2A-9B3C-5D6E7F8A9B0C}"
+
+[release]
+target_version = "1.0.0"
+qualified_source_version = "0.9.0"
+source_is_target = false
+distribution_authorized = false
+minimum_upgrade_from = "0.9.0"
+
+[windows_installer]
+product_code_namespace = "e2a0c8b7-5a4d-4f21-9d67-3b8c1e5f7a92"
+upgrade_schedule = "afterInstallInitialize"
+allow_same_version_upgrades = false
+
+[signing]
+algorithm = "sha256"
+timestamp_required = true
+certificate_thumbprint_env = "QM_SIGNING_CERT_SHA1"
+timestamp_url_env = "QM_SIGNING_TIMESTAMP_URL"

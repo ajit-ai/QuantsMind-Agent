@@ -16,11 +16,15 @@ a bounded structure summary and lets the model pull specifics with tools.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from quantsmind_agent.logging_setup import get_logger
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.schema import Message, UserMessage
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from quantsmind_agent.project_intel import ProjectIntelligence
 
 __all__ = [
     "DEFAULT_SYSTEM_PROMPT",
@@ -38,16 +42,40 @@ project on their own machine.
 Operating rules:
 - Work only inside the project folder that has been opened. Never claim to have
   read a file you have not read with a tool.
-- Use the provided tools to inspect the project before answering questions about
-  it. Prefer `project_structure` for orientation, `read_file` for contents,
-  `search_content` for finding symbols, and `list_directory` for quick checks.
 - Paths in tool arguments must be relative to the workspace root.
 - If a tool fails, read the error and correct the arguments; do not repeat an
   identical failing call more than once.
 - When you have enough information, answer directly and concisely. Cite files as
   `path/to/file.py:42` when referring to specific code.
-- You cannot run commands, modify files, use git or access the network in this
-  version. Say so plainly if asked to.
+
+Finding code:
+- `project_structure` gives a bounded tree of the project; `list_directory`
+  lists one folder. Use them for orientation before anything else.
+- `project_symbols` maps every class and function in the project, with file and
+  line range. Use it first to locate code you have not read.
+- `code_outline` gives one file's structure with exact line ranges. Prefer it to
+  reading a whole module: an outline plus `read_file` with `start_line` is
+  cheaper and more precise than reading every file.
+- `find_references` shows where a symbol is defined and used. Check it before a
+  rename or a behaviour change so you know the blast radius.
+- `search_content` is the fallback for text that is not a symbol.
+
+Making changes:
+- `edit_file` changes part of a file and refuses when it no longer matches what
+  you expected, so re-read before retrying a stale edit. `write_file` replaces a
+  whole file. `undo_file` reverts the last change the agent made to one file.
+- Every write, delete, undo and command asks the user first. A denial is final:
+  do not ask again by repeating the same call. Explain what you wanted instead.
+- `run_command` runs one command without a shell, inside the project, with a
+  timeout and bounded output. It cannot chain commands with `;`, `&&` or `|`.
+
+The change loop:
+- Locate the code, make the smallest edit that solves the problem, then verify.
+- After an edit, re-run the check that failed. When output is truncated the tail
+  is kept as well as the head, because the failure is usually at the end.
+- A refused repeat means nothing changed since the last time; change something
+  or answer with what you already know.
+- You have no network access.
 """
 
 
@@ -109,6 +137,8 @@ class ContextEngine:
         self._history_turns = history_turns
         self._max_structure_entries = max_structure_entries
         self._cached_summary: str | None = None
+        #: Shared project map, or ``None``. See :meth:`set_project_intel`.
+        self._intelligence: Any | None = None
 
     # -- configuration ---------------------------------------------------
     @property
@@ -117,6 +147,18 @@ class ContextEngine:
 
     def set_workspace(self, workspace: Workspace | None) -> None:
         self._workspace = workspace
+        self._cached_summary = None
+
+    def set_project_intel(self, intelligence: ProjectIntelligence | None) -> None:
+        """Point the orientation block at a project map.
+
+        Optional and typed loosely on purpose: :class:`ProjectIntelligence` imports
+        the parsers, and the context engine is imported by them, so importing it
+        here would be a cycle. ``None`` restores the plain directory listing, which
+        is what an embedding caller without the intelligence gets.
+        """
+
+        self._intelligence = intelligence
         self._cached_summary = None
 
     def set_custom_prompt(self, prompt: str) -> None:
@@ -144,6 +186,10 @@ class ContextEngine:
             return self._cached_summary
 
         root = self._workspace.root
+        if self._intelligence is not None:
+            self._cached_summary = self._project_summary(root)
+            return self._cached_summary
+
         lines = [f"Root: {root}", f"Project folder: {root.name}"]
         try:
             entries = self._workspace.list_dir(".")
@@ -162,6 +208,46 @@ class ContextEngine:
         lines.append("Use project_structure / read_file / search_content for details.")
         self._cached_summary = "\n".join(lines)
         return self._cached_summary
+
+    def _project_summary(self, root: Path) -> str:
+        """Orientation from the discovered layout rather than a bare listing.
+
+        The point is not to describe the project in prose. It is to hand the model
+        the handful of facts that change where it looks first -- this is a src
+        layout, the tests are under ``tests/``, the package is
+        ``src/quantsmind_agent`` -- and to say explicitly what could not be
+        determined, so a missing signal is not read as a confident absence.
+        """
+
+        intel = self._intelligence
+        if intel is None:  # pragma: no cover - guarded by the caller
+            return f"Root: {root}"
+        profile = intel.profile
+        lines = [f"Root: {root}", f"Project: {profile.kind} (confidence {profile.confidence:.2f})"]
+        if profile.languages:
+            lines.append("Languages: " + ", ".join(profile.languages))
+        if profile.source_roots:
+            lines.append(f"Source roots: {', '.join(profile.source_roots)}")
+        if profile.packages:
+            shown = ", ".join(profile.packages[:6])
+            more = len(profile.packages) - 6
+            lines.append(f"Packages: {shown}" + (f" (+{more} more)" if more > 0 else ""))
+        if profile.test_roots:
+            lines.append(f"Tests: {', '.join(profile.test_roots)}")
+        if profile.build_files:
+            roles = ", ".join(
+                f"{role}={name}" for role, name in sorted(profile.build_files.items())
+            )
+            lines.append(f"Build files: {roles}")
+        for name, target in profile.entry_points[:4]:
+            lines.append(f"Entry point: {name} -> {target}")
+        if profile.unknowns:
+            lines.append("Not determined: " + profile.unknowns[0])
+        lines.append(
+            "Call project_context with your task or a path for the relevant files, "
+            "symbols, tests and importers."
+        )
+        return "\n".join(lines)
 
     # -- assembly ---------------------------------------------------------
     def build(

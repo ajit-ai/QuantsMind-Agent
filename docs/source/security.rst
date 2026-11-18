@@ -9,10 +9,16 @@ Security
 Summary
 =======
 
-QuantsMind-Agent runs on your machine, with your privileges, and sends prompts
-to the model endpoint you configure. It has no sandbox process and no telemetry.
-What protects you is a small, reviewed set of code boundaries plus a
-read-only tool set.
+QuantsMind-Agent runs on your machine, with your privileges, and sends prompts,
+tool observations and the configured credential to the model endpoint you
+choose. It has no sandbox process and no telemetry. What protects you is a small,
+reviewed set of code boundaries: workspace containment, a permission broker,
+human approval for mutations, and an application-level command policy.
+
+The current release can read, write, edit, delete and undo files, run approved
+commands, and read Git state. Those capabilities make the boundaries more
+important than they were in the read-only releases; they do not turn the
+application into an operating-system sandbox.
 
 .. list-table::
    :header-rows: 1
@@ -21,23 +27,33 @@ read-only tool set.
    * - Area
      - Status
    * - Credential storage
-     - Windows Credential Manager (file fallback), never in config or logs
+     - operating-system credential store; a legacy plaintext file is readable
+       but never written, and never in config or logs
    * - Credential exposure
      - masked in the UI, scrubbed from logs, excluded from events
    * - Filesystem access
-     - read-only, confined to the opened project
+     - read, write, edit, delete and undo, confined to the opened project
    * - Path traversal
-     - rejected, including symlink and junction escapes
+     - rejected, including direct symlink and junction escapes
+   * - Project discovery
+     - symbolic links, junctions and other reparse points are skipped
    * - Command execution
-     - **not implemented**
+     - implemented, approval-gated and policy-filtered; **not an OS sandbox**
+   * - Git access
+     - read-only ``git_status``, ``git_diff`` and ``git_log``
    * - Outbound network
-     - only the configured model endpoint
+     - only the configured model endpoint by default; approved commands may
+       make their own connections
    * - Telemetry
      - **none**
    * - Updates
      - **none**; the application never phones home
    * - OS-level sandbox
-     - **not implemented**
+     - **not implemented** in the product. An experimental sandbox package
+       exists but is dormant: the application never supplies a runner to it,
+       and it must not be described as an isolation guarantee.
+   * - Release signing
+     - **not implemented**; published Windows artifacts are unsigned
 
 Credential handling
 ===================
@@ -45,9 +61,13 @@ Credential handling
 Storage
 -------
 
-1. **Windows Credential Manager** via ``keyring``, used when available.
-2. **``secrets.json``** in the per-user config directory, written with
-   owner-only permissions, when no credential service is reachable.
+1. **The operating-system credential store** via ``keyring`` -- Windows
+   Credential Manager, macOS Keychain, or the Secret Service on Linux -- keyed
+   by provider identity (``provider:<provider_id>:default:api_key``).
+2. **A legacy ``secrets.json``** in the per-user config directory. It remains
+   readable so existing installations keep working, but it is never written as a
+   fallback: without a usable credential service the application refuses to save
+   a new key and says so.
 
 Both live outside the repository. ``.gitignore`` additionally blocks
 ``secrets.toml``, ``qm-secrets.toml``, ``.env`` and ``*.key``.
@@ -55,9 +75,16 @@ Both live outside the repository. ``.gitignore`` additionally blocks
 Resolution order
 ----------------
 
-1. the environment variable named by ``provider.api_key_env`` (default
-   ``QM_API_KEY``);
-2. the secret store.
+1. the provider-bound credential in the secure store, or a legacy credential an
+   operator has explicitly bound to that provider;
+2. the provider's own environment variable (``OPENROUTER_API_KEY`` and so on);
+3. ``provider.api_key_env`` only when the configured provider owns that generic
+   name. ``QM_API_KEY`` belongs to the default provider, OpenAI.
+
+A credential is bound to the endpoint that issued it. Changing the base URL to a
+different service does not carry the old key along: the mismatch is refused
+before any credential is read. Redirects are refused rather than followed, so a
+key is never re-sent to another host.
 
 The GUI settings path is preferred: it goes through the credential store rather
 than the process environment.
@@ -98,15 +125,24 @@ Verification
 Tests asserting these guarantees:
 ``tests/unit/test_secrets_paths.py``,
 ``tests/unit/test_errors_logging.py``,
-``tests/gui/test_main_window.py::TestErrorHandling::test_no_credentials_appear_in_the_transcript``.
+``tests/gui/test_main_window.py::TestErrorHandling::test_no_credentials_appear_in_the_transcript``,
+and, for the single resolution authority, cross-provider isolation and
+secure-store failures, ``tests/security/test_phase08_credential_authority.py``.
 
 Workspace isolation
 ===================
 
-The workspace is the security boundary. Every tool path is resolved through
+The workspace is the security boundary. Every tool path -- read, write, edit,
+delete and undo -- is resolved through
 :class:`~quantsmind_agent.workspace.Workspace`, which refuses absolute paths,
 drive letters, UNC paths, ``..`` traversal, home references, null bytes, and
 anything resolving outside the root after links are followed.
+
+Project discovery is deliberately stricter than an explicit path request.
+Symbolic links, directory junctions and other filesystem reparse points are
+omitted from listings and walks rather than followed. A workspace containing an
+outward link therefore still produces a bounded snapshot, and the excluded path
+is recorded in ``unknowns`` instead of pretending the project was complete.
 
 .. code-block:: text
 
@@ -117,21 +153,86 @@ anything resolving outside the root after links are followed.
     ../secrets.txt    refused
     C:\Users\me\...   refused
     link -> C:\Users  refused (resolves outside)
+    junction -> ...   skipped during discovery; direct reads refused
+
+.. warning::
+
+   The published v0.9.0 Windows MSI predates the reparse-point discovery fix.
+   In that artifact, an outward junction can still fail project discovery even
+   though direct reads through it are refused. The internal candidate passed the
+   check; any public release candidate must repeat it against its own hash. See
+   :doc:`qualification/defect-triage`.
 
 Limitations, stated plainly:
 
 * The agent runs with **your** privileges. Containment is enforced in code, not
   by the OS.
 * Repository content is **data, not authority**. An instruction inside a README
-  cannot become an action -- the resulting tool call is still validated -- but it
-  can mislead the model about facts. There is no injection detector in v0.1.
+  cannot grant a permission or widen the workspace, but it can mislead the model
+  about facts. There is no injection detector in v0.9.0.
 * Binary files are refused; large files are capped.
+* A snapshot is a bounded sample, not a complete inventory. ``truncated``,
+  ``sampled`` and ``unknowns`` say what was omitted.
+
+Command execution
+=================
+
+``run_command`` is implemented. It requires ``EXECUTE_COMMAND``, always asks the
+user, and passes through the command policy first. The policy is an
+application-level deny list: it blocks destructive host operations, common
+network-transfer and loader tools, and Git mutations. A blocked command is never
+offered for approval.
+
+The runner does not use a shell. It starts the program with an argument vector,
+confines the working directory to the workspace, enforces a timeout, caps
+captured output, and removes the configured provider key from the child
+environment.
+
+That is not isolation. An approved program:
+
+* runs with the user's privileges;
+* can spawn child processes, and cancellation stops only the direct child on
+  Windows;
+* can read files the user can read and write files the user can write, including
+  paths outside the workspace if the program itself addresses them;
+* can make network connections unless the policy blocks the program by name;
+* can do anything else the user's account is permitted to do.
+
+Approving a command approves that program, not a verified effect. Real isolation
+requires OS-level mechanisms -- containers, job objects, AppContainer or a
+dedicated low-privilege account -- and none of those are implemented. See
+:doc:`architecture/command-execution`.
 
 Permissions
 ===========
 
 Five capabilities are declared: ``READ_WORKSPACE``, ``WRITE_WORKSPACE``,
-``EXECUTE_COMMAND``, ``GIT``, ``NETWORK``. Only ``READ_WORKSPACE`` is used.
+``EXECUTE_COMMAND``, ``GIT`` and ``NETWORK``. Four are in active use; there is no
+built-in network tool, so ``NETWORK`` is denied.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 18 56
+
+   * - Permission
+     - Default
+     - Notes
+   * - ``READ_WORKSPACE``
+     - ``ALLOW``
+     - Reads change nothing.
+   * - ``WRITE_WORKSPACE``
+     - ``ASK``
+     - Writes and edits ask unless ``auto_approve_writes`` is enabled;
+       ``delete_file`` and ``undo_file`` always ask.
+   * - ``EXECUTE_COMMAND``
+     - ``ASK``
+     - ``run_command`` always asks.
+   * - ``GIT``
+     - ``ALLOW``
+     - Only the read-only Git tools are registered.
+   * - ``NETWORK``
+     - ``DENY``
+     - No built-in network tool.
 
 .. code-block:: text
 
@@ -141,54 +242,83 @@ Five capabilities are declared: ``READ_WORKSPACE``, ``WRITE_WORKSPACE``,
 That is the property to rely on: an unconfigured action is refused, and an
 interactive request without an approver fails closed rather than proceeding.
 Decisions are recorded in the broker history and published as events, so the
-activity panel is an audit trail rather than decoration.
+activity panel shows what was decided. That record is session-scoped: it is not
+persistent beyond the process, not encrypted and not tamper-evident, and it is
+not offered as a compliance audit trail.
 
-Command execution status
-========================
+Network and data flow
+=====================
 
-**Not implemented.** There is no tool that starts a process, no shell
-integration, and no path from model text to ``subprocess``. This is a feature of
-v0.1's design, not an unfinished area -- see :doc:`releases/v0.1`.
+The only built-in outbound request is the model request to the configured
+``base_url``. There is no URL-fetching tool and no web search. An approved
+``run_command`` can start a program that uses the network; the command policy
+blocks common transfer and loader tools, but it is not a network sandbox.
 
-When it arrives (v0.2), it will require ``EXECUTE_COMMAND``, an approval dialog
-naming the exact command and working directory, containment of the working
-directory to the workspace, output and time caps, and full capture in the
-activity log.
-
-Network status
-==============
-
-The only outbound traffic is the model request to the configured ``base_url``.
-There is no URL-fetching tool, no web search, and no "follow the link" behaviour.
 TLS uses ``httpx``'s ``certifi`` bundle rather than the Windows certificate
 store, so a corporate proxy with a private CA requires environment-level
 configuration -- a known limitation listed in :doc:`windows`.
 
-Data flow
-=========
+Endpoint authorization classifies the destination literally: loopback is allowed
+for a local model server, a private or link-local address is refused unless
+``provider.allow_remote_local_models`` is enabled, and a custom endpoint must be
+HTTPS and publicly addressed. That leaves a documented gap rather than complete
+LAN support: the remote-local permission is evaluated against a literal address
+only, so a LAN *hostname* is refused even when the permission is enabled, and no
+name-resolution re-check runs for local endpoints.
 
 .. code-block:: text
 
     your machine                       provider
-    +-----------------------------+     +------------------+
-    | project files ---------------|- - ->| your prompt      |
-    | prompt + tool schemas        |- - ->| your API key     |
-    |                             |     | (HTTPS)          |
-    | response <-----------------|-|- - -|                  |
-    | tool activity, transcript   |     +------------------+
+    +-----------------------------+     +--------------------------+
+    | project files -------------|- - ->| prompt + file contents   |
+    | prompt + tool schemas       |- - ->| tool schemas             |
+    | tool observations           |- - ->| tool results             |
+    |                             |     | API key in Authorization |
+    | response <-----------------|-|- - -| (HTTPS)                  |
+    | tool activity, transcript   |     +--------------------------+
     +-------------------------------------------+
 
-What leaves the machine: the prompt, the tool schemas, and the API key in the
-``Authorization`` header. Nothing else. There is no analytics, no crash upload
-and no update check.
+What leaves the machine: the prompt, the tool schemas, tool observations
+(including file contents the agent read), and the API key in the
+``Authorization`` header. An approved command can send whatever that program
+sends. There is no analytics, no crash upload and no update check.
 
-What stays: conversation text in memory (lost on exit), and operational logs in
-your log directory.
+What stays: live conversation state in memory, stored conversations and task
+records if persistence is enabled, and operational logs in your log directory.
 
 .. warning::
 
    Logs contain file paths, error details and question text. They are not
    encrypted. Review a log before sharing it in a bug report.
+
+Prompt injection
+================
+
+Containment and approval reduce what an injected instruction can achieve, but
+they do not make injection harmless. A malicious README can try to persuade the
+model to write a file or run a command. The resulting call still needs the
+correct permission and, for a mutation or command, a human approval. If a user
+approves it, the action happens.
+
+Mitigations in place:
+
+* repository content is data, never authority;
+* workspace containment limits which paths the built-in file tools can address;
+* blocked commands never reach the approval dialog;
+* the approval prompt names the tool, target, arguments and risk class.
+
+Not yet in place: provenance labelling of file contents, an injection detector,
+and an OS sandbox. Review approvals rather than assuming the model's summary is
+complete.
+
+Release trust
+=============
+
+The published v0.9.0 MSI and executable are unsigned. Windows SmartScreen will
+warn on first run. No production code-signing certificate, hardware token, cloud
+signing profile or trusted-publisher configuration exists in this repository.
+Signing requirements and verification steps are recorded in the qualification
+material; a self-signed certificate is not a production substitute.
 
 Reporting a security issue
 ==========================
@@ -237,21 +367,46 @@ Security checklist before release
    * - Symlink escape refused
      - DONE
      - resolved-path check + test
+   * - Junction discovery handled
+     - DONE IN SOURCE
+     - reparse-point skip + junction regression tests
+   * - Junction discovery in published v0.9.0
+     - AFFECTED
+     - published artifact predates the fix
    * - Deny by default
      - DONE
      - permission provider + tests
-   * - No command execution
+   * - Command execution approval-gated
      - DONE
-     - no such tool exists
+     - registry + broker + policy
+   * - Command policy blocks destructive commands
+     - DONE
+     - ``command_policy`` + tests
    * - No telemetry
      - DONE
      - no network code path
    * - Credentials outside the repo
      - DONE
      - ``.gitignore`` + user config dir
+   * - Credential bound to its endpoint
+     - DONE IN SOURCE
+     - canonical endpoint identity + mismatch regression tests
+   * - No plaintext write without a secure store
+     - DONE IN SOURCE
+     - fail-closed write + secure-store failure tests
+   * - Security audit redaction
+     - DONE IN SOURCE
+     - ``SecurityAuditLog`` field and URL scrubbing + tests; session-scoped,
+       not persistent or tamper-evident
    * - Real LLM validation
      - NOT RUN
-     - manual, see :doc:`testing/acceptance-v0.1`
+     - manual, see :doc:`qualification/manual-beta-acceptance`
+   * - Human GUI and approval acceptance
+     - NOT RUN
+     - manual, see :doc:`qualification/manual-beta-acceptance`
+   * - Signed release artifact
+     - NOT DONE
+     - no certificate; see :doc:`qualification/v1.0.0-readiness`
    * - OS-level sandbox
      - NOT DONE
      - documented limitation

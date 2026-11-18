@@ -1,0 +1,161 @@
+.. _v0.8-behaviour:
+
+
+================
+v0.8.0 behaviour
+================
+
+Durable Sessions. An interrupted task can now say where it got to, whether it may
+continue, and why -- without guessing on the user's behalf.
+
+A session is a task
+===================
+
+There is no second store and no parallel identity. A session is the task record
+that already existed, plus the checkpoints that say where execution stopped. That
+matters for more than tidiness: an audit trail kept beside the thing it audits is
+how the two come to disagree, and a resume that trusts the copy rather than the
+record is how work gets repeated.
+
+Checkpoints
+===========
+
+``Orchestrator.record_checkpoint`` writes a checkpoint at a confirmed boundary --
+after a step's outcome has been recorded, never before. The ordering is the whole
+point: a checkpoint written before the step finishes would let a resumed session
+skip work that never ran.
+
+Each checkpoint carries:
+
+* the session id and the plan digest it belongs to;
+* the steps whose success this application recorded;
+* the step that was in flight, if any;
+* the workspace, a timestamp, and scalar validation notes.
+
+Checkpoints live on the task, are bounded to ``MAX_CHECKPOINTS`` (50), and are
+persisted with it. The newest one is therefore no older than the last thing the
+application knew for certain.
+
+A checkpoint is not a snapshot
+------------------------------
+
+It records what this application knows about itself. It says nothing reliable
+about what an external system did: a command may have completed and lost its
+response, and a file may have been written by something other than the recorded
+step. Recovery is built around that limit instead of papering over it.
+
+Three answers
+=============
+
+``RecoveryService`` returns one of three verdicts, with every reason it found
+rather than only the first:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Verdict
+     - Meaning
+   * - ``SAFE_TO_RESUME``
+     - The last boundary is known and everything it depended on still holds.
+   * - ``REQUIRES_REVIEW``
+     - The last thing that happened is not known, or a decision is outstanding.
+       A human looks before anything runs again.
+   * - ``NOT_RESUMABLE``
+     - Continuing is impossible: the record, the plan or the world has moved too
+       far.
+
+The default is ``NOT_RESUMABLE`` whenever the evidence is thin. A recovery
+feature that assumes the best case is a feature that re-runs a command the user
+already paid for, or applies a change twice.
+
+What is checked
+---------------
+
+The decision is made from the stored checkpoint, the plan, the approval, the
+workspace and the tools available now:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Fact
+     - Effect when it does not hold
+   * - The plan digest matches the checkpoint
+     - Review: a changed plan is a new task sharing a name
+   * - The checkpoint belongs to this session
+     - Review
+   * - Nothing was in flight
+     - Review: the step may already have changed something
+   * - The approved workspace is still open
+     - Review: the world is not the one the approval described
+   * - Every remaining tool still exists
+     - Not resumable: the work cannot be performed as recorded
+   * - A standing approval matches the plan
+     - Review: an old decision is not authority for a new question
+   * - Dependencies of remaining steps are finished
+     - Not resumable
+   * - The task is ``COMPLETED``, ``FAILED`` or ``CANCELLED``
+     - Not resumable
+   * - The task is ``VERIFYING`` or ``REPAIRING``
+     - Review: those stages may have run unrecorded commands
+   * - The task is ``BLOCKED`` or ``AWAITING_APPROVAL``
+     - Review: it is waiting for a decision, not for a resume
+   * - The task is ``DRAFT``
+     - Not resumable: it never started
+
+Resuming
+========
+
+``TaskService.resume`` recomputes the verdict at the moment of resuming rather
+than trusting the caller. The tools, the workspace or the plan may have changed
+between asking and doing, and a resume is exactly where an optimistic assumption
+costs the user a repeated side effect.
+
+A refusal is evidence. Before ``RecoveryRefused`` is raised, the verdict and its
+reason are recorded on the task as a ``RECOVERY`` trace event and saved, so the
+next inspection can see that recovery was attempted and why it stopped.
+
+A safe resume moves through the legal boundary rather than assigning a status
+directly: a record left at ``RUNNING`` by a crash first moves to ``PAUSED`` and
+then to ``APPROVED``, because a safe verdict already requires a standing approval
+for the current plan. The interrupted state is visible in the timeline instead of
+being overwritten. The orchestrator then persists the transition before
+returning.
+
+Adopting is not resuming. ``TaskService.adopt`` brings a stored task back under
+management for inspection, and adopting a task that is already managed returns
+the existing orchestrator rather than building a second one. Execution continues
+only through the approval path.
+
+History in the GUI
+==================
+
+The Task panel lists stored tasks newest first and marks the ones that were
+mid-flight when the application closed. Selecting a row is a read: it renders the
+plan, the last checkpoint, the most recent trace entries and the verification
+outcome, and disables the run controls.
+
+"Continue this task" is enabled only when the verdict is ``SAFE_TO_RESUME``, no
+worker is running and a workspace is open. Pressing it asks for confirmation --
+continuing may run tools again -- and the service re-checks the verdict before
+anything happens. A refusal is shown as a disabled button carrying the reason,
+rather than a button that fails when pressed.
+
+Interrupted tasks are reported, not relabelled. ``TaskService.interrupted_tasks``
+returns the tasks that were ``RUNNING``, ``VERIFYING`` or ``REPAIRING`` when the
+application closed, with the existing read-only analysis of what they had done.
+They are not marked failed and are not resumed automatically.
+
+Compatibility
+=============
+
+Task records are schema version 4, which adds ``checkpoints``. Records from
+earlier versions load with an empty list rather than an invented boundary, because
+a checkpoint that claims a step completed before it did is worse than no
+checkpoint at all. Unreadable checkpoint entries are skipped individually; a
+corrupt entry means "no known boundary", not "refuse the session".
+
+Checkpoints carry ``CHECKPOINT_SCHEMA_VERSION`` 1. A checkpoint written by a newer
+build is refused rather than reinterpreted: a half-understood boundary is how work
+gets repeated that should not be.

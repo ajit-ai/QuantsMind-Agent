@@ -13,18 +13,19 @@ Support is claimed only where it has been verified. *Native-verified* means the
 application has actually been run on that operating system, not merely that the
 code appears portable or that a build succeeded.
 
-=================  =========  =================================================
-Platform           Status     Evidence
-=================  =========  =================================================
-Windows 10/11 x64  Supported  Full suite and a packaged executable, built and
-                               smoke-tested on Windows 11
-Linux x64 (glibc)  Supported  Full suite in CI on Ubuntu (headless); no
-                               on-desktop run yet
-macOS arm64/x64    Planned    Native artifact builds run in CI; the GUI has not
-                               been run on macOS
-BSD                Not        Blocked at the dependency level, see below
-                   supported
-=================  =========  =================================================
+=================  =============  ==============================================
+Platform           Status         Evidence
+=================  =============  ==============================================
+Windows 11 x64     Supported      Full suite, packaged executable and MSI built,
+                                  installed and smoke-tested on Windows 11
+Windows 10 x64     Unverified     The same code path may work; no Windows 10 run
+                                  or artifact is recorded
+Linux x64 (glibc)  Headless       Full suite in CI on Ubuntu (headless); no
+                                  on-desktop run yet
+macOS arm64/x64    Planned        Native artifact builds are configured in CI;
+                                  the GUI has not been run on macOS
+BSD                Not supported  Blocked at the dependency level, see below
+=================  =============  ==============================================
 
 Python 3.11, 3.12 and 3.13 are the supported interpreters; CI tests 3.11 and
 3.12, and the code also runs on 3.14.
@@ -153,10 +154,11 @@ Credential storage
 The API key is stored in the operating system keyring: Windows Credential
 Manager on Windows, the Keychain on macOS, and the Secret Service (GNOME Keyring,
 KWallet) on Linux. On a Linux machine with no Secret Service provider -- a bare
-container, some minimal window managers -- `keyring` reports no usable backend
-and the application falls back to a file-backed store in its data directory. That
-fallback is plain file storage, so on such a machine the key is only as protected
-as the file's permissions.
+container, some minimal window managers -- ``keyring`` reports no usable backend.
+The application still starts and will read a ``secrets.json`` left by an earlier
+version, but it **refuses to save a new key**, because writing one would put the
+credential in a plaintext file. Install a Secret Service provider (or another
+supported keyring backend) before entering a key.
 
 Command-line options
 ====================
@@ -215,14 +217,15 @@ adds ``sphinx``; ``packaging`` adds ``pyinstaller``.
 Where files are written
 =======================
 
-====================================  ================================
+====================================  =============================================
 Path (Windows 11)                     Contents
-====================================  ================================
+====================================  =============================================
 ``%LOCALAPPDATA%\QuantsMind-Agent\``  ``config.toml``
-``%LOCALAPPDATA%\QuantsMind-Agent\``  ``secrets.json`` (file fallback)
+``%LOCALAPPDATA%\QuantsMind-Agent\``  ``secrets.json`` (legacy; read-only without a
+                                      credential service)
 Windows Credential Manager            the API key (primary store)
 ``%LOCALAPPDATA%\QuantsMind-Agent\``  ``logs\quantsmind-agent.log``
-====================================  ================================
+====================================  =============================================
 
 None of these live inside the repository, and all are covered by
 ``.gitignore``. Override them with ``--config-dir`` for a fully portable setup.
@@ -243,17 +246,20 @@ This runs PyInstaller and produces ``dist\QuantsMind-Agent\QuantsMind-Agent.exe`
 Packaging decision
 ------------------
 
-A **one-directory** PyInstaller bundle is used rather than a one-file bundle or
-an MSI installer:
+The verified application layout is a **one-directory** PyInstaller bundle. The
+published Windows v0.9.0 release also packages that directory in a per-user MSI
+built with WiX:
 
 * one-file extraction costs several seconds on every launch and makes antivirus
-  scanning unreliable;
-* one-directory starts instantly and is easy to replace or uninstall;
-* an installer framework (Inno Setup, WiX, MSIX) adds build complexity that
-  v0.1 does not justify, and is planned only if distribution requires it.
+  scanning unreliable; one-file remains experimental;
+* one-directory starts immediately and is easy to replace or uninstall;
+* the MSI adds an installed-apps entry, shortcuts and a normal uninstall path
+  without moving user data.
 
-Trade-off: the user runs the ``.exe`` from ``dist\``; there is no Start-menu
-entry. See ``scripts/package.ps1`` for the exact command.
+The MSI is unsigned, so SmartScreen may warn. See :doc:`packaging` for the MSI
+build, installation and signing requirements. The portable folder has no
+Start-menu entry or file association. See ``scripts/package.ps1`` and
+``scripts/build_msi.py`` for the exact commands.
 
 Verifying the build
 ===================

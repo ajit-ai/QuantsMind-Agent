@@ -67,15 +67,27 @@ contains links, and it is the right default: the workspace is a security
 boundary, not a convenience. Opening the parent directory is the workaround
 when a real cross-directory reference is intended.
 
+Discovery applies the same boundary before a link can be followed. Both
+:meth:`Workspace.iter_entries` and :meth:`Workspace.walk` omit symbolic links,
+junctions and other filesystem reparse points. Windows ``os.walk`` does not
+treat a junction as a link even with ``followlinks=False``, so relying on that
+flag alone would descend outside the workspace or loop through a link cycle.
+The walk can return the excluded workspace-relative paths, and the workspace
+snapshot records them as an explicit unknown. Direct reads through a link that
+resolves outside the root remain refused by :meth:`Workspace.resolve`.
+
 Traversal
 =========
 
-:meth:`Workspace.walk` skips ignored directory *names* and does not follow links:
+:meth:`Workspace.walk` skips ignored directory *names* and does not follow
+filesystem links:
 
 .. code-block:: python
 
-    for entry in space.walk(".", max_entries=5000):
+    excluded: list[str] = []
+    for entry in space.walk(".", max_entries=5000, excluded=excluded):
         print(entry.path, entry.size, entry.modified)
+    print("not followed:", excluded)
 
 Ignores are by name, not path, so ``node_modules`` is skipped at any depth.
 
@@ -99,13 +111,31 @@ Reading a binary file returns:
 
     'logo.png' looks like a binary file and cannot be read as text.
 
-Not in v0.1
-===========
+Writes and deletes
+==================
 
-There is no write, delete, rename, move or permission-changing API. Adding one
-means adding it here -- so it inherits containment for free -- *and* declaring
-the right :class:`~quantsmind_agent.permissions.Permission`, *and* an
-interactive approver. See :doc:`../roadmap/roadmap`.
+The workspace exposes three mutation methods:
+
+* :meth:`Workspace.write_text` creates or replaces a text file. It writes a
+  sibling temporary file and calls ``os.replace``, so a failure part-way through
+  does not leave a truncated file.
+* :meth:`Workspace.write_bytes` is the byte-exact path used by the undo journal,
+  including content that is not valid UTF-8. Model-facing tools use
+  ``write_text``.
+* :meth:`Workspace.delete_file` removes one regular file and returns its
+  pre-delete fingerprint. Directory deletion, recursive deletion, rename, move
+  and permission changes have no API.
+
+Mutation inherits the same containment rules as reads. ``ensure_parent``
+re-checks containment after resolving and again after creating a parent
+directory, because a junction in the path could otherwise redirect the write.
+Parent creation is opt-in and visible rather than a silent side effect.
+
+Containment is not authorization. Every model-facing mutation passes through
+``WRITE_WORKSPACE``, which is ``ASK`` by default, and the tool layer obtains the
+approval before calling these methods. With no approver wired up, ``ASK``
+degrades to ``DENY``. See :doc:`../user/permissions` and
+:doc:`security-boundaries`.
 
 Related
 =======

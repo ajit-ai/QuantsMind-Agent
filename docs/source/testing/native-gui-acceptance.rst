@@ -215,7 +215,8 @@ Credential storage
 ==================
 
 The API key goes to the operating system keyring: Credential Manager on
-Windows, the Keychain on macOS, Secret Service on Linux. On a Linux host with no
-Secret Service provider the application falls back to a file-backed store, which
-is only as protected as the file's permissions. If you are testing on such a
-host, note it.
+Windows, the Keychain on macOS, Secret Service on Linux. A Linux host with no
+Secret Service provider can still read a legacy ``secrets.json``, but it refuses
+to save a new key rather than writing plaintext. If you are testing on such a
+host, note that saving a key is expected to fail until a credential service is
+available.

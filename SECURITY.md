@@ -20,23 +20,26 @@ Please do not test against other people's repositories, attempt path escapes
 outside your own machine, or exfiltrate data. Responsible disclosure keeps this
 tool safe for everyone using it.
 
-## Security model in v0.1
+## Security model in v0.9.0
 
-QuantsMind-Agent runs on your machine, with your privileges, and sends prompts
-to the model endpoint you configure. It has **no sandbox process** and
-**no telemetry**.
+QuantsMind-Agent runs on your machine, with your privileges, and sends prompts,
+tool observations and the configured credential to the model endpoint you
+choose. It has **no sandbox process** and **no telemetry**.
 
 | Area | Status |
 |---|---|
 | Credential storage | Windows Credential Manager; permissions-restricted file fallback |
 | Credential exposure | Masked in the UI; redacted from logs; excluded from events |
-| Filesystem access | Read-only, confined to the opened project |
-| Path traversal | Rejected, including symlink and junction escapes |
-| Command execution | **Not implemented** |
-| Outbound network | Only the configured model endpoint |
+| Filesystem access | Read, write, edit, delete and undo, confined to the opened project |
+| Path traversal | Rejected, including direct symlink and junction escapes |
+| Project discovery | Symbolic links, junctions and other reparse points are skipped |
+| Command execution | Implemented, approval-gated and policy-filtered; **not an OS sandbox** |
+| Git access | Read-only `git_status`, `git_diff` and `git_log` |
+| Outbound network | Only the configured model endpoint by default; approved commands may connect |
 | Telemetry | **None** |
 | Updates | **None** — the application never phones home |
 | OS-level sandbox | **Not implemented** |
+| Release signing | **Not implemented**; published Windows artifacts are unsigned |
 
 Full details, including data flow and residual risks:
 [`docs/source/security.rst`](docs/source/security.rst).
@@ -44,29 +47,38 @@ Full details, including data flow and residual risks:
 ### What protects you
 
 1. **The model cannot name its own capability.** Capabilities exist only
-   because code registered a tool that declares one. There is no command tool,
-   so no prompt can produce a command.
+   because code registered a tool that declares one and the registry enforces
+   the permission before the tool body runs.
 2. **Paths are contained.** Every tool path is resolved through a single
    `Workspace` object that refuses absolute paths, drive letters, UNC paths,
    `..` traversal, home references, null bytes, and anything resolving outside
    the project root after links are followed.
 3. **Policy lives in one place.** Tools do not check permissions; the registry
-   does, before the tool body runs.
+   does.
 4. **The default answer is no.** Unmatched permission rules are `DENY`, and
    `ASK` without an approver degrades to `DENY`.
-5. **Credentials stay local.** The key is only ever placed in an
+5. **Mutations and commands ask.** Writes, edits, deletes, undo and
+   `run_command` need an explicit decision. Deleting, undo and running a command
+   always ask, regardless of auto-approval settings.
+6. **Blocked commands cannot be approved.** The command policy is evaluated
+   before an approval prompt is built.
+7. **Credentials stay local.** The key is only ever placed in an
    `Authorization` header. A redaction filter scrubs every log record.
 
 ### Known risks
 
 - **The agent runs with your privileges.** Containment is enforced in code, not
   by the operating system.
-- **Prompt injection can mislead answers.** Repository content is data, not
-  authority: an injected instruction cannot cause a file escape, because the
-  resulting tool call is still validated. It can, however, affect what the
-  model believes. There is no injection detector in v0.1.
+- **An approved command is powerful.** It can spawn children, use the network,
+  and do anything your account can do. The command policy is not a sandbox.
+- **Prompt injection can mislead answers and actions.** Repository content is
+  data, not authority, but an injected instruction that becomes an approved
+  write or command does happen. There is no injection detector in v0.9.0.
 - **Logs are not encrypted** and contain file paths and question text.
-- **The configured endpoint receives your prompt and your API key** by design.
+- **The configured endpoint receives your prompt, tool observations and your
+  API key** by design.
+- **The published v0.9.0 MSI is unsigned** and predates the junction-discovery
+  fix. See the qualification record.
 
 ## Verifying the guarantees yourself
 
@@ -101,8 +113,8 @@ for candidate in (
 ```
 
 The corresponding automated tests are
-`tests/unit/test_workspace.py`, `tests/unit/test_secrets_paths.py`,
-`tests/unit/test_errors_logging.py` and
+`tests/unit/test_workspace.py`, `tests/unit/test_workspace_intel.py`,
+`tests/unit/test_secrets_paths.py`, `tests/unit/test_errors_logging.py` and
 `tests/gui/test_main_window.py::TestErrorHandling`.
 
 ## Credential hygiene for contributors

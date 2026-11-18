@@ -31,8 +31,8 @@ if TYPE_CHECKING:
 
 import acceptance_v0_2 as acceptance  # noqa: E402
 
-from quantsmind_agent.permissions import ApprovalOutcome  # noqa: E402
-from quantsmind_agent.tools import ToolResult  # noqa: E402
+from quantsmind_agent.runtime.tools import ToolResult  # noqa: E402
+from quantsmind_agent.security.permissions import ApprovalOutcome  # noqa: E402
 
 
 @pytest.fixture
@@ -61,12 +61,12 @@ def ctx(workspace: Path) -> Iterator[Any]:
     tests.
     """
 
-    from quantsmind_agent.command_tools import build_command_tools
     from quantsmind_agent.events import EventBus
     from quantsmind_agent.git_tools import build_git_tools
-    from quantsmind_agent.permissions import PermissionBroker, StaticPermissionProvider
-    from quantsmind_agent.tools import ToolRegistry
-    from quantsmind_agent.workspace import Workspace
+    from quantsmind_agent.runtime.tools import ToolRegistry
+    from quantsmind_agent.runtime.tools.builtin.command import build_command_tools
+    from quantsmind_agent.security.permissions import PermissionBroker, StaticPermissionProvider
+    from quantsmind_agent.services.workspace.containment import Workspace
     from quantsmind_agent.write_tools import build_mutating_tools
 
     broker = PermissionBroker(StaticPermissionProvider.for_v0_2())
@@ -301,7 +301,7 @@ class TestEventSubscriptionHygiene:
     ) -> None:
         class _Agent:
             def run(self, prompt: str) -> Any:
-                from quantsmind_agent.agent import AgentOutcome
+                from quantsmind_agent.runtime.agent.core import AgentOutcome
 
                 return AgentOutcome(text="done")
 
@@ -325,8 +325,8 @@ class TestEventSubscriptionHygiene:
                 self.calls = 0
 
             def run(self, prompt: str) -> Any:
-                from quantsmind_agent.agent import AgentOutcome
                 from quantsmind_agent.events import AgentEventType
+                from quantsmind_agent.runtime.agent.core import AgentOutcome
 
                 self.calls += 1
                 if self.calls == 1:
@@ -400,7 +400,7 @@ class TestPositiveControls:
     def test_a_tool_that_no_ops_fails_the_positive_control(
         self, ctx: Any, workspace: Path, monkeypatch: Any
     ) -> None:
-        from quantsmind_agent.tools import ToolResult
+        from quantsmind_agent.runtime.tools import ToolResult
 
         monkeypatch.setattr(
             ctx.tools,

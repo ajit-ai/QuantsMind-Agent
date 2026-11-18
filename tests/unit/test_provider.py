@@ -19,7 +19,7 @@ from quantsmind_agent.errors import (
     ModelUnavailableError,
     NetworkError,
 )
-from quantsmind_agent.llm import ChatRequest
+from quantsmind_agent.providers.gateway import ChatRequest
 from quantsmind_agent.providers.openai_compat import OpenAICompatProvider
 from quantsmind_agent.schema import SystemMessage, UserMessage
 from tests.fakes import CONNECT_ERROR, TIMEOUT_ERROR, canned_body, mock_transport

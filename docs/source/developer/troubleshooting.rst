@@ -37,10 +37,18 @@ Symptom to cause
      - Fix
    * - "No API key is configured"
      - Credential missing, or the endpoint requires one
-     - Settings -> API key, or export ``QM_API_KEY``
+     - Settings -> API key, or export that provider's variable
+       (``QM_API_KEY`` only for the default OpenAI preset)
    * - "The provider rejected the API key"
      - Wrong key for that endpoint, or a trailing space
      - Confirm key and base URL belong together
+   * - "Provider identity does not match this endpoint"
+     - The base URL was changed while a provider binding survived
+     - Save Settings again; the stale binding is cleared and the old key is
+       never sent to the new endpoint
+   * - "Credential could not be saved"
+     - No usable OS credential store; plaintext writes are refused
+     - Restore the keyring/Secret Service, then save again
    * - "could not find that model or endpoint"
      - Wrong model name, or a missing ``/v1``
      - Use a preset, then change only the model
@@ -91,9 +99,10 @@ Installation and start-up
 
         Rename-Item "$env:LOCALAPPDATA\QuantsMind-Agent\QuantsMind-Agent\config.toml" "config.toml.bak"
 
-**Corrupted credential file**
-    Delete ``secrets.json`` in the configuration directory and re-enter the key
-    in Settings.
+**Corrupted or unusable credential store**
+    A legacy ``secrets.json`` can be renamed aside and the key re-entered in
+    Settings once a credential service is usable. Removing the file deletes the
+    key it holds; the application never does that automatically.
 
 Project and workspace
 =====================

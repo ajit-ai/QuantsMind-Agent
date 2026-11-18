@@ -6,7 +6,7 @@ import pytest
 
 from quantsmind_agent.errors import LLMConfigurationError, LLMError, MissingAPIKeyError
 from quantsmind_agent.events import AgentEventType, EventBus
-from quantsmind_agent.llm import ChatRequest, ChatResponse, ModelGateway
+from quantsmind_agent.providers.gateway import ChatRequest, ChatResponse, ModelGateway
 from quantsmind_agent.schema import UserMessage
 from tests.fakes import FakeModelProvider, text_response, tool_response
 
@@ -155,7 +155,7 @@ class TestStream:
         assert payloads[0]["stream"] is True
 
     def test_empty_chunks_are_not_emitted(self) -> None:
-        from quantsmind_agent.llm import StreamChunk
+        from quantsmind_agent.providers.gateway import StreamChunk
 
         assert StreamChunk().is_empty
 

@@ -11,22 +11,26 @@ Open **Settings…** from the sidebar or with ``Ctrl+K``.
 Provider tab
 ============
 
-=================  ==========================================================
+=================  ============================================================
 Field              Notes
-=================  ==========================================================
+=================  ============================================================
 Provider preset    Fills the base URL and model for OpenAI, OpenRouter,
                      Groq and local servers (Ollama, LM Studio, llama.cpp).
 Model              Free text, or pick from ``Available on endpoint`` when the
                      endpoint exposes ``GET /models``.
 Base URL           Must be ``http://`` or ``https://``.
-API key            Password field, never rendered after saving.
+API key            Password field, never rendered after saving. Typed values go
+                     to the operating-system credential store, never to
+                     ``config.toml`` or a plaintext file.
 Clear stored key   Deletes the credential from the store.
-Key from env var   Name of the environment variable to consult, e.g.
-                     ``QM_API_KEY``.
+Key from env var   Name of the environment variable consulted after the
+                     credential store, for the provider that owns it, e.g.
+                     ``OPENROUTER_API_KEY``. A generic name such as
+                     ``QM_API_KEY`` applies only to the default OpenAI preset.
 Request timeout    Seconds per request (5-3600).
 Max output tokens  Upper bound on the response length.
 Temperature        0.0-2.0, shown as tenths.
-=================  ==========================================================
+=================  ============================================================
 
 Presets
 -------
@@ -67,8 +71,11 @@ the model must produce a written answer.
 About tab
 =========
 
-Shows the version and the exact locations of the configuration file, the log
-file and the credential store.
+Shows the version, the exact locations of the configuration file, the log file
+and the credential store, and where the active credential comes from. A stored
+key reports a masked hint; an environment key names its variable; a local
+endpoint that needs no key says so; and a degraded or refused credential names
+the reason instead of pretending a key exists.
 
 Applying changes
 ================
@@ -91,8 +98,16 @@ Troubleshooting
     preset and then change only the model.
 
 *The agent answers immediately with an error about a missing key*
-    The endpoint requires a credential but none is configured. Either paste one
-    in Settings or export ``QM_API_KEY``.
+    The endpoint requires a credential but none is configured. Paste one in
+    Settings, or export the variable that belongs to that provider
+    (``OPENROUTER_API_KEY`` for OpenRouter; ``QM_API_KEY`` only for the default
+    OpenAI preset). A key stored for a different provider is never reused.
+
+*Settings says the credential cannot be saved*
+    No usable operating-system credential store is available, so plaintext
+    writing is refused. Restore the credential service (for example a Secret
+    Service daemon on Linux) and save again; an existing legacy
+    ``secrets.json`` stays readable meanwhile.
 
 *The agent ignores my project*
     No project is open. The transcript will say *Open a project folder first.*

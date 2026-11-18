@@ -18,7 +18,7 @@ import pytest
 if str(Path(__file__).resolve().parents[2] / "src") not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from quantsmind_agent.config import ConfigManager
+from quantsmind_agent.app.settings import ConfigManager
 
 
 def _select_qpa() -> str | None:
@@ -47,7 +47,7 @@ def qapp() -> Iterator[object]:
     pytest.importorskip("PySide6.QtWidgets", reason="PySide6 is not installed")
     from PySide6.QtWidgets import QApplication
 
-    from quantsmind_agent.gui.style import apply_theme
+    from quantsmind_agent.gui.shell.style import apply_theme
 
     app = QApplication.instance() or QApplication(["quantsmind-agent-tests"])
     apply_theme(app)

@@ -13,7 +13,8 @@ import pytest
 
 from quantsmind_agent.edit_ops import EditOperation, apply_edit, detect_eol, normalize_newlines
 from quantsmind_agent.errors import EditConflictError, StaleContentError
-from quantsmind_agent.permissions import (
+from quantsmind_agent.runtime.tools import ToolRegistry
+from quantsmind_agent.security.permissions import (
     ApprovalOutcome,
     Decision,
     Permission,
@@ -21,8 +22,7 @@ from quantsmind_agent.permissions import (
     PermissionRule,
     StaticPermissionProvider,
 )
-from quantsmind_agent.tools import ToolRegistry
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.workspace.containment import Workspace
 from quantsmind_agent.write_tools import build_mutating_tools
 
 
@@ -71,6 +71,22 @@ class TestEditOperations:
     def test_multiline_old_text(self) -> None:
         out = apply_edit("a\nb\nc\n", "f.py", operation="replace", old_text="a\nb", new_text="X")
         assert out.content == "X\nc\n"
+
+    def test_old_text_may_end_with_a_newline(self) -> None:
+        # A model copies the line it saw in read_file, newline included. Matching
+        # only worked without it, so the natural edit was refused on the last line
+        # of a file with the message "the text you asked to replace is not in the
+        # file any more" -- which was not true.
+        out = apply_edit("a\nb\n", "f.py", operation="replace", old_text="b\n", new_text="Z\n")
+        assert out.content == "a\nZ\n"
+
+    def test_replacing_the_last_line_leaves_exactly_one_trailing_newline(self) -> None:
+        out = apply_edit("a\nb\n", "f.py", operation="replace", old_text="b\n", new_text="Z")
+        assert out.content == "a\nZ\n"
+
+    def test_a_file_without_a_trailing_newline_still_matches(self) -> None:
+        out = apply_edit("a\nb", "f.py", operation="replace", old_text="b", new_text="Z")
+        assert out.content == "a\nZ"
 
     @pytest.mark.parametrize(
         ("operation", "kwargs", "expected"),

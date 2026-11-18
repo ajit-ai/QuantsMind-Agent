@@ -1,0 +1,145 @@
+.. _v0.7-behaviour:
+
+
+================
+v0.7.0 behaviour
+================
+
+Reliable Agent Execution. Three things that could fail silently now fail
+visibly, and a task can be explained after the fact.
+
+Structured planning
+===================
+
+Before this, "Propose plan" asked the model for a fenced JSON block in prose and
+hoped for the best. Nothing connected a model response to a ``Plan``, and there was
+no schema to hold the model to.
+
+:class:`~quantsmind_agent.planner.TaskPlanner` does both. It asks through the
+structured-output path with a versioned schema, and then validates the answer
+twice:
+
+* structurally, against the schema, here in the application;
+* semantically, through the existing ``validate_plan`` -- unique step ids, known
+  tools, resolvable dependencies, no cycles, nothing outside the workspace.
+
+The second validation runs whichever path produced the data. A provider-constrained
+answer is re-checked, not trusted.
+
+No empty plan
+--------------
+
+There is deliberately no "empty plan" outcome:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - What happened
+     - What the user is shown
+   * - A valid plan
+     - The plan, for review
+   * - Malformed, truncated, off-schema, unknown tool, duplicate id, cycle
+     - The specific reasons
+   * - The endpoint cannot do structured output
+     - That, plainly
+   * - The provider failed
+     - The failure, categorised
+
+An empty plan would look like a plan nobody can act on, which is a different
+failure wearing the same clothes. A proposal is still not an approval: it is
+shown, and nothing runs until the user says so.
+
+The available tools go into the prompt as well as the schema. A live check caught a
+model proposing a step with a tool that did not exist; refusing it was correct, but
+telling the model what it has is the better fix.
+
+Streaming and recovery
+======================
+
+The question is not "which endpoint" but "what is already true":
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 20 45
+
+   * - State
+     - Retry
+     - Why
+   * - Nothing dispatched
+     - Safe
+     - The provider provably did no work
+   * - Partial output delivered
+     - Never
+     - The caller already has text; another endpoint's answer is not a continuation
+   * - Complete
+     - Never
+     - The answer was finished
+   * - Dispatched, then failed
+     - Ambiguous
+     - The provider may have finished the work and lost the response
+   * - Cancelled or deadline expired
+     - Never
+     - They are decisions, not faults
+   * - Authentication, configuration, protocol error
+     - Never
+     - Facts about *this* endpoint; another would only hide them
+
+A 429 or 5xx after dispatch remains safe, because a refusal is reported without
+the work being done.
+
+Streams are closed on every exit: success, failure, cancellation, and a caller
+that walks away mid-stream.
+
+The execution trace
+====================
+
+Every event the orchestrator already emitted is also recorded on the task:
+
+* bounded to 200 entries, oldest dropped;
+* scalar fields only, detail truncated;
+* stored on the record rather than beside it.
+
+The third point is the one that matters. An audit log kept separately from the
+thing it audits is how the two come to disagree; here there is one record and the
+trace is part of it.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Recorded
+     - Answers
+   * - ``task_accepted``, ``plan_proposed``
+     - What was asked for, and what came back
+   * - ``plan_validated``, ``approved``, ``rejected``
+     - Whether the plan was acceptable and who decided
+   * - ``step``
+     - What ran, per step, with the outcome
+   * - ``provider``
+     - Which endpoint served, and any fallback
+   * - ``verification_started``, ``verification``
+     - What was checked and what it concluded
+   * - ``cancelled``, ``paused``, ``finished``, ``persistence_failed``
+     - Why the task stopped where it did
+
+Redaction happens on the way to disk, as with everything else persisted: a
+credential-shaped string in a task's text or trace is scrubbed before it is
+written. A trace that cannot be written never stops the work -- the task continues
+and the failure is logged.
+
+Task records are schema version 3, which adds the trace. A record from an earlier
+version loads with an empty trace rather than being refused.
+
+Live provider validation
+========================
+
+``scripts/live_provider_check.py`` is opt-in and never part of ordinary CI. It
+uses the shipped path -- ``ConfigManager`` for the credential,
+``providers.build_provider`` for the adapter, ``ModelGateway`` for the request --
+with bounded prompts, bounded tokens and bounded timeouts.
+
+It checks four things: a text response, structured output, a streamed response,
+and a complete plan proposal validated against a real workspace. It prints
+provider names, capabilities, verdicts and sanitised error categories, and never a
+credential, a header or a raw body.

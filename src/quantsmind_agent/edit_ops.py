@@ -318,7 +318,12 @@ def _replace_text(
 ) -> EditOutcome:
     needle = _require(old_text, "old_text", path)
     replacement = normalize_newlines(new_text)
-    joined = "\n".join(lines)
+    # The trailing newline is part of what a model copies out of ``read_file``, so
+    # it has to be part of what can be matched. Rebuilding it here means
+    # ``old_text`` may end in a newline even when the line it names is the last
+    # line of the file -- without it, the natural edit was refused with "the text
+    # you asked to replace is not in the file any more", which is not true.
+    joined = "\n".join(lines) + ("\n" if trailing else "")
 
     matches = _count(joined, needle)
     if matches == 0:
@@ -350,6 +355,11 @@ def _replace_text(
         updated = joined[:position] + replacement + joined[position + len(needle) :]
         detail = f"replaced occurrence {occurrence} of {matches}"
 
+    # ``joined`` now carries the file's trailing newline so a needle that ends in
+    # one can match; ``_rebuild`` adds that newline back, so it has to come off
+    # here or the file gains one at the end of every edit.
+    if trailing and updated.endswith("\n"):
+        updated = updated[:-1]
     updated_lines = updated.split("\n") if updated else []
     return EditOutcome(
         _rebuild(updated_lines, eol, trailing),

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from quantsmind_agent.errors import LLMError
-from quantsmind_agent.llm import ChatRequest, ChatResponse
+from quantsmind_agent.providers.gateway import ChatRequest, ChatResponse
 from tests.fakes import FakeModelProvider, text_response, tool_response
 from tests.gui.harness import GuiHarness
 

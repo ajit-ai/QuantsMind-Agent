@@ -33,6 +33,7 @@ logged-in session on macOS.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -41,6 +42,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -237,6 +239,22 @@ def window_titles_of(pid: int) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def _desktop_env() -> dict[str, str]:
+    """The environment the application is launched in for desktop acceptance.
+
+    ``QT_QPA_PLATFORM=offscreen`` renders into a buffer and never creates a
+    native window, so a run launched under it can only prove the process stays
+    alive -- the title probe finds nothing, and "no window" would be an artefact
+    of the harness rather than a fact about the application. The variable is
+    therefore dropped for the child: this check is about the desktop.
+    """
+
+    env = dict(os.environ)
+    if env.get("QT_QPA_PLATFORM") == "offscreen":
+        del env["QT_QPA_PLATFORM"]
+    return env
+
+
 def probe(pid: int) -> list[str]:
     system = platform.system()
     if system == "Windows":
@@ -289,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         cwd=str(workdir),
+        env=_desktop_env(),
     )
 
     titles: list[str] = []
@@ -335,6 +354,55 @@ def main(argv: list[str] | None = None) -> int:
     check(
         "no traceback during the session", "Traceback (most recent call last)" not in shutdown, ""
     )
+
+    # From outside, a window is a title. Ask the binary itself what is in it, so
+    # "the task workflow ships" is evidence rather than a claim about the source.
+    described = subprocess.run(
+        [
+            str(exe),
+            "--workspace",
+            str(workspace),
+            "--config-dir",
+            str(config_dir),
+            "--describe-window",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=max(120.0, args.timeout),
+        env=_desktop_env(),
+    )
+    structure: dict[str, Any] = {}
+    if described.returncode == 0:
+        try:
+            structure = json.loads(described.stdout)
+        except json.JSONDecodeError:
+            structure = {}
+    check(
+        "the packaged window reports its structure",
+        described.returncode == 0 and bool(structure),
+        f"exit={described.returncode} output={described.stdout.strip()[:200]!r}",
+    )
+    views = structure.get("views") if isinstance(structure, dict) else None
+    check(
+        "the packaged window offers the Chat and Task views",
+        views == ["Chat", "Task"],
+        f"views={views!r}",
+    )
+    controls = (
+        structure.get("task_panel", {}).get("controls", {}) if isinstance(structure, dict) else {}
+    )
+    check(
+        "the packaged task panel carries the review and run controls",
+        {"Propose plan", "Approve", "Reject", "Run", "Cancel"} <= set(controls),
+        f"controls={sorted(controls)!r}",
+    )
+    check(
+        "nothing runs before a plan is approved",
+        controls.get("Approve", {}).get("enabled") is False
+        and controls.get("Run", {}).get("enabled") is False,
+        f"approve={controls.get('Approve')} run={controls.get('Run')}",
+    )
+
     if args.config_dir is None:
         shutil.rmtree(workdir, ignore_errors=True)
 

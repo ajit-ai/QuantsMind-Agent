@@ -35,7 +35,7 @@ Layers
      - Tool activity appears before the answer
    * - Manual acceptance
      - Does the real product work on real Windows with a real model?
-     - QM-V01-LLM-001
+     - BETA-03
    * - CI
      - Is the repository still healthy on a clean machine?
      - lint, types, tests, docs, build
@@ -102,9 +102,11 @@ Manual acceptance
 =================
 
 The only layer that talks to a real model, on a real desktop, with real
-credentials. See :doc:`manual-acceptance`. Its results are recorded in
-:doc:`acceptance-v0.1`, using ``PASS`` / ``FAIL`` / ``NOT RUN`` / ``BLOCKED`` --
-never inferred from the automated suite.
+credentials. The v0.9.0 release gate is
+:doc:`../qualification/manual-beta-acceptance`; the local smoke table is in
+:doc:`manual-acceptance`. Results are recorded in the beta plan using ``PASS`` /
+``FAIL`` / ``NOT TESTED`` / ``BLOCKED`` -- never inferred from the automated
+suite. The historical :doc:`acceptance-v0.1` report remains a v0.1 record.
 
 Rules
 =====

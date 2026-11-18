@@ -6,8 +6,11 @@ Workspace
 =========
 
 
-A *workspace* is the single project folder QuantsMind-Agent may inspect. The
-user picks one folder; every tool resolves paths inside it and nowhere else.
+A *workspace* is the single project folder QuantsMind-Agent may access through
+its built-in tools. The user picks one folder; every file tool and every Git
+tool resolves paths inside it and nowhere else. An approved command starts in
+the workspace but is a separate, less contained capability; see
+:doc:`../architecture/command-execution`.
 
 Opening a project
 =================
@@ -65,7 +68,12 @@ a symlink/junction pointing outside  resolves outside the root
 The agent sees the refusal as an observation and can correct itself::
 
     TOOL ERROR (read_file): 'secrets.txt' is outside the current workspace.
-    QuantsMind-Agent can only read files inside the project folder you opened.
+    QuantsMind-Agent can only access files inside the project folder you opened.
+
+Project discovery does not follow symbolic links, directory junctions or other
+filesystem reparse points. They are omitted from listings and scans, and the
+project snapshot says how many paths were not followed. A direct request that
+resolves outside the workspace is still refused.
 
 Changing the ignore list
 ========================
@@ -81,15 +89,16 @@ The GUI always uses the default list; the parameter exists for embedders.
 Recommended project shapes
 ==========================
 
-v0.1 works best on projects where the answer lives in a handful of text files:
+The workspace tools work best on projects where the answer lives in text files:
 Python, JavaScript/TypeScript, Java, Go, Rust, C#, C/C++, shell, Markdown,
-YAML/JSON/TOML. Monorepos work, but you should open the sub-project that the
-question is about -- the workspace summary lists only the top level, and a very
-large tree is slower to search.
+YAML/JSON/TOML. Monorepos work, but opening the sub-project a question is about
+keeps discovery and search focused. The project snapshot reports roots,
+declared checks and an explicit sample, so a large tree is not mistaken for a
+complete inventory.
 
 Related
 =======
 
-* :doc:`tools` -- the four tools built on the workspace.
-* :doc:`permissions` -- why reads are allowed and writes are denied.
+* :doc:`tools` -- the read, navigation, mutation, command and Git tools.
+* :doc:`permissions` -- why reads are allowed and writes ask.
 * :doc:`../architecture/workspace` -- the implementation contract.

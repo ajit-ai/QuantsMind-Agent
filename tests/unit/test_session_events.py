@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 
 from quantsmind_agent.events import AgentEvent, AgentEventType, EventBus
+from quantsmind_agent.runtime.tools import ToolResult
 from quantsmind_agent.schema import AssistantMessage, MessageRole, ToolMessage, UserMessage
-from quantsmind_agent.session import Session
-from quantsmind_agent.tools import ToolResult
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.services.conversations.session import Session
+from quantsmind_agent.services.workspace.containment import Workspace
 
 
 class TestSession:

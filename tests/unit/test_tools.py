@@ -8,14 +8,14 @@ import pytest
 
 from quantsmind_agent.errors import ToolFailedError, ToolNotFoundError
 from quantsmind_agent.events import AgentEventType, EventBus
-from quantsmind_agent.permissions import (
+from quantsmind_agent.runtime.tools import ToolRegistry, ToolResult, ToolSpec, validate_arguments
+from quantsmind_agent.security.permissions import (
     Decision,
     Permission,
     PermissionBroker,
     PermissionRule,
     StaticPermissionProvider,
 )
-from quantsmind_agent.tools import ToolRegistry, ToolResult, ToolSpec, validate_arguments
 
 
 class EchoTool:

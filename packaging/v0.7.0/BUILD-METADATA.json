@@ -1,0 +1,16 @@
+{
+  "record_type": "historical",
+  "version": "0.7.0",
+  "tag": "v0.7.0",
+  "release_commit": "92b149bce4a3c4942f6a85e3423c9617a2602b8d",
+  "artifact": "QuantsMindAgent-0.7.0-x64.msi",
+  "platform": "windows-x64",
+  "size_bytes": 60851819,
+  "sha256": "0665aad36dd857f6d6ebacfc25f67d8794ede8eef9476f8a6bca327f6e77ac98",
+  "release_status": "published",
+  "release_url": "https://github.com/ajit-ai/QuantsMind-Agent/releases/tag/v0.7.0",
+  "artifact_url": "https://github.com/ajit-ai/QuantsMind-Agent/releases/download/v0.7.0/QuantsMindAgent-0.7.0-x64.msi",
+  "verified_on": "2026-10-20",
+  "verification": "The local release artifact and the published GitHub Release asset match in name, byte size and SHA-256.",
+  "note": "Historical record reconstructed when the permanent packaging-history policy was introduced in v0.8.0. The artifact was published before this mechanism existed."
+}

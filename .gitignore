@@ -28,6 +28,10 @@ docs/build/
 *.manifest
 *.spec.bak
 
+# Generated distribution output (not source)
+dist-onefile/
+dist-v02-manual/
+
 # Editors / OS
 .idea/
 .vscode/
@@ -53,3 +57,6 @@ secrets.toml
 
 # Smoke-test and manual-run artifacts
 .smoke-*/
+
+# Build output for the packaging matrix (artifacts/vX.Y.Z/...)
+artifacts/

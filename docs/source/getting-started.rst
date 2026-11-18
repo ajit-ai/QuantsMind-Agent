@@ -37,7 +37,7 @@ Five-minute tour
 
 #. Open a project. Click **Open project…** in the sidebar and select a folder
    on disk. The folder path appears in the sidebar and the status bar, and the
-   agent registers its read-only tools for that folder.
+   agent registers its workspace tools for that folder.
 
 #. Configure the model. Click **Settings…** (``Ctrl+K``), pick a preset such as
    **OpenAI**, confirm the model name, and paste your API key. The key is
@@ -77,33 +77,46 @@ cooperative: it takes effect at the next agent iteration or as soon as a
 streamed response yields. An HTTP request already in flight cannot be aborted,
 but a late answer is discarded rather than shown.
 
-What v0.1 does and does not do
-==============================
+What v0.9.0 does and does not do
+================================
 
 Does
 ----
 
-* Reads a local project through four tools: ``project_structure``,
-  ``list_directory``, ``read_file``, ``search_content``.
-* Streams the final answer when the provider supports streaming.
-* Shows every tool call, with its state, while it happens.
-* Keeps the conversation for as long as the application stays open.
-* Enforces a workspace boundary on every path, including symlink escapes.
+* Reads and navigates a local project through eight read-only tools, including
+  ``project_structure``, ``read_file``, ``code_outline`` and
+  ``project_context``.
+* Writes, edits, deletes and undoes files, with approval before every change.
+* Runs an approved command with a timeout and bounded output; the command policy
+  refuses destructive operations.
+* Reads Git state through ``git_status``, ``git_diff`` and ``git_log``.
+* Plans against a bounded workspace snapshot and keeps that snapshot with the
+  task as evidence.
+* Streams the final answer, shows every tool call, and persists conversations,
+  task history, checkpoints and recovery state.
+* Enforces a workspace boundary on every path, including direct symlink and
+  junction escapes.
 
 Does not (yet)
 --------------
 
-* No file writes, no command execution, no git, no network tools.
-* No persistent memory or conversation history across restarts.
-* No multi-agent orchestration, no MCP, no VS Code extension.
+* No OS-level sandbox: approved commands run with your privileges.
+* No built-in web-fetch or arbitrary network tool. An approved command may use
+  the network; the policy blocks common transfer tools but is not a sandbox.
+* No Git mutations: commit, push, checkout and reset are deliberately blocked.
+* No MCP, VS Code extension or multi-agent orchestration.
+* No signed Windows release. The published v0.9.0 MSI is unsigned and is a
+  limited beta; real-model, clean-machine and human approval evidence is still
+  outstanding.
 
-These are deliberate v0.1 boundaries, documented in
-:doc:`releases/v0.1` and planned in :doc:`roadmap/roadmap`.
+See :doc:`architecture/v0.9-behaviour` for the release behaviour and
+:doc:`qualification/index` for what has actually been verified.
 
 Next steps
 ==========
 
 * :doc:`installation` -- install, run, and build a package.
 * :doc:`configuration` -- every setting and where it lives.
-* :doc:`user/tools` -- what the agent can read and how.
-* :doc:`testing/manual-acceptance` -- verify v0.1 on your machine.
+* :doc:`user/tools` -- what the agent can do and how.
+* :doc:`qualification/manual-beta-acceptance` -- the current v0.9.0 manual
+  qualification plan.

@@ -31,9 +31,11 @@ central rule the rest of the application is built on:
 
 The agent can now write files, apply deterministic edits, delete files, run
 approved commands and inspect Git state. Every one of those is a separate,
-individually approved operation, and the three highest-risk ones -- deleting a
-file, running a command, and anything the safety policy forbids -- cannot be
-approved into existence at all.
+individually decided operation. Deleting a file and running a command always
+reach the user, whatever else the settings allow, and can never be granted for
+the session; anything the command safety policy forbids is refused before the
+user is asked at all, because offering "Allow" for it would turn the dialog into
+a speed bump rather than a control.
 
 .. code-block:: text
 
@@ -74,13 +76,58 @@ Filesystem
        explicit precondition.
    * - ``delete_file``
      - Remove a single file. Always asks. Never removes a directory tree.
+   * - ``undo_file``
+     - Put one file back the way it was before the newest change the agent made
+       to it. Always asks. Restores the previous bytes exactly, removes the file
+       when the change being undone created it, and refuses when the file
+       changed outside the agent. ``delete_file`` is deliberately not undoable.
+
+Structured diffs
+----------------
+
+``write_file`` and ``edit_file`` report what they changed, not only that they
+changed something. The result the model reads back carries a unified diff, the
+number of lines added and removed, and whether the diff was truncated:
+
+.. code-block:: text
+
+   diff          +DEFAULT_PORT = 9090
+                 -DEFAULT_PORT = 8080
+   diff_kind     modified
+   diff_added    1
+   diff_removed  1
+   diff_truncated false
+
+``diff_kind`` names the cases where there is nothing to compare: ``created``
+when the file did not exist before, and ``unavailable`` when the previous
+content exists but was too large to read. ``delete_file`` reports no diff at all
+-- the file it changed no longer has content to compare against.
+
+The diff is bounded so a whole-file rewrite cannot flood the context: at most
+200 lines and 8000 characters. The line counts always describe the whole change,
+so they stay usable as a summary even when the text is cut short.
+
+Reversible changes
+------------------
+
+``write_file`` and ``edit_file`` record a pre-image in a session-scoped undo
+list: a stack per file, holding the exact bytes and a SHA-256 digest. One
+``undo_file`` call reverses one step, so successive changes to one file can be
+walked back one at a time, and files can be undone independently of each other.
+
+The list lives in memory for the current conversation only. A new conversation,
+a different project, or closing the application discards it. A write that failed
+records nothing, and an undo that failed leaves its step available to retry.
 
 Command execution
 -----------------
 
 ``run_command`` runs one development command inside the project folder after
 approval, with a working-directory containment check, a timeout, cancellation,
-bounded stdout and stderr, and the exit code reported back to the model.
+bounded stdout and stderr, and the exit code reported back to the model. Both
+streams are capped from both ends -- the head and the tail of the output are
+kept, with a marker where the middle was dropped -- because the part of a
+failing command that matters is usually its last line.
 
 Git awareness
 -------------
@@ -92,9 +139,25 @@ structurally read-only: see :ref:`git-read-only`.
 Approvals
 =========
 
-Any tool that can change the machine or the workspace prompts first. The prompt
-shows the operation, the target, the workspace, the arguments, the reason the
-model gave and the risk classification.
+By default, any tool that can change the machine or the workspace prompts first.
+The prompt shows the operation, the target, the workspace and the arguments.
+Two more fields depend on the tool: ``run_command`` also shows the one-line
+reason the model gave and the risk classification of the command, because those
+exist only for commands -- the other tools have no reason argument to show.
+
+Two settings relax the default, and neither relaxes it completely:
+
+* **Auto-approve reads** skips the prompt for reading, which cannot change
+  anything. It is on by default; turning it off turns workspace reads into
+  ``ASK`` decisions, which degrade to ``DENY`` without an approver.
+* **Auto-approve writes** skips the prompt for ``write_file`` and ``edit_file``
+  only, and is off by default. ``delete_file``, ``undo_file`` and
+  ``run_command`` keep asking whatever this is set to, and ``NETWORK`` stays
+  denied.
+
+A headless run -- the CLI, the tests, a start with no window attached -- has
+nobody to ask, so every prompt resolves to a denial and nothing mutating runs
+unattended.
 
 .. list-table::
    :header-rows: 1
@@ -106,7 +169,7 @@ model gave and the risk classification.
      - Run this one call only.
    * - Allow for Session
      - Allow every later call of the same tool until the conversation, project
-       or settings change. Never offered for ``delete_file``.
+       or settings change. Never offered for ``delete_file`` or ``undo_file``.
    * - Deny
      - Do not run. The tool returns a failure the model can react to, and the
        turn continues.
@@ -142,5 +205,18 @@ running.
 
 **Delete is file-only.** Removing a directory tree is irreversible at a scale an
 approval dialog cannot meaningfully display, so it is deferred.
+
+**The undo list is per session and per file.** It does not survive a restart, it
+never crosses a project boundary, and it holds the pre-images it needs in memory,
+so a file too large to keep is written without a reversible step recorded. It
+also cannot reconstruct anything the agent did not write through the tools: a
+file deleted with ``delete_file``, or edited by another program, is outside it by
+construction.
+
+**Diffs are bounded and lossy for display.** The text is capped at 200 lines and
+8000 characters, and content that is not valid UTF-8 is decoded leniently for
+the diff even though the undo journal stores the exact bytes. ``write_file``
+replacing an entire large file therefore produces a summary, not a full patch;
+reading the file is how the model sees more.
 
 See :ref:`architecture-security-boundaries` for the full list.

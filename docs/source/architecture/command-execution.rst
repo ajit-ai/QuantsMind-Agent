@@ -12,7 +12,7 @@ Overview
 
 ``run_command`` executes one development command inside the configured project
 folder, after the user has approved it. It is the single most powerful tool in
-v0.2, and it is bounded by three independent gates that all have to pass:
+v0.9.0, and it is bounded by three independent gates that all have to pass:
 
 #. the **command policy**, a hard deny list that no approval can override;
 #. the **permission layer**, which requires an explicit human decision;
@@ -89,10 +89,10 @@ transfer and loader techniques (``curl``, ``wget``, ``ssh``, ``scp``,
 ``podman``), package publishing (``npm publish``, ``twine upload``), host
 security-policy changes, audit-log clearing, and inline code strings.
 
-Git's mutating verbs are blocked too. v0.2 ships no Git mutation tools, and
-letting the generic command tool reach them would make *mutations are deferred*
-true only until the model spelled one differently. Read-only verbs stay
-available.
+Git's mutating verbs are blocked too. The current release ships no Git mutation
+tools, and letting the generic command tool reach them would make *mutations are
+deferred* true only until the model spelled one differently. Read-only verbs
+stay available.
 
 .. warning::
 

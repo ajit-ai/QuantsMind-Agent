@@ -94,6 +94,48 @@ What has been ruled out
 * Not the offscreen platform plugin: the same abort occurs under it.
 * Not introduced by the packaging work: the first occurrence predates it.
 
+Measured, not guessed: the abort is Python 3.11-specific
+--------------------------------------------------------
+
+Once the harness ran correctly (see above), the first genuine measurement on
+``ubuntu-22.04`` gave:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Python
+     - baseline
+     - ``-p no:warnings``
+   * - 3.11
+     - **abort 5/6 (83%)**
+     - not reached
+   * - 3.12
+     - pass 6/6 (0%)
+     - pass 6/6 (0%)
+
+This substantially changes the picture. The abort is not an intermittent
+once-in-two-run flake affecting 3.11 and 3.12 alike -- **on ubuntu CPython 3.11
+it reproduces in roughly five runs out of six**, while the identical tree on
+3.12 was clean in six out of six. That makes it reliably reproducible on demand,
+which is the single most useful property a diagnosis can have. It also means
+the earlier "intermittent on 3.11 and 3.12" characterisation was wrong on its
+second half: 3.12 has never aborted under measurement.
+
+Two caveats, both real. The 3.11 ``-p no:warnings`` cell is empty because the
+aborting baseline step failed the job before the comparison step could run, so
+the decisive comparison has not yet been made; the workflow now runs both
+configurations unconditionally so it can be. And the abort banner itself was
+**lost** on those runs -- pytest captures at file-descriptor level, so when the
+interpreter aborts, "Fatal Python error: Aborted" is written into pytest's
+capture buffer and the dying process never reads it back. The run logs contained
+53 bytes of progress dots and nothing else. The harness now runs with
+``--capture=no`` so the banner survives the crash, and the next measurement
+should finally carry a stack.
+
+The working hypothesis is unchanged and still unconfirmed: teardown ordering
+between PySide's object ownership and CPython's finalisation, provoked by the
+per-test warnings filter.
+
 Next diagnostic step
 --------------------
 
@@ -195,9 +237,11 @@ Windows desktop acceptance is outstanding
 ==========================================
 
 No human has looked at the rendered window or exercised an approval dialog on
-any platform. See :doc:`testing/native-gui-acceptance` for the checklist and the result
-template. The ``Manual Windows 11 acceptance required`` CI job is a four-second
-reminder and is not a test.
+any platform. The v0.9.0 gate and result template are in
+:doc:`qualification/manual-beta-acceptance`; the older
+:doc:`testing/native-gui-acceptance` page is supporting context, not the current
+sign-off record. The ``Manual Windows 11 acceptance required`` CI job is a
+four-second reminder and is not a test.
 
 Documentation is not published
 ==============================

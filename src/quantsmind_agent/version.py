@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Final
 
-__version__: Final[str] = "0.2.0"
-version_info: Final[tuple[int, int, int]] = (0, 2, 0)
+__version__: Final[str] = "0.9.0"
+version_info: Final[tuple[int, int, int]] = (0, 9, 0)
 
 #: Human readable product name used in window titles and documentation.
 APP_NAME: Final[str] = "QuantsMind-Agent"

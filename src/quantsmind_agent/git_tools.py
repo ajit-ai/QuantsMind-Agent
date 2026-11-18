@@ -1,27 +1,35 @@
-"""Read-only Git awareness tools.
+"""Git integration tools (WP5 of v0.12.0).
 
 ``git_status``
     What is staged, what is unstaged, what is untracked, and which branch is
-    checked out.
+    checked out. Read-only; gated by ``Permission.GIT``.
 ``git_diff``
     Line-level changes, optionally limited to the staged set or to a path.
+    Read-only; gated by ``Permission.GIT``.
 ``git_log``
-    Recent commits, optionally limited to one path.
+    Recent commits, optionally limited to one path. Read-only; gated by
+    ``Permission.GIT``.
+``git_stage`` / ``git_unstage``
+    Selective stage (``git add``) / unstage (``git restore --staged``) of
+    workspace-relative paths. Read-write; gated by ``Permission.EXECUTE_COMMAND``
+    (ASK) so every mutation needs explicit human approval at execution time.
+``git_commit``
+    Commit staged changes with an explicit message (``git commit -m``).
+    Read-write; gated by ``Permission.EXECUTE_COMMAND`` (ASK). Never pushes,
+    never uses ``--no-verify``, never bypasses hooks.
 
-v0.2 exposes no Git mutation tool. That restriction is enforced two ways:
+Safety properties:
 
-* **No mutating verb is reachable.** Every argv vector is assembled here from a
-  fixed vocabulary of read-only sub-commands. The model chooses flags and
-  optional paths, never the sub-command, so ``commit``, ``push``, ``checkout``,
-  ``reset``, ``merge`` and ``rebase`` are not spelled anywhere in this module.
-* **Argument injection is impossible.** The model never supplies a program name
-  and never supplies a free-form argument string. A ``--`` separator is always
-  inserted before a user path, so a path beginning with ``-`` is a path and not a
-  flag, and cannot be read as an option.
-
-Both properties survive even a fully adversarial model, which is why these tools
-do not need the command policy's deny list: there is simply nothing here that
-changes the repository.
+* **No dangerous verb is reachable.** Every argv vector is assembled here from
+  a fixed vocabulary of sub-commands. The caller chooses flags and optional
+  paths, never the sub-command, so ``push``, ``checkout``, ``reset``,
+  ``merge``, ``rebase``, ``clean``, ``stash`` etc. are not spelled anywhere
+  in this module.
+* **Argument injection is impossible.** A ``--`` separator is always inserted
+  before a user path, so a path beginning with ``-`` is a path and not a
+  flag.
+* **Unrelated changes are untouched.** Stage/unstage operate only on the
+  explicitly listed paths; commit commits only what is already staged.
 """
 
 from __future__ import annotations
@@ -31,14 +39,22 @@ import subprocess
 import sys
 from typing import Any
 
-from quantsmind_agent.command_tools import CappedReader, sanitized_environment
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.errors import GitError, InvalidPathError
-from quantsmind_agent.logging_setup import get_logger
-from quantsmind_agent.permissions import Permission
-from quantsmind_agent.tools import ToolResult, ToolSpec
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.runtime.tools import ToolResult, ToolSpec
+from quantsmind_agent.runtime.tools.builtin.command import CappedReader, sanitized_environment
+from quantsmind_agent.security.permissions import Permission
+from quantsmind_agent.services.workspace.containment import Workspace
 
-__all__ = ["GitDiffTool", "GitLogTool", "GitStatusTool", "build_git_tools"]
+__all__ = [
+    "GitCommitTool",
+    "GitDiffTool",
+    "GitLogTool",
+    "GitStageTool",
+    "GitStatusTool",
+    "GitUnstageTool",
+    "build_git_tools",
+]
 
 logger = get_logger(__name__)
 
@@ -428,10 +444,216 @@ class GitLogTool:
 
 
 def build_git_tools(workspace: Workspace, *, timeout: float = DEFAULT_TIMEOUT) -> list[Any]:
-    """Instantiate the read-only Git tools bound to ``workspace``."""
+    """Build the Git tools bound to ``workspace``.
+
+    Returns read-only tools plus the mutation tools (stage, unstage, commit).
+    """
 
     return [
         GitStatusTool(workspace, timeout=timeout),
         GitDiffTool(workspace, timeout=timeout),
         GitLogTool(workspace, timeout=timeout),
+        GitStageTool(workspace, timeout=timeout),
+        GitUnstageTool(workspace, timeout=timeout),
+        GitCommitTool(workspace, timeout=timeout),
     ]
+
+
+class GitStageTool:
+    """Stage one or more files for the next commit (``git add``).
+
+    Read-write; requires approval via the permission broker.
+    """
+
+    def __init__(self, workspace: Workspace, *, timeout: float = DEFAULT_TIMEOUT) -> None:
+        self._git = _GitRunner(workspace, timeout=timeout)
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="git_stage",
+            description=(
+                "Stage one or more files for the next commit (git add). "
+                "Specify workspace-relative paths. Read-write; requires approval."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Workspace-relative paths of files to stage.",
+                    }
+                },
+                "required": ["paths"],
+                "additionalProperties": False,
+            },
+            permission=Permission.EXECUTE_COMMAND,
+            summary_template="git stage {paths}",
+            read_only=False,
+        )
+
+    def run(self, arguments: dict[str, Any]) -> ToolResult:
+        paths = arguments.get("paths", [])
+        if not isinstance(paths, list) or not paths:
+            raise GitError(
+                "git_stage",
+                user_message="no paths provided",
+                details={"command": "git_stage"},
+            )
+
+        resolved_paths: list[str] = []
+        for path in paths:
+            resolved = self._git.scope(path)
+            if resolved is not None:
+                resolved_paths.append(resolved)
+
+        code, _stdout, stderr = self._git.run(["add", "--", *resolved_paths])
+        if code != 0:
+            raise GitError(
+                "git_stage",
+                user_message=f"git stage failed: {stderr.strip() or 'unknown error'}",
+                details={"exit_code": code, "paths": resolved_paths},
+            )
+
+        return ToolResult.success(
+            self.spec.name,
+            f"staged {len(resolved_paths)} file(s)",
+            {
+                "command": "git_stage",
+                "paths": resolved_paths,
+                "count": len(resolved_paths),
+            },
+        )
+
+
+class GitUnstageTool:
+    """Unstage one or more files (``git restore --staged``).
+
+    Read-write; requires approval via the permission broker.
+    """
+
+    def __init__(self, workspace: Workspace, *, timeout: float = DEFAULT_TIMEOUT) -> None:
+        self._git = _GitRunner(workspace, timeout=timeout)
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="git_unstage",
+            description=(
+                "Unstage one or more files (git restore --staged). "
+                "Specify workspace-relative paths. "
+                "Read-write; requires approval."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Workspace-relative paths of files to unstage.",
+                    }
+                },
+                "required": ["paths"],
+                "additionalProperties": False,
+            },
+            permission=Permission.EXECUTE_COMMAND,
+            summary_template="git_unstage {paths}",
+            read_only=False,
+        )
+
+    def run(self, arguments: dict[str, Any]) -> ToolResult:
+        paths = arguments.get("paths", [])
+        if not isinstance(paths, list) or not paths:
+            raise GitError(
+                "git_unstage",
+                user_message="no paths provided",
+                details={"command": "git_unstage"},
+            )
+
+        resolved_paths: list[str] = []
+        for path in paths:
+            resolved = self._git.scope(path)
+            if resolved is not None:
+                resolved_paths.append(resolved)
+
+        code, _stdout, stderr = self._git.run(["restore", "--staged", "--", *resolved_paths])
+        if code != 0:
+            raise GitError(
+                f"git restore --staged failed: {stderr.strip() or 'unknown error'}",
+                user_message="Git could not unstage the specified files.",
+                details={"exit_code": code, "paths": resolved_paths},
+            )
+
+        return ToolResult.success(
+            self.spec.name,
+            f"unstaged {len(resolved_paths)} file(s)",
+            {
+                "command": "git_unstage",
+                "paths": resolved_paths,
+                "count": len(resolved_paths),
+            },
+        )
+
+
+class GitCommitTool:
+    """Commit staged changes with an explicit message (``git commit``).
+
+    Requires explicit approval. Does not push, does not use --no-verify,
+    and does not bypass hooks.
+    """
+
+    def __init__(self, workspace: Workspace, *, timeout: float = DEFAULT_TIMEOUT) -> None:
+        self._git = _GitRunner(workspace, timeout=timeout)
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="git_commit",
+            description=(
+                "Commit staged changes with a message. "
+                "Provide a commit message. "
+                "Read-write; requires explicit approval."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The commit message.",
+                    }
+                },
+                "required": ["message"],
+                "additionalProperties": False,
+            },
+            permission=Permission.EXECUTE_COMMAND,
+            summary_template="git commit",
+            read_only=False,
+        )
+
+    def run(self, arguments: dict[str, Any]) -> ToolResult:
+        message = arguments.get("message", "")
+        if not message or not isinstance(message, str):
+            raise GitError(
+                "git_commit",
+                user_message="no commit message provided",
+                details={"command": "git_commit"},
+            )
+
+        code, stdout, stderr = self._git.run(["commit", "-m", message])
+        if code != 0:
+            raise GitError(
+                f"git commit failed: {stderr.strip() or 'unknown error'}",
+                user_message="Git could not commit the changes.",
+                details={"exit_code": code, "message": message},
+            )
+
+        return ToolResult.success(
+            self.spec.name,
+            "committed changes",
+            {
+                "command": "git_commit",
+                "message": message,
+                "stdout": stdout.strip(),
+            },
+        )

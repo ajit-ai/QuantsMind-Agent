@@ -19,8 +19,8 @@ import pytest
 
 from quantsmind_agent.errors import LLMError
 from quantsmind_agent.events import AgentEventType
-from quantsmind_agent.llm import ChatRequest, ChatResponse
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.providers.gateway import ChatRequest, ChatResponse
+from quantsmind_agent.services.workspace.containment import Workspace
 from tests.fakes import FakeModelProvider, text_response, tool_response
 from tests.harness import AgentHarness
 
@@ -205,9 +205,22 @@ class TestLimitsAndFailures:
         harness = AgentHarness(workspace, BrokenProvider())
         outcome = harness.run("hello")
         assert outcome.error
+        assert outcome.stopped_reason == "error"
         assert not outcome.succeeded
         assert harness.seen[-1] is AgentEventType.AGENT_FAILED
         assert not harness.agent.is_running
+
+    def test_unexpected_failure_marks_the_stop_reason_as_error(self, workspace: Workspace) -> None:
+        class ExplodingProvider(FakeModelProvider):
+            def complete(self, request: ChatRequest) -> ChatResponse:
+                raise RuntimeError("unexpected provider failure")
+
+        harness = AgentHarness(workspace, ExplodingProvider())
+        outcome = harness.run("hello")
+        assert outcome.error
+        assert outcome.stopped_reason == "error"
+        assert not outcome.succeeded
+        assert harness.seen[-1] is AgentEventType.AGENT_FAILED
 
     def test_agent_is_not_running_afterwards(self, harness: AgentHarness) -> None:
         harness.provider.script(text_response("ok"))

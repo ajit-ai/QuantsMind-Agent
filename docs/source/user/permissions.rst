@@ -23,24 +23,24 @@ Permission           Meaning
 ``WRITE_WORKSPACE``  Create, edit or delete files in the project.
 ``EXECUTE_COMMAND``  Run a command on this computer.
 ``GIT``              Inspect repository state (read-only tools only).
-``NETWORK``          Fetch arbitrary URLs. Denied in v0.2.
+``NETWORK``          Fetch arbitrary URLs. No built-in tool; denied.
 ===================  ================================================
 
-Since v0.2, ``WRITE_WORKSPACE``, ``EXECUTE_COMMAND`` and ``GIT`` are in active
+In v0.9.0, ``WRITE_WORKSPACE``, ``EXECUTE_COMMAND`` and ``GIT`` are in active
 use. The shipped policy is:
 
-===================  ========  =================================
+===================  ========  ================================
 Permission           Decision  Notes
-===================  ========  =================================
+===================  ========  ================================
 ``READ_WORKSPACE``   ALLOW     Reads change nothing.
-``WRITE_WORKSPACE``  ASK       Every write is approved.
-``EXECUTE_COMMAND``  ASK       Always approved, never automatic.
+``WRITE_WORKSPACE``  ASK       Writes and edits ask by default.
+``EXECUTE_COMMAND``  ASK       Always asks, never automatic.
 ``GIT``              ALLOW     Only read-only tools exist.
-``NETWORK``          DENY      No network tool in v0.2.
-===================  ========  =================================
+``NETWORK``          DENY      No built-in network tool.
+===================  ========  ================================
 
-Two operations keep asking no matter what, because both are irreversible or
-host-affecting: ``delete_file`` and ``run_command``. Turning on
+Three operations keep asking no matter what, because they are irreversible or
+host-affecting: ``delete_file``, ``undo_file`` and ``run_command``. Turning on
 ``auto_approve_writes`` in :doc:`../configuration` deliberately cannot widen
 them.
 
@@ -57,7 +57,7 @@ Choice              Effect
 Allow / Allow Once  Runs this one call only.
 Allow for Session   Allows later calls of the same tool, until the
                      conversation, project or settings change. Never offered
-                     for ``delete_file``.
+                     for ``delete_file``, ``undo_file`` or ``run_command``.
 Deny                Does not run. The model is told and the turn
                      continues.
 ==================  =======================================================
@@ -152,9 +152,11 @@ The broker accepts an approver callback:
 
     broker.set_approver(lambda request: ask_the_user(request.summary))
 
-In the v0.1 GUI no approver is installed, so every ``ASK`` degrades to ``DENY``.
-Turning off **Allow workspace reads without prompting** in Settings therefore
-makes reads fail closed.
+The packaged GUI installs an approver, so an ``ASK`` opens the approval dialog.
+A headless run or a custom embedding that does not install one makes every
+``ASK`` degrade to ``DENY``. Turning off **Allow workspace reads without
+prompting** in Settings therefore makes reads fail closed when no approver is
+available.
 
 What the user sees
 ==================

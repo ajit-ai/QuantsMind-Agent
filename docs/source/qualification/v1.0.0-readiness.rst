@@ -1,0 +1,935 @@
+.. _qualification-v1-readiness:
+
+
+=========================================
+v1.0.0 readiness qualification: v0.9.0
+=========================================
+
+.. contents::
+   :local:
+   :depth: 2
+
+This is a qualification record, not a release approval. It asks two separate
+questions:
+
+#. Is the published v0.9.0 artifact fit for real-world use?
+#. Is the evidence sufficient to start v1.0.0 as a stable release?
+
+The answers are different. The artifact is fit for a **supervised technical
+beta** on Windows 11 x64. It is **not** fit for general distribution or a
+v1.0.0 stable claim on the evidence available.
+
+Assessment identity
+===================
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Field
+     - Value
+   * - Assessment date
+     - 2026-10-20
+   * - Target release
+     - v0.9.0, published 2026-10-20T13:11:27Z
+   * - Source
+     - Annotated tag object
+       ``e4ad8a8fe2fa6e663a8cac314635cb5bdd977129``, peeling to release commit
+       ``b4755060cfaa85f40247507c8cf68486410c2a3d``
+   * - Artifact
+     - ``QuantsMindAgent-0.9.0-x64.msi``, 43,360,256 bytes, SHA-256
+       ``74823186651280cf6c7403bfdf1e016b35fbc2a9a3146aa750e2650f04e6dde6``
+   * - Release URL
+     - https://github.com/ajit-ai/QuantsMind-Agent/releases/tag/v0.9.0
+   * - Platform scope
+     - Windows 11 AMD64. Linux, macOS and BSD are outside the published v0.9.0
+       scope and are not counted either way.
+   * - Assessment basis
+     - Source review, local automated gates, packaged-artifact tests, a local
+       OpenAI-compatible stub, and installer lifecycle verification.
+   * - Independent evidence
+     - **None.** No external tester, clean virtual machine, dedicated
+       real-provider test credential, or human desktop/approval-dialog review
+       was used.
+   * - Verdict
+     - **CONDITIONAL -- LIMITED BETA ONLY**
+
+Verdict
+========
+
+**CONDITIONAL -- LIMITED BETA ONLY**
+
+The v0.9.0 MSI installs, launches, survives a reinstall, uninstalls cleanly,
+and leaves the real user profile byte-identical. The packaged application and
+the source suite pass their automated gates. Core workspace-intelligence and
+task-evidence behaviour is covered by acceptance fixtures and regression tests.
+
+That is enough to put the build in front of supervised technical testers on
+disposable projects. It is not enough to call v0.9.0 generally usable, and it is
+not enough to open v1.0.0.
+
+The limiting facts are:
+
+* no request has been sent to a real model provider;
+* no human has reviewed the rendered desktop interface or driven an approval
+  dialog;
+* no clean machine or independent installer has been tested;
+* the MSI and executable are unsigned, and no signing key or trusted-publisher
+  process exists in this repository;
+* a directory junction inside a workspace breaks discovery in the published
+  v0.9.0 artifact (fixed in the source tree, pending release retest);
+* current user and security documentation described v0.1/v0.2 behaviour at the
+  assessment cut-off (corrected in source on 2026-10-21; see below);
+* the release-commit CI signal is not available;
+* the 0.9-to-1.0 upgrade path has not been tested.
+
+The detailed open items are in :doc:`defect-triage`. The executable beta
+procedure is in :doc:`manual-beta-acceptance`.
+
+.. _qualification-post-remediation:
+
+Post-qualification remediation
+==============================
+
+This section was added after the assessment date. It does not rewrite the
+historical gate results above. It records a source-level correction, the
+evidence for it, and the boundary between the source tree and the published
+v0.9.0 artifact.
+
+Artifact boundary
+-----------------
+
+* The correction is committed on the remediation branch. An internal candidate
+  was built from that source into a separately named, ignored directory and
+  tested at artifact level. It is not published.
+* No version bump, tag, public release or replacement of the published MSI was
+  produced. The candidate has its own filename and metadata.
+* **G23 remains FAIL for the published v0.9.0 MSI.** The candidate-level G23
+  check passed against the installed artifact and against the code objects
+  embedded in its executable.
+* The original full-suite result was 1710 passed. The remediated source adds
+  three regression tests; the full suite now records 1713 passed, 3 skipped.
+* The checkout is no longer identical to the release commit. The Environment
+  section describes the assessment cut-off, not the current branch.
+
+QF-006 / G23: root cause and correction
+---------------------------------------
+
+The walk used ``os.walk(..., followlinks=False)``. On Windows that flag does
+not suppress directory junctions: a junction is reported as a directory and is
+descended. The listing path then resolved the junction target and
+``_relative_of`` correctly refused the outside path, but the refusal escaped as
+an unhandled ``InvalidPathError`` and failed the whole scan.
+
+The corrected policy is explicit:
+
+* discovery never follows symbolic links, junctions or other filesystem
+  reparse points;
+* listings and walks omit them, and the walk can return their
+  workspace-relative paths as excluded entries;
+* the workspace snapshot records the excluded paths in ``unknowns`` rather than
+  claiming complete coverage;
+* direct reads through an outward link remain refused by path containment;
+* an entry-budget, sampling or ignored-directory decision is unchanged.
+
+The change is in :mod:`quantsmind_agent.workspace` and
+:func:`quantsmind_agent.workspace_intel.discover_workspace`. The snapshot schema
+was not changed; the exclusion is carried in the existing ``unknowns`` field.
+
+Verification
+------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Check
+     - Result
+   * - Focused tests
+     - ``86 passed, 1 skipped in 3.81s`` for ``test_workspace.py``,
+       ``test_workspace_intel.py`` and ``test_project_intel.py``. The skip is
+       the pre-existing Windows symlink test.
+   * - Integration and GUI
+     - ``23 passed in 5.52s`` for ``test_workspace_evidence.py`` and
+       ``test_task_panel.py``.
+   * - Full suite
+     - ``1713 passed, 3 skipped, 1 warning in 333.82s`` after the final
+       documentation and workflow edits. The warning is the existing test-only
+       pytest deprecation notice. Log:
+       ``%TEMP%\opencode\qm-final-tests\full-suite.log``.
+   * - Junction behaviour
+     - A real Windows junction to an outside folder was created and scanned.
+       Listing returned the safe root entries only; the walk omitted the
+       junction; the snapshot contained the safe file and reported
+       ``1 filesystem link(s) were not followed``; a direct read through the
+       junction raised ``InvalidPathError``.
+   * - Regression coverage
+     - ``TestJunctions`` in ``tests/unit/test_workspace.py`` covers listing,
+       walking and direct-read refusal. ``TestLinks`` in
+       ``tests/unit/test_workspace_intel.py`` covers snapshot exclusion and the
+       explicit unknown.
+   * - Test environment
+     - The default pytest temporary root on this host raised ``WinError 5``
+       during fixture setup; the suite was run with an explicit ``--basetemp``
+       under ``%TEMP%\opencode``. This is a host ACL issue, not a product
+       result.
+
+Static, documentation and artifact checks:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Check
+     - Result
+   * - Ruff
+     - ``ruff check src tests scripts`` passed; ``ruff format --check``
+       reported 156 files already formatted.
+   * - Mypy
+     - ``mypy src`` passed with no issues in 56 source files.
+   * - Documentation
+     - Strict Sphinx build succeeded with warnings treated as errors after the
+       G24 corrections; the RST normaliser reported zero issues. Log:
+       ``%TEMP%\opencode\docs-g24.log``.
+   * - Secret scan
+     - No credential-shaped strings in 889 file(s) after the documentation
+       corrections.
+   * - Release record
+     - The published v0.9.0 MSI remains 43,360,256 bytes with SHA-256
+       ``74823186651280cf6c7403bfdf1e016b35fbc2a9a3146aa750e2650f04e6dde6``,
+       matching ``packaging/v0.9.0``. No packaging file or published release
+       artifact was modified.
+   * - Candidate build
+     - Built separately from the remediated commit, with a candidate-specific
+       MSI filename and ``BUILD-METADATA.json``. Its exact size, SHA-256,
+       Authenticode status and build logs are stored beside the artifact.
+   * - Candidate artifact checks
+     - Installed-artifact G23: ``14/14``. Bundled-bytecode G23: ``12/12``.
+       Packaged smoke: ``14/14``. MSI lifecycle: ``23/23``. G24 documentation
+       bundle built strictly and carried with the candidate.
+   * - Scope control
+     - No tag, version bump, public publish or external provider request was
+       made. Nothing was pushed or merged.
+
+QF-007 / G24: documentation correction
+--------------------------------------
+
+The current-facing pages were updated to the shipped v0.9.0 capability set:
+README, documentation index, security summary, security boundaries,
+getting-started, tools, permissions, conversation, configuration, manual
+acceptance, Windows manual validation, installation and packaging notes. The
+v0.1 Windows checklist is retained under a historical heading so old release
+notes still resolve. Historical release notes and acceptance reports were not
+rewritten.
+
+The manual acceptance page now points to
+:doc:`manual-beta-acceptance` as the release gate and limits itself to a local
+smoke test. The security pages state that approved commands are not an OS
+sandbox, that the artifacts are unsigned, and that the published v0.9.0 MSI has
+the junction-discovery defect.
+
+A strict Sphinx build with warnings as errors now passes. The old
+``manual-llm`` and ``windows-manual-checklist`` references used by historical
+pages were preserved. This closes the G24 condition for the internal candidate;
+it does not change the historical FAIL result for the published artifact, and
+the corrected HTML has not been published. The built HTML is carried with the
+candidate, not with the published v0.9.0 MSI.
+
+G21 / QF-008: workflow correction
+---------------------------------
+
+The audit found one guaranteed runner failure and two stale reminders:
+
+* ``package.yml`` named ``macos-13``, which GitHub has retired; it now names
+  ``macos-15-intel``, matching the unmerged release-engineering fix at
+  ``555bd93``;
+* ``ci.yml`` still told testers to record v0.2 results in the v0.1 acceptance
+  report; it now points at :doc:`manual-beta-acceptance`;
+* the unmerged branch also contains packaging-record validation, which was **not**
+  merged into this working tree.
+
+This is a source fix only. No workflow was dispatched, so G21 remains open and no
+green release-commit run is claimed.
+
+G25 / QF-001: signing requirement
+---------------------------------
+
+The signing guide and verifier remain unmerged on
+``release-engineering/post-v0.8.0`` at ``aede81b``. There is still no production
+certificate, timestamping service, HSM-backed key or trusted-publisher
+credential. The required future sequence is:
+
+#. sign ``QuantsMindAgent.exe`` before building the MSI;
+#. sign the MSI and apply a trusted timestamp;
+#. verify both with ``signtool verify /pa`` and record the signer subject;
+#. publish a new version, tag and artifact; never re-sign or replace v0.9.0;
+#. stop the release if a trusted signing path is unavailable.
+
+A self-signed certificate is not production trust. G25 remains open.
+
+Disposition of the four failing gates
+-------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 18 38 36
+
+   * - Gate
+     - Class
+     - Disposition
+     - Remaining action
+   * - G21
+     - Evidence / CI environment
+     - Open. The retired macOS runner and stale v0.2 reminders were corrected,
+       but no workflow was dispatched. The previous package run remained queued
+       and the diagnostics run failed.
+     - Obtain a green CI result on a commit that contains the fixes.
+   * - G23
+     - Product defect
+     - Fixed in source; regression-tested. Published v0.9.0 remains affected.
+     - Rebuild a candidate and repeat BETA-08 and G23 against its hash.
+   * - G24
+     - Documentation defect
+     - Corrected in source; strict Sphinx build passes. Published HTML was not
+       rebuilt or deployed, and the historical gate table is unchanged.
+     - Carry the corrected docs with the candidate and keep historical pages
+       labelled.
+   * - G25
+     - Release/trust blocker
+     - Open. No certificate, timestamp, trusted publisher or signing secret is
+       available. Signing tooling is unmerged and is not trust by itself.
+     - Provision signing, build a new candidate, and verify the signed MSI and
+       executable.
+
+Scope and non-claims
+====================
+
+This assessment covers the **published Windows 11 AMD64 v0.9.0 MSI** and the
+matching onedir build. It does not cover:
+
+* Linux, macOS or BSD;
+* a v1.0.0 artifact, which does not exist;
+* source installations;
+* a security audit, penetration test, or operating-system sandbox;
+* model quality, provider billing, or provider data-handling terms;
+* accessibility, localisation, or high-DPI review by a person;
+* multi-user deployment, roaming profiles, or enterprise management.
+
+No result here proves that an answer from a real model is correct. The automated
+suite proves the application's own boundaries and contracts; it does not prove
+model judgement.
+
+Evidence levels
+===============
+
+The evidence is deliberately labelled by strength. A headless smoke test is not
+a GUI test, and a scripted provider is not a real model.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 30 62
+
+   * - Level
+     - Evidence
+     - What it can establish
+   * - A
+     - Source tests and static gates
+     - Contracts, refusal paths, persistence, and regressions in the checked-out
+       source. It does not establish packaged behaviour.
+   * - B
+     - Packaged smoke and installer lifecycle
+     - The bundle starts, the MSI installs and removes files, and the installed
+       application opens a titled window. It does not establish usability.
+   * - C
+     - Local OpenAI-compatible stub
+     - Request construction, error normalisation, timeout handling, and
+       credential non-exposure on the network path. It says nothing about a real
+       provider or model quality.
+   * - D
+     - Human desktop and independent beta
+     - What the user actually sees, whether approval is understandable, and
+       whether another machine behaves the same way. **Not obtained.**
+
+Release identity and integrity
+==============================
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 74
+
+   * - Check
+     - Result
+   * - Published MSI hash
+     - Local download matched the recorded size and SHA-256; GitHub reported the
+       same digest.
+   * - Release metadata
+     - ``packaging/v0.9.0/README.md``, ``BUILD-METADATA.json`` and
+       ``checksums.sha256`` agree with the published asset.
+   * - Executable provenance
+     - ``BUILD-METADATA.json`` records release commit
+       ``b4755060cfaa85f40247507c8cf68486410c2a3d``, Python 3.14.7, PyInstaller
+       6.22.3, WiX 5.0.2, Windows 11 AMD64.
+   * - Tag stability
+     - The annotated tag was not moved when packaging metadata was added in a
+       follow-up commit.
+   * - Signature
+     - **Not signed.** Both the MSI and installed
+       ``QuantsMindAgent.exe`` report ``NotSigned``; there is no signer or
+       timestamp.
+   * - Historical releases
+     - The v0.7.0 and v0.8.0 tags and assets were not modified during this
+       assessment.
+
+Environment
+===========
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Item
+     - Value
+   * - Host
+     - Windows 11 AMD64 build workstation; same-user install, not a clean VM.
+   * - Runtime
+     - Python 3.14.7 in the project virtual environment; packaged runtime is the
+       PyInstaller bundle.
+   * - Checkout
+     - Branch ``feature/v0.9.0-workspace-intelligence`` at
+       ``5cf0c1b3ac3cb44b4cdc09997342043636dee4ed``. The three commits after
+       the release commit change only ``packaging/`` records; no source or test
+       file differs, so the suite applies to the released code.
+   * - Display
+     - The full suite ran under Qt's ``offscreen`` platform. Packaged GUI checks
+       used the real Windows session.
+   * - Credential isolation
+     - The no-key check used an empty config directory plus a null keyring
+       backend. ``--config-dir`` alone does not isolate the operating-system
+       credential store, so a clean VM or an explicit null backend is required
+       for first-run evidence.
+   * - Real provider
+     - **Not used.** A dedicated, revocable test credential was not supplied,
+       and no request was sent to a real endpoint.
+   * - Clean machine
+     - **Not available.** Windows Sandbox was not installed, and no clean VM was
+       provided.
+
+What was verified
+=================
+
+.. list-table::
+   :header-rows: 1
+   :widths: 31 55 14
+
+   * - Area
+     - Evidence
+     - Status
+   * - Published artifact identity
+     - Size and SHA-256 matched the release record and GitHub digest.
+     - PASS
+   * - Full offline suite
+     - 1710 passed, 3 skipped, 1 warning in 347.18s. The skips are Windows
+       symlink tests; the warning is a test-only pytest deprecation notice.
+     - PASS
+   * - Static and security gates
+     - Ruff lint and format, mypy on 56 source files, RST normalisation on the
+       pre-report tree, and secret scan over 857 files.
+     - PASS
+   * - Packaged smoke
+     - 14/14 checks, including Qt plugin, no bundled credentials, non-ASCII
+       workspace path, missing workspace, unknown flag, and masked key output.
+     - PASS
+   * - MSI lifecycle
+     - 23/23 checks: silent install, 229 files, shortcuts, installed-apps entry,
+       launch, real window, clean close, reinstall without duplication,
+       uninstall, and byte-identical real user profile.
+     - PASS
+   * - Automated GUI
+     - 8/8 checks against the packaged executable: titled window, Chat and Task
+       views, review controls, and no enabled Run/Approve before approval.
+     - PASS
+   * - Workspace intelligence
+     - Python, Node, polyglot, no-check and large-project fixtures produced the
+       expected kind, roots, checks, confidence, sampling and explicit unknowns.
+     - PASS
+   * - Task evidence
+     - A snapshot persisted on the task record through ``TaskStore`` and
+       survived reload; planning context named the workspace and contained no
+       absolute path.
+     - PASS
+   * - Verification honesty
+     - A project declaring no checks produced ``NOT_CONFIGURED`` and an
+       ``INCONCLUSIVE`` verdict, not a pass.
+     - PASS
+   * - Deterministic tool safety
+     - 6/6 checks: stale edit rejected without changing bytes, approved command
+       ran, blocked command was never offered or run, Git status read, traversal
+       write refused, positive write/edit/delete control passed.
+     - PASS
+   * - First run without a key
+     - ``--check-config`` exited 1 with "No API key configured. Open Settings to
+       add one." and no traceback.
+     - PASS
+   * - Provider error handling
+     - A local stub exercised success, 401, 429, 500, timeout and malformed JSON.
+       Every failure produced an actionable message, with no traceback and no
+       key in the result or captured logs.
+     - PASS
+   * - Real-provider turn
+     - No real endpoint was called.
+     - BLOCKED
+   * - Human GUI and approval
+     - No person viewed the window or answered an approval dialog.
+     - BLOCKED
+   * - Clean-machine install
+     - No clean VM, separate machine, or independent tester.
+     - BLOCKED
+   * - Release-commit CI
+     - The v0.9.0 package run remained queued; a separate GUI diagnostic run on
+       ``main`` failed.
+     - FAIL
+   * - Workspace containing a junction
+     - Walk and discovery fail with ``InvalidPathError``; direct reads are still
+       refused.
+     - FAIL
+   * - Current documentation
+     - The index claims Version 0.2, the security page describes v0.1's read-only
+       tool set, and the manual gate is still v0.1.
+     - FAIL
+   * - Code signing
+     - No signature, certificate, timestamp, or trusted-publisher process.
+     - FAIL
+   * - 0.9-to-1.0 upgrade
+     - No v1.0 candidate exists; only same-version reinstall was tested.
+     - BLOCKED
+
+Detailed findings
+=================
+
+Artifact and installer
+----------------------
+
+The artifact is internally consistent and the installer behaves correctly in
+the tested same-user configuration. It installs per-user without elevation,
+creates working shortcuts, registers one installed-apps entry, launches a real
+window, and removes all of those on uninstall. Reinstall repairs the installation
+without duplicating files or registry entries. The real user profile is left
+byte-identical.
+
+This is strong installer evidence, not clean-machine evidence. The build host
+already had the source tree, Python, build tools, and the user's credential store.
+A clean VM is still required to prove first-run dependencies and the genuine
+SmartScreen experience.
+
+The artifact is unsigned. Windows SmartScreen warnings are expected and are a
+trust problem, not an application crash. A hash published over a trusted channel
+reduces accidental substitution but does not establish publisher identity.
+
+Workspace intelligence
+----------------------
+
+The v0.9.0 snapshot contract behaved as documented on the acceptance fixtures:
+
+* Python package: ``python-package``, confidence 0.88, source/test/doc roots,
+  and a declared pytest check that passed;
+* Node package: ``npm-lint`` and ``npm-test`` discovered from declared scripts;
+* polyglot: Node plus Rust, with both declared checks;
+* unknown project: no invented checks, three explicit unknowns, confidence 0.0;
+* large project: 450 files, 400 sampled, ``sampled=true``,
+  ``truncated=false``, ``complete=false``.
+
+The prompt rendering omitted the absolute workspace path and stayed bounded. A
+snapshot stored on a task survived persistence and reload. The snapshot is
+evidence, not authority: approval still binds to the plan digest and the
+workspace policy.
+
+The junction failure is the one functional regression found in this area. A
+workspace containing a directory junction to an outside directory makes
+``Workspace.walk`` and ``discover_workspace`` raise ``InvalidPathError`` instead
+of producing a partial or explicitly incomplete snapshot. Direct reads through
+the junction are correctly refused. The GUI worker catches the exception and
+emits a scan failure, so the likely user-visible result is a failed project scan,
+not a crash or data escape. Projects that use junctions -- including some
+dependency layouts and Windows development setups -- can hit this without any
+malicious intent. See :doc:`defect-triage`.
+
+Provider path
+-------------
+
+The local stub proves the application's request and error plumbing, not model
+behaviour:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 16 84
+
+   * - Stub result
+     - Application behaviour
+   * - 200, normal reply
+     - Final answer accepted and returned.
+   * - 401
+     - "The provider rejected the API key. Check the key in Settings and retry."
+   * - 429
+     - "The provider is rate limiting requests (HTTP 429). Wait a moment or
+       check your plan's quota, then retry."
+   * - 500
+     - "The provider returned an error (HTTP 500). Please retry."
+   * - Timeout
+     - "The language model took too long to respond. Increase the timeout in
+       Settings or retry."
+   * - Malformed JSON
+     - "The provider returned an unexpected response. Verify the base URL points
+       at an OpenAI-compatible endpoint such as .../v1."
+
+No result contained the test key, and the product log files did not contain it
+or an ``Authorization`` header. A real provider is still required to test model
+tool selection, answer quality, streaming latency, and provider-specific error
+bodies.
+
+Security boundary
+-----------------
+
+The deterministic acceptance checks confirm the important refusals:
+
+* a stale edit is rejected and the file remains byte-identical;
+* a command blocked by policy is never offered for approval and never runs;
+* an approved benign command runs and returns real output;
+* a traversal write is refused and the outside file remains untouched;
+* permitted write, edit and delete operations still work.
+
+The application remains application-level containment, not an OS sandbox. A
+model can still be misled by repository content; there is no prompt-injection
+detector. Logs contain paths, prompts and error details. Those limits must be
+stated plainly to beta testers.
+
+Documentation and release signal
+--------------------------------
+
+At the assessment cut-off, the qualification pages were current but the
+surrounding product documentation was not: the index said Version 0.2, the
+security page described a read-only tool set, and the manual acceptance page
+called itself the v0.1 gate. Those pages were corrected in source on
+2026-10-21 and pass a strict build. The historical gate table below still records
+the assessment cut-off and is not rewritten.
+
+The v0.9.0 package workflow was still queued at the evidence cut-off. A separate
+``diagnose-gui-abort`` run on ``main`` failed. The audit also found a retired
+``macos-13`` runner and stale v0.2 reminders; those are corrected in source but
+no workflow has been dispatched. The documented CPython 3.11 GUI abort remains a
+known CI risk. A green run on the release commit is still required before
+v1.0.0.
+
+The signing guide and fail-closed verification script exist on
+``release-engineering/post-v0.8.0`` at ``aede81b``, but are not on the assessed
+branch. Even when merged, they are tooling, not a certificate or a published
+trusted signature.
+
+v1.0.0 gate table
+=================
+
+Statuses are exactly ``PASS``, ``FAIL``, ``BLOCKED``, ``NOT TESTED`` and
+``NOT APPLICABLE``. A gate is not passed by a weaker evidence level.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 7 27 52 14
+
+   * - ID
+     - Gate
+     - Evidence
+     - Status
+   * - G01
+     - Source, tag and version identity
+     - Tag peels to the recorded release commit; packaged version is 0.9.0.
+     - PASS
+   * - G02
+     - Published asset integrity
+     - Size and SHA-256 match the release record and GitHub digest.
+     - PASS
+   * - G03
+     - Packaging metadata consistency
+     - README, metadata and checksum record agree.
+     - PASS
+   * - G04
+     - Install, launch, reinstall and uninstall
+     - 23/23 MSI checks passed.
+     - PASS
+   * - G05
+     - Uninstall leaves user data untouched
+     - Real profile byte-identical; install directory, shortcuts and entry
+       removed.
+     - PASS
+   * - G06
+     - Packaged startup and diagnostics
+     - 14/14 smoke checks passed.
+     - PASS
+   * - G07
+     - Automated GUI startup and control state
+     - 8/8 packaged GUI checks passed; pre-approval Run/Approve disabled.
+     - PASS
+   * - G08
+     - Full offline test suite
+     - 1710 passed, 3 known Windows symlink skips, 1 test-only warning.
+     - PASS
+   * - G09
+     - Static, type, RST and secret gates
+     - Ruff, format, mypy, normalise and secret scan passed on the pre-report
+       tree.
+     - PASS
+   * - G10
+     - Workspace intelligence detection
+     - Python, Node, polyglot, unknown and large fixtures behaved as specified.
+     - PASS
+   * - G11
+     - Snapshot bounds, prompt rendering and task evidence
+     - Sampling/truncation flags correct; no absolute path in prompt; snapshot
+       persisted through reload.
+     - PASS
+   * - G12
+     - Verification honesty when no checks exist
+     - ``NOT_CONFIGURED`` and ``INCONCLUSIVE``, never a false pass.
+     - PASS
+   * - G13
+     - Deterministic tool safety
+     - 6/6 acceptance checks passed.
+     - PASS
+   * - G14
+     - First run with no credential
+     - Exit 1, clear readiness message, no traceback.
+     - PASS
+   * - G15
+     - Provider error and timeout handling
+     - Six local stub modes produced actionable errors and no key exposure.
+     - PASS
+   * - G16
+     - Real-provider connectivity and a normal coding turn
+     - No real endpoint or credential was used.
+     - BLOCKED
+   * - G17
+     - Local model endpoint without a key
+     - No Ollama, llama.cpp or LM Studio endpoint was exercised.
+     - NOT TESTED
+   * - G18
+     - Human desktop rendering and approval dialog
+     - No person viewed the window or answered Allow/Deny.
+     - BLOCKED
+   * - G19
+     - Clean-machine independent install
+     - No clean VM or second machine.
+     - BLOCKED
+   * - G20
+     - External beta evidence
+     - No independent testers or field reports.
+     - BLOCKED
+   * - G21
+     - CI green on the release commit
+     - v0.9.0 package run queued; GUI diagnostic run failed.
+     - FAIL
+   * - G22
+     - 0.9-to-1.0 upgrade and rollback
+     - No v1.0 candidate; only same-version reinstall tested.
+     - BLOCKED
+   * - G23
+     - Workspace with a directory junction
+     - Discovery raises ``InvalidPathError``; direct read still refused.
+     - FAIL
+   * - G24
+     - Documentation accuracy for users and testers
+     - Index, security and manual acceptance pages are stale.
+     - FAIL
+   * - G25
+     - Code signing and trusted publisher
+     - MSI and executable are ``NotSigned``; no certificate or timestamp.
+     - FAIL
+   * - G26
+     - Long-session resources and 20-turn stability
+     - Not exercised in this assessment.
+     - NOT TESTED
+   * - G27
+     - Qualification pages build under strict Sphinx
+     - Strict HTML build completed with warnings treated as errors.
+     - PASS
+   * - G28
+     - Non-Windows v1.0.0 platform scope
+     - Outside the published v0.9.0 scope. A cross-platform v1.0.0 claim would
+       need separate gates.
+     - NOT APPLICABLE
+
+Summary: 16 PASS, 4 FAIL, 5 BLOCKED, 2 NOT TESTED, 1 NOT APPLICABLE. Passing
+installer and regression gates do not compensate for missing real-world evidence.
+
+Internal candidate addendum (2026-10-21)
+========================================
+
+The gate table above is the assessment of the published v0.9.0 MSI. It is not a
+result for the internal candidate built from the remediated branch.
+
+Candidate boundary and evidence:
+
+* The candidate is built from the remediated commit and stored in a separate,
+  ignored candidate directory. Its source commit is in the bundled
+  ``BUILD-METADATA.json``; its filename includes ``internal-candidate``; its
+  size, SHA-256 and Authenticode status are in the candidate identity file.
+* The published v0.9.0 MSI, checksum record and metadata are unchanged.
+* G23 passed at two artifact levels. A real install and project refresh against
+  a workspace containing an outward junction reported exactly the local files,
+  never an external file. The code objects embedded in the candidate executable
+  also excluded the junction, recorded it in the snapshot unknowns, and refused
+  a direct read through it.
+* G24 passed for the candidate: the corrected documentation built strictly from
+  the same source and is carried beside the candidate. Historical pages remain
+  labelled; the corrected HTML is not published.
+* Packaged smoke passed ``14/14``, MSI lifecycle passed ``23/23``, and the
+  remediated full suite recorded ``1713 passed, 3 skipped``.
+* G21 is still open: no workflow was dispatched for the candidate commit. G25
+  is still open: the candidate is unsigned. The real-provider, human GUI,
+  clean-machine, external beta, upgrade and long-session gates remain open or
+  not tested.
+
+The candidate is therefore suitable for controlled internal engineering work,
+not for a public or general-availability claim. G21 and G25 must not be reported
+as passes.
+
+Conditions for a limited beta
+=============================
+
+The verdict is conditional on all of the following:
+
+#. **Distribution is controlled.** Provide the MSI only with its SHA-256 through
+   a channel the tester already trusts. Do not present it as a v1.0.0 candidate.
+#. **The tester is technical and supervised.** The beta is for developers who
+   can recognise a failed scan, an approval prompt and a provider error, and who
+   will preserve evidence.
+#. **The project is disposable.** Use a non-sensitive repository or the
+   acceptance fixture, with a backup or clean Git state. Do not point the beta at
+   production, credentials, customer data or a repository that cannot be
+   restored.
+#. **The credential is revocable.** Use a dedicated key with a low limit, enter
+   it through Settings, and revoke it after the test.
+#. **Junctions are excluded from the published beta.** Do not use a workspace
+   containing a directory junction to an outside location with the published
+   v0.9.0 MSI. An internal candidate contains and passed the fix, but it is not
+   approved for external beta. This is a documented beta limitation, not a
+   supported configuration.
+#. **Unsigned-build risk is explicit.** Testers must expect SmartScreen and
+   security-software warnings; a block or quarantine is a trust finding, not a
+   silent retry.
+#. **Evidence is captured.** Record the artifact hash, machine, provider/model,
+   test ID, outcome and a scrubbed log excerpt. Never record a key, prompt with
+   secrets, or a full production path.
+#. **Stop conditions are honoured.** Stop on any read outside the workspace, an
+   approval bypass, a key in the UI or logs, data loss, install/uninstall damage,
+   or a crash while an approval is pending.
+
+Passing the beta plan does **not** by itself make v1.0.0. It supplies the
+human, real-provider and independent-machine evidence that is currently absent.
+
+Conditions for v1.0.0
+=====================
+
+At minimum, close the following before a v1.0.0 release:
+
+* resolve QF-001 signing and trusted publishing;
+* complete QF-002 real-provider qualification;
+* complete QF-003 human GUI and approval acceptance;
+* complete QF-004 clean-VM independent installation;
+* obtain QF-005 external beta evidence;
+* ship a candidate containing the QF-006 junction fix and repeat the junction
+  test against that exact artifact;
+* correct QF-007 user and security documentation;
+* obtain QF-008 a green CI run on the release commit;
+* qualify QF-009 the 0.9-to-1.0 upgrade path;
+* complete QF-010 long-session evidence or state a tested session limit.
+
+The full triage, severity and close-out criteria are in
+:doc:`defect-triage`.
+
+Residual risks
+==============
+
+These risks remain even if every automated gate passes:
+
+* **Prompt injection.** Repository text is data, but it can still mislead the
+  model. There is no injection classifier.
+* **Command policy is not a sandbox.** The deny-by-default policy is enforced by
+  the application process, not the operating system.
+* **Logs are sensitive.** They contain paths, prompts and error details and are
+  not encrypted.
+* **No code signature.** Users cannot verify publisher identity from the file
+  alone, and security software may block it.
+* **Bounded snapshots.** The project view is sampled and may be incomplete;
+  consumers must read ``complete``, ``truncated`` and ``sampled``.
+* **No update mechanism or telemetry.** There is no automatic patching and no
+  fleet-level crash reporting.
+* **Junction limitation in the published artifact.** The published v0.9.0 MSI
+  can fail discovery on a workspace containing an outward junction. The source
+  fix excludes links from discovery and reports them as unknown. The internal
+  candidate contains the fix and passed artifact-level G23; the published
+  artifact is unchanged. Any public release must rebuild and retest it.
+
+Reproduction and evidence
+=========================
+
+The evidence below was produced on the build host. Temporary paths are local to
+that host and are not part of the repository.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Area
+     - Command or evidence
+   * - Full suite
+     - ``$env:QT_QPA_PLATFORM='offscreen';``
+       ``.\.venv\Scripts\python.exe -m pytest -q``. Log:
+       ``%TEMP%\opencode\qm-qual-tests\pytest2.out.log``.
+   * - Static gates
+     - ``ruff check .``; ``ruff format --check .``; ``mypy``;
+       ``python scripts\normalize_rst.py --check``;
+       ``python scripts\secret_scan.py``.
+   * - Packaged smoke
+     - ``python scripts\smoke_test_executable.py`` against the v0.9.0 onedir.
+       Log: ``%TEMP%\opencode\qm-qual\smoke-v090.log``.
+   * - Packaged GUI
+     - ``python scripts\gui_acceptance.py`` against the v0.9.0 onedir. Log:
+       ``%TEMP%\opencode\qm-qual\gui-acceptance-v090.log``.
+   * - MSI lifecycle
+     - ``scripts\verify_msi_install.ps1`` against the local v0.9.0 MSI. Log:
+       ``%TEMP%\opencode\qm-qual\msi-install-v090.log``.
+   * - Deterministic acceptance
+     - ``python scripts\acceptance_v0_2.py --deterministic-only``. Log:
+       ``%TEMP%\opencode\qm-qual\acceptance-v02-deterministic.log``.
+   * - Workspace acceptance
+     - Temporary harness output:
+       ``%TEMP%\opencode\qm-qual\workspace-acceptance.json``; junction probe:
+       ``junction_probe.py``.
+   * - Provider errors
+     - Temporary local HTTP stub; six modes; output under
+       ``%TEMP%\opencode\qm-qual\provider-failure``.
+   * - First run without a key
+     - ``QuantsMindAgent.exe --config-dir <empty> --workspace <fixture>
+       --check-config`` with an isolated null keyring backend. Log:
+       ``%TEMP%\opencode\qm-qual\first-run-nokey.log``.
+   * - Remediation verification (post-assessment)
+     - ``.venv\Scripts\python.exe -m pytest -q --basetemp ...`` with
+       ``QT_QPA_PLATFORM=offscreen``. Log:
+       ``%TEMP%\opencode\qm-remediation-tests\full-suite.log``. Strict docs log:
+       ``%TEMP%\opencode\qm-remediation-tests\sphinx.log``. Mypy log:
+       ``%TEMP%\opencode\qm-remediation-tests\mypy.log``.
+
+The custom workspace and provider harnesses were temporary qualification tools,
+not repository tests. The permanent acceptance option remains
+``scripts\acceptance_v0_2.py``; it explicitly labels the deterministic-only run
+as not a release verification.
+
+Related
+========
+
+* :doc:`defect-triage`
+* :doc:`manual-beta-acceptance`
+* :doc:`../testing/platform-acceptance-matrix`
+* :doc:`../testing/native-gui-acceptance`
+* :doc:`../testing/manual-acceptance`
+* :doc:`../known-issues`
+* :doc:`../packaging`
+* :doc:`../security`

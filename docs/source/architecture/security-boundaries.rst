@@ -7,18 +7,28 @@ Security boundaries
 
 
 QuantsMind-Agent runs with your user privileges. There is no sandbox process and
-no OS-level isolation in v0.2. What exists is a set of *code* boundaries that
+no OS-level isolation in v0.9.0. What exists is a set of *code* boundaries that
 make the trusted surface small and reviewable -- and a short, explicit list of
 things the application does **not** promise.
+
+The current release can write, edit, delete and undo files, run approved
+commands, and read Git state. Those capabilities are governed by the same
+containment and permission paths as the read-only tools, but they widen the
+consequences of a mistaken approval.
 
 What is guaranteed
 ==================
 
-**One containment implementation.** Every path -- read, write, edit or delete --
-passes through :meth:`~quantsmind_agent.workspace.Workspace.resolve`, which
-rejects absolute paths, drive-qualified and UNC references, ``..`` traversal,
-null bytes, and any path that resolves outside the workspace root after
-following symlinks and junctions.
+**One containment implementation.** Every path -- read, write, edit, delete or
+undo -- passes through :meth:`~quantsmind_agent.workspace.Workspace.resolve`,
+which rejects absolute paths, drive-qualified and UNC references, ``..``
+traversal, null bytes, and any path that resolves outside the workspace root
+after following symlinks and junctions.
+
+**Discovery does not follow links.** Listings and walks omit symbolic links,
+directory junctions and other filesystem reparse points. A link inside the
+workspace is therefore not traversed by project discovery; a direct read through
+an outward link is still refused by containment.
 
 **The registry is the only enforcement point.** Tools never check permissions
 themselves. The registry runs a tool's ``guard`` and then its permission
@@ -45,23 +55,24 @@ withheld from the approval prompt and the activity log.
 Git cannot mutate
 =================
 
-v0.2 registers ``git_status``, ``git_diff`` and ``git_log``, and no mutation
-tool. That is structural rather than a denylist: every argument vector is
-assembled from a fixed vocabulary of read-only sub-commands, so the model
-chooses flags and paths but never the sub-command, and a ``--`` separator always
-precedes a user-supplied path so a path beginning with ``-`` is a path. The
-mutating verbs are additionally refused by the command policy, so they cannot be
-reached through ``run_command`` either.
+The current release registers ``git_status``, ``git_diff`` and ``git_log``, and
+no mutation tool. That is structural rather than a denylist: every argument
+vector is assembled from a fixed vocabulary of read-only sub-commands, so the
+model chooses flags and paths but never the sub-command, and a ``--`` separator
+always precedes a user-supplied path so a path beginning with ``-`` is a path.
+The mutating verbs are additionally refused by the command policy, so they
+cannot be reached through ``run_command`` either.
 
 What is not guaranteed
 ======================
 
 **Application-level command policy is not an OS sandbox.** The policy is a
 configurable deny list evaluated by this process. A permitted interpreter can
-spawn children, read environment variables or invoke another program, and
-approving a command approves that program, not a verified effect. Real
-isolation needs OS-level mechanisms -- containers, job objects, AppContainer, a
-dedicated low-privilege account -- and none of those are in scope for v0.2.
+spawn children, read environment variables, invoke another program or use the
+network, and approving a command approves that program, not a verified effect.
+Real isolation needs OS-level mechanisms -- containers, job objects,
+AppContainer, a dedicated low-privilege account -- and none of those are
+implemented in v0.9.0.
 
 **Cancellation stops the direct child only.** Windows has no portable
 process-tree kill, so a command that spawned grandchildren may leave them
@@ -71,16 +82,26 @@ running.
 and one permission, and it is cleared when the conversation, project or
 settings change.
 
-**Workspace containment protects the host, not your intent.** The model can read
-anything inside the folder you opened; opening a repository is an explicit act.
+**Workspace containment protects the host, not your intent.** The model can read,
+write or delete anything inside the folder you opened, subject to approval;
+opening a repository is an explicit act.
 
 **Deletion is irreversible from the agent,** and directory-tree deletion is not
 supported at all -- a recursive delete is irreversible at a scale an approval
-dialog cannot meaningfully display.
+dialog cannot meaningfully display. Undo covers the newest reversible write or
+edit in the current session, not deletes.
 
 **Symlink and junction behaviour on Windows depends on process privilege.** The
-defence is always active; only the tests that must *create* a symlink are
-skipped where the platform refuses.
+defence is always active; only the tests that must *create* a link are skipped
+where the platform refuses. Discovery skips every reparse point, including
+inward links and some cloud-placeholder entries; that is deliberate but means
+such entries are absent from a snapshot.
+
+**The published v0.9.0 MSI predates the discovery fix.** It can fail project
+discovery when an outward junction is present, although direct reads through the
+junction are refused. The source tree contains the fix, and the internal
+candidate passed installed-artifact and bundled-code G23 checks. Any public
+release candidate must repeat the check against its own hash.
 
 Trust model
 ===========
@@ -98,8 +119,9 @@ Trust model
       provider responses and headers
       repository content (READMEs, source files) -> prompt injection surface
 
-    OUT OF SCOPE (no capability in v0.2)
+    OUT OF SCOPE (no built-in capability)
       outbound HTTP to arbitrary hosts (only the configured LLM endpoint)
+      an approved command may make its own network connections
 
 Boundary 1 -- the model cannot widen its own capability
 =======================================================
@@ -110,8 +132,8 @@ body runs, and extra arguments cannot change that evaluation -- the permission
 request is built from the tool's declared metadata, not from whatever the model
 sent.
 
-In v0.1 this boundary was absolute: there was no command tool at all. In v0.2 the
-model *can* reach one, and the boundary is enforced rather than structural --
+In v0.1 this boundary was absolute: there was no command tool at all. Since v0.2
+the model *can* reach one, and the boundary is enforced rather than structural --
 which is exactly what the approval prompt and the command policy are for. Both
 are documented above, and the ordering between them is recorded in
 :doc:`adr/0007-approval-gates`.
@@ -121,7 +143,8 @@ Boundary 2 -- paths are contained
 
 Every path argument is validated by ``Workspace.resolve`` before it reaches the
 filesystem, and containment is checked on the *resolved* path so links cannot
-escape. See :doc:`workspace`.
+escape. Discovery is stricter still: it does not follow or list reparse points,
+and records the exclusion as an unknown. See :doc:`workspace`.
 
 Boundary 3 -- policy lives in one place
 =======================================
@@ -182,18 +205,24 @@ fails -- but the model can still be misled about *facts*.
 Mitigations in place:
 
 * repository content is data, never authority;
-* containment makes "read anything on disk" impossible;
-* the read-only tool set means the worst outcome is a wrong answer.
+* containment limits which paths the built-in file tools can address;
+* blocked commands never reach the approval dialog;
+* mutations and commands require an explicit human decision.
 
-Not yet in place: provenance labelling of file contents, and an injection
-detector. Both are roadmap items.
+The current tool set is **not** read-only. A prompt injection that becomes an
+approved write, delete or command can change the workspace or the host. The
+approval prompt is the last control; a user who approves an action the model
+misdescribed has authorised that action. Provenance labelling, an injection
+detector and an OS sandbox are not implemented.
 
 Network surface
 ===============
 
 The only outbound request is to the configured ``base_url``. There is no
-follow-the-link fetching, no tool that fetches a URL, and redirects are followed
-by ``httpx`` within the configured host policy.
+follow-the-link fetching, no tool that fetches a URL, and redirects are refused
+rather than followed, so a 3xx cannot move an authenticated request to another
+host. The application does not claim protection against DNS rebinding for that
+request; the pinned-transport code exists but is dormant and unwired.
 
 Residual risks
 ==============
@@ -205,15 +234,25 @@ Residual risks
    * - Risk
      - Mitigation / status
    * - Model runs with full user privileges
-     - accepted; the tool set is the mitigation
+     - accepted; containment and approvals are the mitigation
+   * - Approved command changes the host
+     - accepted risk; policy blocks named operations, but it is not a sandbox
    * - Prompt injection changes the *answer*
      - not fully preventable; containment limits the blast radius
+   * - Prompt injection becomes an approved action
+     - possible; approval must be read, and no injection detector exists
    * - Credential leaks via a log
      - redaction filter plus tests asserting the masked form
    * - Secret file readable by other local users
-     - owner-only permissions; keyring preferred where available
-   * - Symlinked repository used to escape
-     - rejected by resolved-path containment
+     - operating-system credential store; a legacy plaintext file is a degraded
+       read-only fallback, never a write target
+   * - OS-level sandbox
+     - not implemented in the product; the experimental package is dormant and
+       never wired by the application, so approved commands run with user
+       privileges
+   * - Symlinked or junctioned repository used to escape
+     - direct paths rejected by resolved-path containment; discovery skips
+       reparse points
    * - Malicious provider endpoint
      - user-configured; it receives the prompt and the key by design
    * - Resource exhaustion (huge files, deep trees)
@@ -247,3 +286,34 @@ Related
 * :doc:`../security`
 * :doc:`workspace`, :doc:`permissions`
 * :doc:`adr/0004-workspace-isolation`
+
+Plan approval is a binding, not a flag
+======================================
+
+Since v0.5 an approval is checked at the moment it is offered, not only later when
+a step runs. `Orchestrator.approve` refuses an approval whose plan digest does
+not match the plan in hand, and refuses one granted for a different workspace --
+so the user is told at the point of decision rather than watching every later step
+fail closed.
+
+Two further bounds are enforced at execution time:
+
+* A plan's own `scope_paths` are enforced, not only the approval's. If a plan
+  said "src only" and the user approved the whole workspace, the narrower bound
+  still applies: the plan cannot be widened by approving it broadly.
+* A *negative* decision counts as a decision. `approved_plan` returns nothing
+  for a rejected task, so a rejection cannot leave the record claiming to be
+  authorised.
+
+These are covered in `tests/security/test_authorization_invariants.py`, which
+drives the orchestrator and asserts on what reached the tool registry rather than
+on what the policy said about it.
+
+Persistence failure is a security event
+=======================================
+
+A task's approval and the evidence of its effects are stored in the same record.
+If that record cannot be written, the task stops and refuses to continue. Running
+work whose authorisation could not be recovered -- and whose side effects could
+not be reconstructed after a crash -- would be executing outside the boundary this
+document describes.

@@ -12,7 +12,7 @@ Four read-only tools, all requiring :attr:`Permission.READ_WORKSPACE`:
     Compact tree of the project up to a configurable depth.
 
 None of them accept absolute paths; every path argument is workspace-relative
-and validated by :class:`~quantsmind_agent.workspace.Workspace`.
+and validated by :class:`~quantsmind_agent.services.workspace.containment.Workspace`.
 
 File *writes* are intentionally reserved for v0.2 -- see
 ``docs/source/releases/v0.1.rst``.
@@ -23,11 +23,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from quantsmind_agent.diagnostics.logging import get_logger
 from quantsmind_agent.errors import InvalidPathError
-from quantsmind_agent.logging_setup import get_logger
-from quantsmind_agent.permissions import Permission
-from quantsmind_agent.tools import ToolResult, ToolSpec
-from quantsmind_agent.workspace import Workspace
+from quantsmind_agent.runtime.tools import ToolResult, ToolSpec
+from quantsmind_agent.security.permissions import Permission
+from quantsmind_agent.services.workspace.containment import Workspace
 
 __all__ = [
     "ListDirectoryTool",
@@ -160,6 +160,13 @@ class ReadFileTool:
         all_lines = content.splitlines()
         window = all_lines[start - 1 : start - 1 + limit]
         numbered = "\n".join(f"{start + offset:>5}\t{line}" for offset, line in enumerate(window))
+        # The mutating tools accept the fingerprint of the file as the model
+        # last read it, and refuse the change when the file moved on. Without a
+        # digest in the read result the model has nothing to pass back, so the
+        # protection is advertised and unreachable. The digest is of the whole
+        # file, not of the returned window, because that is what the write path
+        # compares against.
+        fingerprint = self._workspace.fingerprint(path)
         return ToolResult.success(
             self.spec.name,
             f"read {self._workspace.relative(path)} ({len(window)} lines)",
@@ -170,6 +177,7 @@ class ReadFileTool:
                 "returned_lines": len(window),
                 "truncated": len(window) < len(all_lines[start - 1 :]),
                 "content": numbered,
+                "sha256": fingerprint.sha256,
             },
         )
 

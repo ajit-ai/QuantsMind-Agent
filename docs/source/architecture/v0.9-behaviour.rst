@@ -1,0 +1,128 @@
+.. _v0.9-behaviour:
+
+
+================
+v0.9.0 behaviour
+================
+
+Workspace Intelligence. A plan can now be made against a bounded account of the
+whole project -- its languages, manifests, roots and declared checks -- and that
+account travels with the task as evidence of what the plan believed.
+
+A snapshot, not a repository dump
+=================================
+
+``WorkspaceSnapshot`` is a frozen, versioned answer to "what is in this
+workspace?". It is built by :func:`quantsmind_agent.workspace_intel.discover_workspace`
+and carries:
+
+* the project kind, confidence and detected ecosystems and languages;
+* root manifests, source roots, test roots and documentation roots;
+* the declared verification checks;
+* a bounded sample of files with size, kind and language;
+* ``file_count``, ``total_bytes``, ``truncated`` and ``sampled``;
+* explicit ``unknowns`` and a short content ``digest``.
+
+Two budgets are independent. The walk has an entry budget, and the file list has
+its own budget (``MAX_SNAPSHOT_FILES``, 400). A project can be fully walked and
+still be too large to include, so ``truncated`` and ``sampled`` are separate
+facts. Both are rendered as limitations rather than hidden.
+
+The snapshot schema is ``SNAPSHOT_SCHEMA_VERSION`` 1. Reading a snapshot written
+by a newer build raises instead of guessing which fields survived.
+
+Multi-language detection
+------------------------
+
+Python keeps the richer classification from :mod:`quantsmind_agent.project_intel`.
+Other ecosystems are recognised from manifests and file suffixes: Node, Rust, Go,
+Java, .NET, Ruby, PHP, C++ and Swift. One non-Python ecosystem produces a kind
+such as ``node-package`` or ``go-module``; two or more produce ``polyglot``.
+
+Detection is from the project itself. A file suffix can establish that a language
+is present, but it does not invent a test command. Only scripts and configuration
+the project declares become verification checks.
+
+Planning context
+================
+
+:class:`quantsmind_agent.planner.TaskPlanner` accepts a ``project_context`` string
+and places it before the objective in the user message. The GUI supplies
+``snapshot.format_for_prompt()``, which:
+
+* names the workspace rather than printing its absolute path;
+* renders at most 12 checks and 80 files;
+* caps the whole block at 3,000 characters by default;
+* states when coverage is partial.
+
+The planner does not own a second discovery cache. The application builds the
+snapshot once per workspace generation and hands the rendering to the planner.
+
+Evidence, not authority
+=======================
+
+``TaskService.propose`` accepts an optional snapshot and stores its dictionary on
+``Task.workspace_snapshot``. Nothing in authorisation reads it:
+
+* the plan digest is still what the approval binds to;
+* the workspace boundary is still enforced by the policy;
+* editing the workspace after planning does not invalidate a valid approval;
+* a snapshot cannot approve, widen scope or skip a check.
+
+Task records are schema version 5. The migration from v4 adds
+``workspace_snapshot = None``, which means "nobody recorded what it looked like",
+not "the workspace was empty". A snapshot is evidence and is never used to resume
+work.
+
+Trace and checkpoints
+---------------------
+
+Submitting a plan with a snapshot emits a ``WORKSPACE`` trace event carrying
+``project_kind``, ``workspace_digest``, ``files`` and ``truncated``. Checkpoint
+trace events repeat the digest as a scalar.
+
+``sessions.checkpoint_for`` adds three scalar notes when a snapshot exists:
+``workspace_digest``, ``workspace_kind`` and ``workspace_files``. The full
+inventory stays on the task record; a checkpoint is a boundary, not a second copy.
+
+Verification semantics
+======================
+
+Check discovery covers declared checks in the non-Python ecosystems listed above:
+Node scripts, Cargo, Go modules, Maven or Gradle, .NET projects, RSpec or Rake,
+Composer scripts, PHPUnit and Swift packages. A manifest without a test script
+produces no test check.
+
+When a project declares no checks at all, the task records one
+``CheckStatus.NOT_CONFIGURED`` result. The verdict remains ``INCONCLUSIVE`` with
+the reason "this project declares no checks to verify". A check that was skipped,
+blocked, timed out or never ran is still never reported as a pass.
+
+GUI
+===
+
+The Task panel contains a read-only ``QGroupBox("Project")`` showing the project
+kind, ecosystems, manifests and checks. It is part of the existing Task view; no
+third top-level tab is added.
+
+"Refresh project" emits a request rather than walking the filesystem in a click
+handler. :class:`quantsmind_agent.gui.task_panel.WorkspaceScanBridge` runs
+``refresh_snapshot`` on a worker thread and returns the result to the window. If
+no snapshot exists yet, the panel says so and asks the user to refresh; opening a
+project starts the background scan.
+
+The planning thread builds the snapshot before calling the planner. The approval
+path reuses the snapshot the plan was offered with, or the already-cached one; it
+never starts a discovery walk on the GUI thread.
+
+Compatibility and limits
+========================
+
+* Task schema 5, snapshot schema 1, checkpoint schema unchanged at 1.
+* Plan schema and approval behaviour are unchanged.
+* Snapshot detection is static. It does not run package managers, resolve
+  dependencies, inspect lockfile graphs or execute checks during discovery.
+* File coverage is bounded and sampled; consumers must read ``complete``,
+  ``truncated`` and ``sampled`` rather than treating the list as an inventory.
+* Only declared checks are discovered. A project with no declaration reports
+  ``NOT_CONFIGURED`` instead of benefiting from a conventional guess.
