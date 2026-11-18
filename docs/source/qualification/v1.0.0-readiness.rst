@@ -844,6 +844,28 @@ At minimum, close the following before a v1.0.0 release:
 The full triage, severity and close-out criteria are in
 :doc:`defect-triage`.
 
+Status update (2026-11-18)
+==========================
+
+This section records subsequent engineering work; it does **not** change the
+historical assessment above or close any gate by itself.
+
+* The signing helper ``scripts/signing.py`` and the fail-closed verifier
+  ``scripts/verify_windows_signature.ps1`` are now in ``main``. The manual
+  signing procedure is documented in
+  :doc:`../packaging` and ``packaging/WINDOWS-SIGNING.md``.
+* The repository owner has selected **manual signing only, no CI signing**, for
+  a **Windows-only v1.0.0**. No signing workflow is configured and none is
+  planned.
+* **QF-001 / G25 remains open.** No production certificate, timestamp service
+  or trusted publisher is available. Tooling and documentation are not trust;
+  a signed, timestamped artifact verified on a clean machine is still required.
+* QF-008 is satisfied on subsequent commits: CI, Docs, gui-acceptance and the
+  package workflow were green on ``main`` at ``4a57ddd``. The retired macOS
+  runner labels in ``gui-acceptance.yml`` and ``package.yml`` were corrected to
+  supported arm64 labels, and an Apple Silicon 0.9.0 bundle built and passed
+  14/14 smoke checks. These are build-qualification facts, not release evidence.
+
 Residual risks
 ==============
 

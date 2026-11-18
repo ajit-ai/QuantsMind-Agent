@@ -261,6 +261,8 @@ Known issues and unverified platforms
   so Windows SmartScreen will warn on first run of the MSI or the executable.
   Signing needs a real certificate; an invented signature would be worse than
   none. macOS notarization, were that in scope, is likewise not performed.
+  The manual Windows signing and fail-closed verification procedure for a
+  future v1.0.0 release is in ``packaging/WINDOWS-SIGNING.md``.
 * **No successful CI evidence.** ``.github/workflows/package.yml`` is configured
   for Windows, Linux and both macOS architectures, but no run on the release
   commit completed successfully for this release. Its macOS Intel job also still
